@@ -218,7 +218,7 @@ class FieldValuePairs(list):
     """A list of (field, value) pairs, as the binding's vector is."""
 
     def __init__(self, fvs=()):
-        super(FieldValuePairs, self).__init__(fvs)
+        super(FieldValuePairs, self).__init__([("", "")] * fvs if isinstance(fvs, int) else fvs)
 
 
 def _swsscommon():

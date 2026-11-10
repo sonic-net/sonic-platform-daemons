@@ -223,7 +223,12 @@ fn chassisd_publishes_what_the_python_daemon_publishes() {
             let python = python_half(py, harness, &sc, name);
             let rust = rust_half(py, harness, &sc, name);
             // The DPU_STATE times are `date`-style strings of their own.
-            failures.extend(parity::differences(name, &python, &rust, &["*_time"]));
+            failures.extend(parity::differences(
+                name,
+                &python,
+                &rust,
+                &["*_time", "time"],
+            ));
         }
         sc.call_method0("teardown")
             .unwrap_or_else(|e| panic!("teardown: {}", parity::traceback(py, e)));

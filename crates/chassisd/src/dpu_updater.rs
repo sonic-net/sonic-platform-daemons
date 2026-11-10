@@ -14,9 +14,43 @@ use platform_api::{ModuleInfo, ModuleStatus, ModuleType, PlatformError};
 use pmon_common::db::{Keyspace, TableLike};
 use pmon_common::fmt;
 
-use crate::dpu_recovery::{DpuState, Effect, Inputs, Planes, PowerCycler, Recovery, Thresholds};
 use crate::dpu_reboot_cause as rc;
+use crate::dpu_recovery::{DpuState, Effect, Inputs, Planes, PowerCycler, Recovery, Thresholds};
 use crate::names::*;
+
+struct PublishingCycler<'a> {
+    inner: &'a mut dyn PowerCycler,
+    table: &'a dyn TableLike,
+    error: Option<String>,
+}
+impl PowerCycler for PublishingCycler<'_> {
+    fn transition_in_progress(&mut self, key: &platform_api::DeviceKey) -> Result<Option<bool>, PlatformError> {
+        self.inner.transition_in_progress(key)
+    }
+
+    fn midplane_down_reason(&mut self, key: &platform_api::DeviceKey) -> Result<platform_api::ModuleMidplaneDownReason, PlatformError> {
+        self.inner.midplane_down_reason(key)
+    }
+    fn flush_effects(&mut self, name: &str, effects: &mut Vec<Effect>) -> bool {
+        match apply(name, effects, self.table) {
+            Ok(()) => {
+                effects.clear();
+                true
+            }
+            Err(e) => {
+                self.error = Some(e);
+                false
+            }
+        }
+    }
+    fn power_cycle(
+        &mut self,
+        name: &str,
+        key: &platform_api::DeviceKey,
+    ) -> Result<bool, PlatformError> {
+        self.inner.power_cycle(name, key)
+    }
+}
 
 /// CHASSIS_STATE_DB DPU_STATE, `chassisd:DPU_STATE_TABLE`, `chassisd:DP_STATE`,
 /// `chassisd:DP_UPDATE_TIME`, `chassisd:CP_STATE`, `chassisd:CP_UPDATE_TIME`
@@ -58,7 +92,9 @@ pub struct Tables<'a> {
 
 /// `"%a %b %d %I:%M:%S %p UTC %Y"`, the shape `show reboot-cause` prints.
 pub fn formatted_time() -> String {
-    chrono::Utc::now().format("%a %b %d %I:%M:%S %p UTC %Y").to_string()
+    chrono::Utc::now()
+        .format("%a %b %d %I:%M:%S %p UTC %Y")
+        .to_string()
 }
 
 /// `"%Y_%m_%d_%H_%M_%S"`, which sorts chronologically and is therefore what the
@@ -68,7 +104,10 @@ pub fn time_name() -> String {
 }
 
 fn field(row: &Option<Vec<(String, String)>>, name: &str) -> Option<String> {
-    row.as_ref()?.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    row.as_ref()?
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.clone())
 }
 
 /// The human-readable form of a `%Y_%m_%d_%H_%M_%S` name, which is how
@@ -76,7 +115,11 @@ fn field(row: &Option<Vec<(String, String)>>, name: &str) -> Option<String> {
 /// record's `time`: the same moment as its name, not a second later.
 pub fn formatted_from_name(name: &str) -> String {
     chrono::NaiveDateTime::parse_from_str(name, "%Y_%m_%d_%H_%M_%S")
-        .map(|t| t.and_utc().format("%a %b %d %I:%M:%S %p UTC %Y").to_string())
+        .map(|t| {
+            t.and_utc()
+                .format("%a %b %d %I:%M:%S %p UTC %Y")
+                .to_string()
+        })
         .unwrap_or_else(|_| formatted_time())
 }
 
@@ -131,17 +174,19 @@ impl DpuUpdater {
             if !m.name.starts_with(ModuleType::Dpu.as_str()) {
                 log::error!(
                     "Incorrect module-name {}. Should start with {} ",
-                    m.name, ModuleType::Dpu.as_str());
+                    m.name,
+                    ModuleType::Dpu.as_str()
+                );
                 continue;
             }
 
-            let status = m.oper_status.unwrap_or(ModuleStatus::Offline);
+            let status = m.oper_status_text.as_deref().unwrap_or("N/A");
             let fvs = [
                 (DESC_FIELD, fmt::opt_str(&m.description)),
                 // A DPU has no slot, and Python publishes the sentinel rather
                 // than omitting the field so the row shape stays the same.
                 (SLOT_FIELD, fmt::NOT_AVAILABLE.to_string()),
-                (OPERSTATUS_FIELD, status.as_str().to_string()),
+                (OPERSTATUS_FIELD, status.to_string()),
                 (SERIAL_FIELD, fmt::opt_str(&m.serial)),
             ];
             tables
@@ -174,8 +219,15 @@ impl DpuUpdater {
             return Ok(());
         }
         for (index, m) in modules.iter().enumerate() {
-            let key = if m.name.is_empty() { format!("MODULE {index}") } else { m.name.clone() };
-            let ip = m.midplane_ip.clone().unwrap_or_else(|| INVALID_IP.to_string());
+            let key = if m.name.is_empty() {
+                format!("MODULE {index}")
+            } else {
+                m.name.clone()
+            };
+            let ip = m
+                .midplane_ip
+                .clone()
+                .unwrap_or_else(|| INVALID_IP.to_string());
             let reachable = m.is_midplane_reachable.unwrap_or(false);
             let was = field(&tables.midplane.get(&key)?, MIDPLANE_ACCESS_FIELD)
                 .unwrap_or_else(|| fmt::bool(false));
@@ -241,8 +293,15 @@ impl DpuUpdater {
         }
 
         let mut reason = None;
-        match m.state_transition {
-            Some(true) => match tables.module.get(&name.to_uppercase()) {
+        // The periodic publication projection deliberately omits this getter.
+        // Read it at the moment the link goes down, as Python does.
+        let transition = match hw.transition_in_progress(&m.key) {
+            Ok(value) => Ok(value.or(m.state_transition)),
+            Err(PlatformError::NotSupported(_)) => Ok(m.state_transition),
+            Err(error) => Err(error),
+        };
+        match transition {
+            Ok(Some(true)) => match tables.module.get(&name.to_uppercase()) {
                 Ok(row) => {
                     if let Some(t) = field(&row, "transition_type").filter(|t| !t.is_empty()) {
                         reason = Some(format!("Planned: '{t}'"));
@@ -250,10 +309,11 @@ impl DpuUpdater {
                 }
                 Err(e) => log::error!("{name}: failed to read transition_type: {e}"),
             },
-            Some(false) => {}
+            Ok(Some(false)) => {}
             // The column is absent when the getter is not implemented, which
             // is when `chassisd:try_get` logs this.
-            None => log::error!("get_module_state_transition is not implemented"),
+            Ok(None) => log::error!("get_module_state_transition is not implemented"),
+            Err(error) => log::error!("{name}: failed to read module state transition: {error}"),
         }
 
         let reason = reason.unwrap_or_else(|| {
@@ -299,7 +359,9 @@ impl DpuUpdater {
     /// read, logs, and falls back.  Off is the safe way to be wrong -- the DPU
     /// waits for an operator rather than being power cycled on a guess.
     fn auto_recovery(tables: &Tables<'_>) -> bool {
-        let Some(metadata) = tables.device_metadata else { return false };
+        let Some(metadata) = tables.device_metadata else {
+            return false;
+        };
         match metadata.get("localhost") {
             Ok(row) => {
                 field(&row, DPU_AUTO_RECOVERY_FIELD).as_deref() == Some(DPU_AUTO_RECOVERY_ENABLED)
@@ -319,9 +381,12 @@ impl DpuUpdater {
         hw: &mut dyn PowerCycler,
         now: Instant,
     ) -> Result<(), String> {
+        let pass_started = Instant::now();
         let auto = Self::auto_recovery(tables);
         for m in modules {
-            let Some(recovery) = self.recovery.get_mut(&m.name) else { continue };
+            let Some(recovery) = self.recovery.get_mut(&m.name) else {
+                continue;
+            };
             let planes = {
                 let row = tables.dpu_state.get(&m.name)?;
                 Planes {
@@ -337,7 +402,13 @@ impl DpuUpdater {
             // recovery this daemon started holds it too, and must not suppress
             // itself
             // (`chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress`).
-            let transition = m.state_transition.unwrap_or(false)
+            let transition = match hw.transition_in_progress(&m.key) {
+                Ok(value) => value.unwrap_or(m.state_transition.unwrap_or(false)),
+                Err(error) => {
+                    log::error!("{}: failed to read module state transition; suppressing auto-recovery: {error}", m.name);
+                    true
+                }
+            }
                 // A `transition_type` that cannot be read is a planned
                 // transition, the answer that leaves the DPU alone: Python's
                 // `try` swallows the error and answers True
@@ -352,9 +423,17 @@ impl DpuUpdater {
                 admin_up,
                 auto_recovery: auto,
                 transition_in_progress: transition,
-                now,
+                now: now + pass_started.elapsed(),
             };
-            let effects = recovery.step(&m.name, &input, &self.thresholds, hw);
+            let mut publishing = PublishingCycler {
+                inner: hw,
+                table: tables.dpu_state,
+                error: None,
+            };
+            let effects = recovery.step(&m.name, &input, &self.thresholds, &mut publishing);
+            if let Some(e) = publishing.error {
+                return Err(e);
+            }
             apply(&m.name, &effects, tables.dpu_state)?;
         }
         Ok(())
@@ -379,8 +458,12 @@ impl DpuUpdater {
                 crate::dpu_recovery::REBOOT_CAUSE_FILE
             );
         }
+        let pass_started = Instant::now();
         for m in modules {
-            let Some(recovery) = self.recovery.get_mut(&m.name) else { continue };
+            let now = now + pass_started.elapsed();
+            let Some(recovery) = self.recovery.get_mut(&m.name) else {
+                continue;
+            };
             let effects = recovery.reset_for_startup(now);
             apply(&m.name, &effects, tables.dpu_state)?;
 
@@ -394,7 +477,16 @@ impl DpuUpdater {
                 recovery.state = DpuState::ManualIntervention;
                 continue;
             }
-            let effects = recovery.force_power_cycle(&m.name, &m.key, &self.thresholds, now, hw);
+            let mut publishing = PublishingCycler {
+                inner: hw,
+                table: tables.dpu_state,
+                error: None,
+            };
+            let effects =
+                recovery.force_power_cycle(&m.name, &m.key, &self.thresholds, now, &mut publishing);
+            if let Some(e) = publishing.error {
+                return Err(e);
+            }
             apply(&m.name, &effects, tables.dpu_state)?;
         }
         Ok(())
@@ -432,7 +524,10 @@ impl DpuUpdater {
                     tables.midplane.del(&m.name),
                 ),
                 Ok(None) => {}
-                Err(e) => warn(&format!("{} from {CHASSIS_MIDPLANE_INFO_TABLE}", m.name), Err(e)),
+                Err(e) => warn(
+                    &format!("{} from {CHASSIS_MIDPLANE_INFO_TABLE}", m.name),
+                    Err(e),
+                ),
             }
         }
         warn(CHASSIS_INFO_KEY, tables.chassis.del(CHASSIS_INFO_KEY));
@@ -508,7 +603,9 @@ impl DpuUpdater {
 /// Ready DPU to AdminDown, hand an Unrecoverable one a fresh power-cycle budget,
 /// and have `cleanup_shut_down` sweep the rows of a DPU that is running.
 fn admin_up(name: &str, tables: &Tables<'_>) -> Result<bool, String> {
-    let Some(config) = tables.config else { return Ok(false) };
+    let Some(config) = tables.config else {
+        return Ok(false);
+    };
     let row = config
         .get(name)
         .map_err(|e| format!("Failed to read the admin status of {name}: {e}"))?;
@@ -620,7 +717,9 @@ pub(crate) mod tests {
             }
         }
         fn admin_up(&self, name: &str) {
-            self.config.set(name, &[(CHASSIS_MODULE_ADMIN_STATUS, "up".to_string())]).unwrap();
+            self.config
+                .set(name, &[(CHASSIS_MODULE_ADMIN_STATUS, "up".to_string())])
+                .unwrap();
         }
     }
 
@@ -642,6 +741,11 @@ pub(crate) mod tests {
     fn dpu(name: &str, status: ModuleStatus) -> ModuleInfo {
         ModuleInfo {
             name: name.to_string(),
+            name_text: Some(name.to_string()),
+            presence_text: Some("True".into()),
+            replaceable_text: Some("False".into()),
+            slot_text: None,
+            oper_status_text: Some(status.as_str().into()),
             key: key_of(name),
             parent_key: None,
             parent_name: CHASSIS_PARENT.to_string(),
@@ -674,9 +778,15 @@ pub(crate) mod tests {
         let db = Db::new();
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let _ = updater(&m, r.path()).refresh(&m, &db.tables());
-        assert_eq!(db.module.field("DPU0", OPERSTATUS_FIELD).as_deref(), Some("Online"));
-        assert_eq!(db.module.field("DPU0", SLOT_FIELD).as_deref(), Some("N/A"),
-            "a DPU has no slot, and the field shape stays the same");
+        assert_eq!(
+            db.module.field("DPU0", OPERSTATUS_FIELD).as_deref(),
+            Some("Online")
+        );
+        assert_eq!(
+            db.module.field("DPU0", SLOT_FIELD).as_deref(),
+            Some("N/A"),
+            "a DPU has no slot, and the field shape stays the same"
+        );
     }
 
     /// DPU_STATE is subscribed to by the DPU's own copy of this daemon.
@@ -687,11 +797,17 @@ pub(crate) mod tests {
         let db = Db::new();
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let u = updater(&m, r.path());
-        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         let first = db.dpu_state.field("DPU0", MP_UPDATE_TIME);
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("up"));
-        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_UPDATE_TIME), first, "not rewritten");
+        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_UPDATE_TIME),
+            first,
+            "not rewritten"
+        );
     }
 
     /// A midplane that has gone takes the other two planes with it: nothing
@@ -704,10 +820,21 @@ pub(crate) mod tests {
         let mut gone = dpu("DPU0", ModuleStatus::Online);
         gone.is_midplane_reachable = Some(false);
         let m = [gone];
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("down"));
-        assert_eq!(db.dpu_state.field("DPU0", CP_STATE).as_deref(), Some("down"));
-        assert_eq!(db.dpu_state.field("DPU0", DP_STATE).as_deref(), Some("down"));
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_STATE).as_deref(),
+            Some("down")
+        );
+        assert_eq!(
+            db.dpu_state.field("DPU0", CP_STATE).as_deref(),
+            Some("down")
+        );
+        assert_eq!(
+            db.dpu_state.field("DPU0", DP_STATE).as_deref(),
+            Some("down")
+        );
     }
 
     /// Unlike a chassis card, an unconfigured DPU is *not* up.  Defaulting it
@@ -720,7 +847,8 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
         let mut hw = Hw(Vec::new());
-        u.update_recovery(&m, &db.tables(), &mut hw, Instant::now()).unwrap();
+        u.update_recovery(&m, &db.tables(), &mut hw, Instant::now())
+            .unwrap();
         assert_eq!(u.state_of("DPU0"), Some(DpuState::AdminDown));
     }
 
@@ -732,14 +860,22 @@ pub(crate) mod tests {
         db.dpu_state
             .set(
                 "DPU0",
-                &[(MP_STATE, "up".into()), (CP_STATE, "up".into()), (DP_STATE, "up".into())],
+                &[
+                    (MP_STATE, "up".into()),
+                    (CP_STATE, "up".into()),
+                    (DP_STATE, "up".into()),
+                ],
             )
             .unwrap();
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
-        u.update_recovery(&m, &db.tables(), &mut Hw(Vec::new()), Instant::now()).unwrap();
+        u.update_recovery(&m, &db.tables(), &mut Hw(Vec::new()), Instant::now())
+            .unwrap();
         assert_eq!(u.state_of("DPU0"), Some(DpuState::Ready));
-        assert_eq!(db.dpu_state.field("DPU0", READY_STATUS).as_deref(), Some("true"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", READY_STATUS).as_deref(),
+            Some("true")
+        );
     }
 
     /// A recovery this daemon started holds the transition flag too, and must
@@ -749,17 +885,24 @@ pub(crate) mod tests {
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
         db.admin_up("DPU0");
-        db.module.set("DPU0", &[("transition_type", "recovery".to_string())]).unwrap();
+        db.module
+            .set("DPU0", &[("transition_type", "recovery".to_string())])
+            .unwrap();
         db.dpu_state
             .set(
                 "DPU0",
-                &[(MP_STATE, "up".into()), (CP_STATE, "up".into()), (DP_STATE, "up".into())],
+                &[
+                    (MP_STATE, "up".into()),
+                    (CP_STATE, "up".into()),
+                    (DP_STATE, "up".into()),
+                ],
             )
             .unwrap();
         let mut m = [dpu("DPU0", ModuleStatus::Online)];
         m[0].state_transition = Some(true);
         let mut u = updater(&m, r.path());
-        u.update_recovery(&m, &db.tables(), &mut Hw(Vec::new()), Instant::now()).unwrap();
+        u.update_recovery(&m, &db.tables(), &mut Hw(Vec::new()), Instant::now())
+            .unwrap();
         assert_eq!(u.state_of("DPU0"), Some(DpuState::Ready), "not suppressed");
     }
 
@@ -770,14 +913,75 @@ pub(crate) mod tests {
         let db = Db::new();
         db.admin_up("DPU0");
         db.dpu_state
-            .set("DPU0", &[(MP_STATE, "down".into()), (CP_STATE, "down".into())])
+            .set(
+                "DPU0",
+                &[(MP_STATE, "down".into()), (CP_STATE, "down".into())],
+            )
             .unwrap();
         let mut m = [dpu("DPU0", ModuleStatus::Online)];
         m[0].state_transition = Some(true);
         let mut u = updater(&m, r.path());
+        u.recovery.get_mut("DPU0").unwrap().state = DpuState::Ready;
+        db.device_metadata
+            .set("localhost", &[(DPU_AUTO_RECOVERY_FIELD, "enable".into())])
+            .unwrap();
+        db.module
+            .set("DPU0", &[(OPERSTATUS_FIELD, "Offline".into())])
+            .unwrap();
         let mut hw = Hw(Vec::new());
-        u.update_recovery(&m, &db.tables(), &mut hw, Instant::now()).unwrap();
+        u.update_recovery(&m, &db.tables(), &mut hw, Instant::now())
+            .unwrap();
         assert!(hw.0.is_empty());
+        assert_eq!(u.state_of("DPU0"), Some(DpuState::Ready));
+        m[0].state_transition = Some(false);
+        u.update_recovery(&m, &db.tables(), &mut hw, Instant::now())
+            .unwrap();
+        assert!(
+            !hw.0.is_empty(),
+            "the same failure without a planned transition must recover"
+        );
+    }
+
+    #[test]
+    fn recovery_status_reaches_the_database_before_a_slow_power_cycle() {
+        struct Slow {
+            table: MockTable,
+            names: Vec<String>,
+        }
+        impl PowerCycler for Slow {
+            fn power_cycle(&mut self, name: &str, _: &DeviceKey) -> Result<bool, PlatformError> {
+                assert_eq!(
+                    self.table.field(name, READY_STATUS).as_deref(),
+                    Some("false")
+                );
+                assert_eq!(self.table.field(name, RESET_COUNT).as_deref(), Some("1"));
+                assert!(self.table.field(name, LAST_DOWN_TIME).is_some());
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                self.names.push(name.to_string());
+                Ok(true)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let db = Db::new();
+        for name in ["DPU0", "DPU1"] {
+            db.admin_up(name);
+        }
+        db.device_metadata
+            .set("localhost", &[(DPU_AUTO_RECOVERY_FIELD, "enable".into())])
+            .unwrap();
+        let modules = [
+            dpu("DPU0", ModuleStatus::Online),
+            dpu("DPU1", ModuleStatus::Online),
+        ];
+        let mut updater = updater(&modules, root.path());
+        let mut hw = Slow {
+            table: db.dpu_state.clone(),
+            names: Vec::new(),
+        };
+        updater
+            .init_recovery(&modules, &db.tables(), &mut hw, true, Instant::now())
+            .unwrap();
+        assert_eq!(hw.names, vec!["DPU0", "DPU1"]);
     }
 
     /// The NPU's own memory is what died, so nothing it believes about the
@@ -788,12 +992,19 @@ pub(crate) mod tests {
         let db = Db::new();
         db.admin_up("DPU0");
         db.device_metadata
-            .set("localhost", &[(DPU_AUTO_RECOVERY_FIELD, "enable".to_string())])
+            .set(
+                "localhost",
+                &[(DPU_AUTO_RECOVERY_FIELD, "enable".to_string())],
+            )
             .unwrap();
-        let m = [dpu("DPU0", ModuleStatus::Online), dpu("DPU1", ModuleStatus::Online)];
+        let m = [
+            dpu("DPU0", ModuleStatus::Online),
+            dpu("DPU1", ModuleStatus::Online),
+        ];
         let mut u = updater(&m, r.path());
         let mut hw = Hw(Vec::new());
-        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now()).unwrap();
+        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now())
+            .unwrap();
         assert_eq!(hw.0, vec!["DPU0".to_string()], "DPU1 is not admin-up");
     }
 
@@ -806,9 +1017,13 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
         let mut hw = Hw(Vec::new());
-        u.init_recovery(&m, &db.tables(), &mut hw, false, Instant::now()).unwrap();
+        u.init_recovery(&m, &db.tables(), &mut hw, false, Instant::now())
+            .unwrap();
         assert!(hw.0.is_empty());
-        assert_eq!(db.dpu_state.field("DPU0", READY_STATUS).as_deref(), Some("false"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", READY_STATUS).as_deref(),
+            Some("false")
+        );
     }
 
     /// And asks CONFIG_DB nothing, as Python's start-up asks it nothing
@@ -821,9 +1036,16 @@ pub(crate) mod tests {
         db.device_metadata.fail_reads("CONFIG_DB is gone");
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
-        u.init_recovery(&m, &db.tables(), &mut Hw(Vec::new()), false, Instant::now()).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", READY_STATUS).as_deref(), Some("false"));
-        assert_eq!(db.dpu_state.field("DPU0", RESET_COUNT).as_deref(), Some("0"));
+        u.init_recovery(&m, &db.tables(), &mut Hw(Vec::new()), false, Instant::now())
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", READY_STATUS).as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            db.dpu_state.field("DPU0", RESET_COUNT).as_deref(),
+            Some("0")
+        );
     }
 
     /// DPU_STATE and REBOOT_CAUSE survive: the first is how an operator sees
@@ -835,16 +1057,21 @@ pub(crate) mod tests {
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
         let rows = MockKeyspace::new(&[
-            "DPU_STATE|DPU0", "REBOOT_CAUSE|DPU0|x", "TRANSCEIVER_INFO|DPU0|Ethernet0",
+            "DPU_STATE|DPU0",
+            "REBOOT_CAUSE|DPU0|x",
+            "TRANSCEIVER_INFO|DPU0|Ethernet0",
             "DPU_STATE|DPU1",
         ]);
         let m = [dpu("DPU0", ModuleStatus::Offline)];
         updater(&m, r.path()).cleanup_shut_down(&m, &db.tables(), &rows);
-        assert_eq!(rows.remaining(), vec![
-            "DPU_STATE|DPU0".to_string(),
-            "REBOOT_CAUSE|DPU0|x".to_string(),
-            "DPU_STATE|DPU1".to_string(),
-        ]);
+        assert_eq!(
+            rows.remaining(),
+            vec![
+                "DPU_STATE|DPU0".to_string(),
+                "REBOOT_CAUSE|DPU0|x".to_string(),
+                "DPU_STATE|DPU1".to_string(),
+            ]
+        );
     }
 
     /// A scan that fails costs that pass's sweep and nothing else: it is
@@ -854,9 +1081,7 @@ pub(crate) mod tests {
         let log = pmon_common::logging::capture();
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
-        let rows = MockKeyspace::new(&[
-            "DPU_STATE|DPU0", "TRANSCEIVER_INFO|DPU0|Ethernet0",
-        ]);
+        let rows = MockKeyspace::new(&["DPU_STATE|DPU0", "TRANSCEIVER_INFO|DPU0|Ethernet0"]);
         rows.fail_reads("redis is gone");
         let m = [dpu("DPU0", ModuleStatus::Offline)];
         updater(&m, r.path()).cleanup_shut_down(&m, &db.tables(), &rows);
@@ -926,7 +1151,8 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
         let mut hw = Hw(Vec::new());
-        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now()).unwrap();
+        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now())
+            .unwrap();
         assert!(hw.0.is_empty(), "nothing power cycled");
         assert_eq!(u.state_of("DPU0"), Some(DpuState::ManualIntervention));
         assert!(log.logged(
@@ -956,11 +1182,17 @@ pub(crate) mod tests {
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
         db.module.fail_writes("read-only replica");
-        let m = [dpu("DPU0", ModuleStatus::Online), dpu("DPU1", ModuleStatus::Online)];
+        let m = [
+            dpu("DPU0", ModuleStatus::Online),
+            dpu("DPU1", ModuleStatus::Online),
+        ];
         let e = updater(&m, r.path())
             .refresh(&m, &db.tables())
             .expect_err("a table that will not take a write has to be reported");
-        assert!(e.contains("DPU0"), "the error names the row it stopped on: {e}");
+        assert!(
+            e.contains("DPU0"),
+            "the error names the row it stopped on: {e}"
+        );
         assert!(db.module.is_empty());
 
         let db = Db::new();
@@ -988,20 +1220,30 @@ pub(crate) mod tests {
         let u = updater(&[with(true)], r.path());
 
         let log = pmon_common::logging::capture();
-        u.check_midplane(&[with(true)], &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&[with(true)], &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         assert!(log.logged(log::Level::Info, up));
 
         let log = pmon_common::logging::capture();
-        u.check_midplane(&[with(false)], &db.tables(), &mut Hw(Vec::new())).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("down"));
+        u.check_midplane(&[with(false)], &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_STATE).as_deref(),
+            Some("down")
+        );
         assert!(log.logged(log::Level::Warn, lost));
 
         let log = pmon_common::logging::capture();
-        u.check_midplane(&[with(false)], &db.tables(), &mut Hw(Vec::new())).unwrap();
-        assert!(!log.contains("midplane connectivity"), "still lost is not news");
+        u.check_midplane(&[with(false)], &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
+        assert!(
+            !log.contains("midplane connectivity"),
+            "still lost is not news"
+        );
 
         let log = pmon_common::logging::capture();
-        u.check_midplane(&[with(true)], &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&[with(true)], &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("up"));
         assert!(log.logged(log::Level::Info, up));
     }
@@ -1016,7 +1258,8 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
         let mut hw = Hw(Vec::new());
-        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now()).unwrap();
+        u.init_recovery(&m, &db.tables(), &mut hw, true, Instant::now())
+            .unwrap();
         assert!(hw.0.is_empty());
         assert_eq!(u.state_of("DPU0"), Some(DpuState::ManualIntervention));
     }
@@ -1062,11 +1305,13 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let u = updater(&m, r.path());
         db.dpu_state.fail_writes("redis is gone");
-        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE), None);
 
         db.dpu_state.allow_writes();
-        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("up"));
     }
 
@@ -1094,7 +1339,8 @@ pub(crate) mod tests {
         let db = Db::new();
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let u = updater(&m, r.path());
-        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         assert!(!db.midplane.is_empty());
         u.clear(&m, &db.tables());
         assert!(db.midplane.is_empty());
@@ -1109,7 +1355,10 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let u = updater(&m, r.path());
         u.clear(&m, &db.tables());
-        assert_eq!(db.dpu_state.field("DPU0", READY_STATUS).as_deref(), Some("false"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", READY_STATUS).as_deref(),
+            Some("false")
+        );
         assert!(db.dpu_state.field("DPU0", LAST_DOWN_TIME).is_some());
         assert!(db.module.is_empty());
     }
@@ -1159,8 +1408,12 @@ pub(crate) mod tests {
         let m = [dpu("DPU0", ModuleStatus::Online)];
         let mut u = updater(&m, r.path());
         u.refresh(&m, &db.tables()).unwrap();
-        u.refresh(&[dpu("DPU0", ModuleStatus::Offline)], &db.tables()).unwrap();
-        assert_eq!(db.module.field("DPU0", OPERSTATUS_FIELD).as_deref(), Some("Offline"));
+        u.refresh(&[dpu("DPU0", ModuleStatus::Offline)], &db.tables())
+            .unwrap();
+        assert_eq!(
+            db.module.field("DPU0", OPERSTATUS_FIELD).as_deref(),
+            Some("Offline")
+        );
         assert_eq!(rc::previous(r.path(), "DPU0"), None);
     }
 
@@ -1171,12 +1424,19 @@ pub(crate) mod tests {
         let db = Db::new();
         let m = [unreachable_dpu()];
         let mut hw = Reasons::answering(Some("Power Loss"), Some("DPU power rail dropped"));
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(),
-                   Some("Unplanned: 'Power Loss, DPU power rail dropped'"));
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut hw)
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Power Loss, DPU power rail dropped'")
+        );
         assert_eq!(hw.asked, vec!["modules[0]".to_string()]);
-        assert_eq!(rc::read_midplane_down_reason(r.path(), "DPU0").as_deref(),
-                   Some("Unplanned: 'Power Loss, DPU power rail dropped'"), "and it is kept");
+        assert_eq!(
+            rc::read_midplane_down_reason(r.path(), "DPU0").as_deref(),
+            Some("Unplanned: 'Power Loss, DPU power rail dropped'"),
+            "and it is kept"
+        );
     }
 
     /// A platform that answers one string gives the whole reason, and one
@@ -1192,7 +1452,9 @@ pub(crate) mod tests {
             let db = Db::new();
             let m = [unreachable_dpu()];
             let mut hw = Reasons::answering(reason, detail);
-            updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
+            updater(&m, r.path())
+                .check_midplane(&m, &db.tables(), &mut hw)
+                .unwrap();
             assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some(want));
         }
     }
@@ -1207,10 +1469,21 @@ pub(crate) mod tests {
         let mut m = unreachable_dpu();
         m.state_transition = None;
         let m = [m];
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut Hw(Vec::new())).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Unplanned: 'Unknown'"));
-        assert!(log.logged(log::Level::Error, "get_midplane_down_reason is not implemented"));
-        assert!(log.logged(log::Level::Error, "get_module_state_transition is not implemented"));
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Unknown'")
+        );
+        assert!(log.logged(
+            log::Level::Error,
+            "get_midplane_down_reason is not implemented"
+        ));
+        assert!(log.logged(
+            log::Level::Error,
+            "get_module_state_transition is not implemented"
+        ));
     }
 
     /// A graceful operation holds the transition flag, and its type is the
@@ -1219,13 +1492,20 @@ pub(crate) mod tests {
     fn a_planned_transition_publishes_its_type() {
         let r = tempfile::tempdir().unwrap();
         let db = Db::new();
-        db.module.set("DPU0", &[("transition_type", "shutdown".to_string())]).unwrap();
+        db.module
+            .set("DPU0", &[("transition_type", "shutdown".to_string())])
+            .unwrap();
         let mut m = unreachable_dpu();
         m.state_transition = Some(true);
         let m = [m];
         let mut hw = Reasons::answering(Some("Power Loss"), None);
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Planned: 'shutdown'"));
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut hw)
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Planned: 'shutdown'")
+        );
         assert!(hw.asked.is_empty());
     }
 
@@ -1239,7 +1519,9 @@ pub(crate) mod tests {
         m.state_transition = Some(true);
         let m = [m];
         let mut hw = Reasons::answering(Some("Power Loss"), None);
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut hw)
+            .unwrap();
         assert_eq!(
             db.dpu_state.field("DPU0", MP_REASON).as_deref(),
             Some("Unplanned: 'Power Loss'")
@@ -1255,7 +1537,9 @@ pub(crate) mod tests {
         rc::write_midplane_down_reason(r.path(), "DPU0", "Unplanned: 'Power Loss'");
         let m = [unreachable_dpu()];
         let mut hw = Reasons::answering(Some("Something later"), None);
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut hw)
+            .unwrap();
         assert_eq!(
             db.dpu_state.field("DPU0", MP_REASON).as_deref(),
             Some("Unplanned: 'Power Loss'")
@@ -1270,10 +1554,15 @@ pub(crate) mod tests {
         let db = Db::new();
         let down = [unreachable_dpu()];
         let u = updater(&down, r.path());
-        u.check_midplane(&down, &db.tables(), &mut Reasons::answering(Some("Power Loss"), None))
-            .unwrap();
+        u.check_midplane(
+            &down,
+            &db.tables(),
+            &mut Reasons::answering(Some("Power Loss"), None),
+        )
+        .unwrap();
         let up = [dpu("DPU0", ModuleStatus::Online)];
-        u.check_midplane(&up, &db.tables(), &mut Hw(Vec::new())).unwrap();
+        u.check_midplane(&up, &db.tables(), &mut Hw(Vec::new()))
+            .unwrap();
         assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("up"));
         assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some(""));
         assert_eq!(rc::read_midplane_down_reason(r.path(), "DPU0"), None);
@@ -1290,7 +1579,11 @@ pub(crate) mod tests {
             .check_midplane(&m, &db.tables(), &mut Reasons::answering(Some("x"), None))
             .unwrap();
         let fields: Vec<String> = db.dpu_state.writes().into_iter().map(|(_, f)| f).collect();
-        assert_eq!(fields.last().map(String::as_str), Some(MP_STATE), "{fields:?}");
+        assert_eq!(
+            fields.last().map(String::as_str),
+            Some(MP_STATE),
+            "{fields:?}"
+        );
         assert!(fields.contains(&MP_REASON.to_string()));
     }
 
@@ -1305,7 +1598,11 @@ pub(crate) mod tests {
         let db = Db::new();
         let m = [unreachable_dpu()];
         updater(&m, &root)
-            .check_midplane(&m, &db.tables(), &mut Reasons::answering(Some("Power Loss"), None))
+            .check_midplane(
+                &m,
+                &db.tables(),
+                &mut Reasons::answering(Some("Power Loss"), None),
+            )
             .unwrap();
         assert_eq!(
             db.dpu_state.field("DPU0", MP_REASON).as_deref(),
@@ -1323,8 +1620,14 @@ pub(crate) mod tests {
         rc::write_midplane_down_reason(r.path(), "DPU0", "Planned: 'shutdown'");
         init_dpu_state("DPU0", false, r.path(), &db.tables());
         init_dpu_state("DPU1", true, r.path(), &db.tables());
-        assert_eq!(db.dpu_state.field("DPU0", MP_STATE).as_deref(), Some("down"));
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Planned: 'shutdown'"));
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_STATE).as_deref(),
+            Some("down")
+        );
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Planned: 'shutdown'")
+        );
         assert_eq!(db.dpu_state.field("DPU1", MP_STATE).as_deref(), Some("up"));
         assert_eq!(db.dpu_state.field("DPU1", MP_REASON).as_deref(), Some(""));
     }
@@ -1333,7 +1636,10 @@ pub(crate) mod tests {
     /// one is given the current time rather than nothing.
     #[test]
     fn a_records_time_is_the_moment_its_name_says() {
-        assert_eq!(formatted_from_name("2026_09_20_04_06_29"), "Sun Sep 20 04:06:29 AM UTC 2026");
+        assert_eq!(
+            formatted_from_name("2026_09_20_04_06_29"),
+            "Sun Sep 20 04:06:29 AM UTC 2026"
+        );
         let fallback = formatted_from_name("not a time");
         assert!(fallback.contains(" UTC "), "{fallback}");
     }
@@ -1350,14 +1656,17 @@ pub(crate) mod tests {
         m.state_transition = Some(true);
         let m = [m];
         let mut hw = Reasons::answering(Some("Power Loss"), None);
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut hw)
+            .unwrap();
         assert_eq!(
             db.dpu_state.field("DPU0", MP_REASON).as_deref(),
             Some("Unplanned: 'Power Loss'")
         );
-        assert!(
-            log.logged(log::Level::Error, "DPU0: failed to read transition_type: redis is gone")
-        );
+        assert!(log.logged(
+            log::Level::Error,
+            "DPU0: failed to read transition_type: redis is gone"
+        ));
     }
 
     /// A platform that fails to answer is still an unplanned loss, published
@@ -1372,9 +1681,16 @@ pub(crate) mod tests {
             answer: Err(PlatformError::Backend("i2c timeout".to_string())),
             asked: Vec::new(),
         };
-        updater(&m, r.path()).check_midplane(&m, &db.tables(), &mut hw).unwrap();
-        assert_eq!(db.dpu_state.field("DPU0", MP_REASON).as_deref(), Some("Unplanned: 'Unknown'"));
-        assert!(log.logged(log::Level::Error,
-            "DPU0: get_midplane_down_reason failed: platform error: i2c timeout"));
+        updater(&m, r.path())
+            .check_midplane(&m, &db.tables(), &mut hw)
+            .unwrap();
+        assert_eq!(
+            db.dpu_state.field("DPU0", MP_REASON).as_deref(),
+            Some("Unplanned: 'Unknown'")
+        );
+        assert!(log.logged(
+            log::Level::Error,
+            "DPU0: get_midplane_down_reason failed: platform error: i2c timeout"
+        ));
     }
 }

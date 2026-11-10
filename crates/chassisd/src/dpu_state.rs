@@ -6,15 +6,10 @@
 //! recovery machine reads.  Getting this wrong in the quiet direction gets the
 //! DPU power cycled.
 //!
-//! Polled every ten seconds, always.  Python has a second, event-driven mode
-//! (`chassisd:DpuStateManagerTask`) that subscribes to the tables the
-//! fallbacks read and republishes the moment one changes.
-//! `chassisd:DpuChassisdDaemon.run` picks it once, at start-up, when neither
-//! plane getter answers true -- not implemented, None, or both planes False at
-//! that moment -- and polls otherwise.  Not ported: the NPU acts on these
-//! planes over minutes -- a 600-second boot timeout, a 300-second
-//! self-recovery window -- so ten seconds more of latency changes none of its
-//! decisions.
+//! When the platform has no live plane getters, subscriptions to CONFIG_DB
+//! PORT, APPL_DB PORT_TABLE and STATE_DB SYSTEM_READY wake the publisher as
+//! soon as a plane changes, as `chassisd:DpuStateManagerTask` does. A ten-second
+//! poll remains as a fallback and for platforms that implement the getters.
 
 use std::path::Path;
 

@@ -90,6 +90,13 @@ const CHASSIS_NOT_SUPPORTED: i32 = 2;
 /// never reconnects.
 const ERR_DB_WRITE: i32 = 1;
 
+/// A lost subscription requires restart, retaining the last published state.
+const ERR_WATCHER_LOST: i32 = 3;
+
+fn clean_shutdown(code: i32) -> bool {
+    code == 0 || pmon_common::cycles::signal_name(code).is_some()
+}
+
 /// `chassisd:DEFAULT_LINECARD_REBOOT_TIMEOUT`, overridable from
 /// `platform_env.conf`.
 const DEFAULT_LINECARD_REBOOT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -139,7 +146,20 @@ fn chassis_pass(
     // daemon and supervisord restarts it.  Skipping the cycle keeps the rows
     // that are there.
     let reading = platform
-        .get_modules(ModuleInfoCols::ALL)
+        .get_modules(
+            MODULE_PUBLICATION_COLS.with(
+                ModuleInfoCols::TYPE
+                    .with(ModuleInfoCols::DESCRIPTION)
+                    .with(ModuleInfoCols::SLOT)
+                    .with(ModuleInfoCols::OPER_STATUS)
+                    .with(ModuleInfoCols::PRESENCE)
+                    .with(ModuleInfoCols::MODEL)
+                    .with(ModuleInfoCols::SERIAL)
+                    .with(ModuleInfoCols::IS_REPLACEABLE)
+                    .with(ModuleInfoCols::MIDPLANE_IP)
+                    .with(ModuleInfoCols::IS_MIDPLANE_REACHABLE),
+            ),
+        )
         .map_err(|e| format!("Failed to read the modules: {e}"))
         .and_then(|modules| match platform.get_asics() {
             Ok(asics) => Ok((modules, asics)),
@@ -161,7 +181,11 @@ fn chassis_pass(
     updater.check_midplane(&modules, tables)?;
 
     for key in chassis_app_db::due(is_supervisor, updater.down_modules().iter(), now) {
-        let slot = updater.down_modules().get(&key).map(|m| m.slot).unwrap_or(INVALID_SLOT);
+        let slot = updater
+            .down_modules()
+            .get(&key)
+            .map(|m| m.slot)
+            .unwrap_or(INVALID_SLOT);
         if chassis_app_db::cleanup(&key, slot, tables) {
             updater.mark_cleaned(&key);
         }
@@ -189,26 +213,29 @@ async fn run_chassis(
             Tick::Exit(code) => return code,
             Tick::Cycle => {}
         }
-        // A watcher that has stopped for good -- its subscription lost, or its
-        // platform would not load -- has said why already.  It shares this
+        // A watcher that permanently lost its subscription has said why
+        // already. Platform initialization retries independently. It shares this
         // redis, so a lost subscription means the writes below are about to
         // fail too.  Checked here rather than acted on over there because
         // leaving is the poll loop's to do: the rows still have to be cleared
         // on the way out.
         if watcher_lost.load(Ordering::SeqCst) {
             log::error!("A watcher has stopped; stopping the daemon");
-            return ERR_DB_WRITE;
+            return ERR_WATCHER_LOST;
         }
         // A STATE_DB that will not take a write is a redis this process has
         // lost for good, so it leaves and supervisord brings it back onto a
         // fresh one -- what Python's unwrapped `set` does by letting the
-        // exception through `try`/`finally` and out of `main`.  One
-        // difference: Python's exception skips the `deinit` that would clear
-        // the tables, and here the caller clears them on the way out either
-        // way.
+        // exception through `try`/`finally` and out of `main`. Error exits
+        // retain the published rows; only planned shutdown performs cleanup.
         if let Err(e) = chassis_pass(
-            platform, updater, tables, is_supervisor, &mut read, SystemTime::now())
-        {
+            platform,
+            updater,
+            tables,
+            is_supervisor,
+            &mut read,
+            SystemTime::now(),
+        ) {
             log::error!("{e}");
             return ERR_DB_WRITE;
         }
@@ -228,8 +255,8 @@ enum Watch {
 /// What the watchers and the poll loop say to each other.
 #[derive(Debug, Default)]
 struct WatchFlags {
-    /// Raised by a watcher that has stopped for good -- its subscription lost,
-    /// or its platform would not load -- for the poll loop to act on.
+    /// Raised by a watcher that permanently lost its subscription. Platform
+    /// initialization failures retry within the watcher without raising this.
     lost: AtomicBool,
     /// Raised by the poll loop on the way out.  A watcher checks it between
     /// selects, which time out every second, and returns.
@@ -289,6 +316,7 @@ type Gracefully<'a> = &'a dyn Fn(&str, &DeviceKey, bool);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let mut cycles = Cycles::signals().expect("failed to install the signal handlers");
     let args = Args::parse();
     logging::init(SYSLOG_IDENTIFIER);
     log::info!("Starting up...");
@@ -315,24 +343,14 @@ async fn main() {
     let shut_down =
         move |dpus: &[(String, DeviceKey)]| shut_down_in_parallel(dpus, args.platform_api);
 
-    // After the platform is opened, not before as Python's `DaemonBase`
-    // orders it, and the order is load-bearing.  Opening the PyO3 bridge ends
-    // with `signal.signal(SIGTERM/SIGINT, SIG_DFL)` -- a real `sigaction`,
-    // undoing whatever a vendor chassis installed -- and tokio installs its
-    // own `sigaction` once per signal, on first registration.  Registered
-    // first, the handlers would be overwritten and never put back, and every
-    // SIGTERM for the life of the process would kill it before the teardown
-    // runs -- the DPUs left marked ready, the module rows left behind.  What
-    // the Python order buys -- a SIGTERM during the import handled rather than
-    // fatal -- costs nothing here: nothing has been published yet.  The
-    // watcher threads open bridges of their own later; the reset is a no-op
-    // off the main thread, so they leave these handlers alone.
+    // Signal handling was installed before vendor initialization. The bridge
+    // preserves those dispositions when this or another platform handle opens.
     let code = dispatch(
         &mut platform,
         &db::open,
         &spawn_watcher,
         &shut_down,
-        &mut Cycles::signals().expect("failed to install the signal handlers"),
+        &mut cycles,
     )
     .await;
 
@@ -478,7 +496,13 @@ async fn run_modular<P: PlatformApi>(
         }
     };
     let (chassis_tbl, module_tbl, midplane_tbl, entity_tbl, asic_tbl, hostname_tbl, reboot_tbl) = (
-        h.chassis, h.module, h.midplane, h.entity, h.asic, h.hostname, h.module_reboot,
+        h.chassis,
+        h.module,
+        h.midplane,
+        h.entity,
+        h.asic,
+        h.hostname,
+        h.module_reboot,
     );
 
     let tables = Tables {
@@ -526,11 +550,20 @@ async fn run_modular<P: PlatformApi>(
         .into_iter()
         .collect();
 
-    let code =
-        run_chassis(platform, &mut updater, &tables, is_supervisor, cycles, &flags.lost).await;
+    let code = run_chassis(
+        platform,
+        &mut updater,
+        &tables,
+        is_supervisor,
+        cycles,
+        &flags.lost,
+    )
+    .await;
 
     stop_watchers(&flags, watchers).await;
-    updater.clear(&modules_for_teardown(platform, modules), &tables);
+    if clean_shutdown(code) {
+        updater.clear(&modules_for_teardown(platform, modules), &tables);
+    }
     code
 }
 
@@ -543,7 +576,7 @@ async fn run_modular<P: PlatformApi>(
 /// all, power cycling nothing for the life of the process; and the log said
 /// "has no modules", which was not true.
 fn start_up_modules(platform: &mut dyn PlatformApi) -> Result<Vec<ModuleInfo>, i32> {
-    platform.get_modules(ModuleInfoCols::ALL).map_err(|e| {
+    platform.get_modules(ModuleInfoCols::NONE).map_err(|e| {
         log::error!("Failed to read the modules: {e}");
         CHASSIS_LOAD_ERROR
     })
@@ -556,7 +589,7 @@ fn modules_for_teardown(
     platform: &mut dyn PlatformApi,
     at_start: Vec<ModuleInfo>,
 ) -> Vec<ModuleInfo> {
-    match platform.get_modules(ModuleInfoCols::ALL) {
+    match platform.get_modules(ModuleInfoCols::NONE) {
         Ok(m) => m,
         Err(e) => {
             log::warn!(
@@ -700,11 +733,17 @@ fn apply_config_event(
         // An exception from `get_module_index` ends Python's config updater;
         // here it ends only this one event.
         Err(e) => {
-            log::error!("Failed to look up module {name} to set admin-state {}: {e}", u8::from(up));
+            log::error!(
+                "Failed to look up module {name} to set admin-state {}: {e}",
+                u8::from(up)
+            );
             return;
         }
     };
-    log::info!("Changing module {name} to admin {} state", if up { "UP" } else { "DOWN" });
+    log::info!(
+        "Changing module {name} to admin {} state",
+        if up { "UP" } else { "DOWN" }
+    );
     match machine {
         Machine::SmartSwitch => gracefully(name, &key, up),
         Machine::Chassis => {
@@ -739,22 +778,66 @@ fn spawn_config_watcher(
     })
 }
 
+fn watcher_platform<P>(
+    mut open: impl FnMut() -> Result<P, PlatformError>,
+    flags: &WatchFlags,
+    watcher: &str,
+    mut retry_wait: impl FnMut(&WatchFlags),
+) -> Option<P> {
+    let mut failed = false;
+    let mut attempts = 0_u64;
+    let mut next_warning = 60;
+    while !flags.stop.load(Ordering::SeqCst) {
+        match open() {
+            Ok(platform) => {
+                if failed {
+                    pmon_common::info_logger!("{watcher}: platform initialization recovered");
+                }
+                return Some(platform);
+            }
+            Err(error) => {
+                attempts += 1;
+                if !failed {
+                    log::error!(
+                        "{watcher}: failed to load chassis, retrying independently: {error}"
+                    );
+                    failed = true;
+                } else if attempts >= next_warning {
+                    next_warning += 60;
+                    log::warn!("{watcher}: platform initialization still unavailable after {attempts} attempts: {error}");
+                }
+                retry_wait(flags);
+            }
+        }
+    }
+    None
+}
+
+fn wait_for_platform_retry(flags: &WatchFlags) {
+    // One retry per second, with a short shutdown bound even if initialization
+    // keeps failing. Main publication does not depend on this retry loop.
+    for _ in 0..10 {
+        if flags.stop.load(Ordering::SeqCst) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn config_watch_loop(machine: Machine, which: PlatformImpl, flags: &WatchFlags) {
     use swss_common::{DbConnector, SubscriberStateTable};
 
     // Its own platform handle and its own connection: the poll loop holds the
     // other one mutably, and each thread owning its own is what the rest of
-    // these daemons already do.  One that will not load is a watcher that can
-    // never run, and it says so to the poll loop like a lost subscription: a
-    // daemon up but deaf to `config chassis modules` is the state the strict
-    // rule below exists to prevent.
-    let mut platform = match platform_provider::open(SYSLOG_IDENTIFIER, which) {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("config watcher: failed to load chassis: {e}");
-            flags.lost.store(true, Ordering::SeqCst);
-            return;
-        }
+    // these daemons already do. A platform initialization failure retries on
+    // this worker, keeping the main publication loop alive while it recovers.
+    let Some(mut platform) = watcher_platform(
+        || platform_provider::open(SYSLOG_IDENTIFIER, which),
+        flags,
+        "config watcher",
+        wait_for_platform_retry,
+    ) else {
+        return;
     };
 
     // Detached on purpose: Python never joins these
@@ -917,11 +1000,7 @@ fn watch_config(
 /// `chassisd:RebootCauseSubscriberTask.task_worker`: a row that went, or a
 /// change that does not carry a boot_id, is not a boot.  Whether the boot_id
 /// is new is `capture`'s question, because the answer is on disk.
-fn watch_boot_ids(
-    feed: &dyn ChangeFeed,
-    flags: &WatchFlags,
-    capture: &mut dyn FnMut(&str, &str),
-) {
+fn watch_boot_ids(feed: &dyn ChangeFeed, flags: &WatchFlags, capture: &mut dyn FnMut(&str, &str)) {
     watch(feed, "reboot-cause watcher", flags, &mut |c| {
         if c.deleted {
             return;
@@ -955,15 +1034,14 @@ fn spawn_boot_id_watcher(
 fn boot_id_watch_loop(which: PlatformImpl, flags: &WatchFlags) {
     use swss_common::{DbConnector, SubscriberStateTable};
 
-    // One that will not load can record no reboot ever, and says so to the
-    // poll loop, as the config watcher does.
-    let mut platform = match platform_provider::open(SYSLOG_IDENTIFIER, which) {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("reboot-cause watcher: failed to load chassis: {e}");
-            flags.lost.store(true, Ordering::SeqCst);
-            return;
-        }
+    // Retry independently of the main loop, as the config watcher does.
+    let Some(mut platform) = watcher_platform(
+        || platform_provider::open(SYSLOG_IDENTIFIER, which),
+        flags,
+        "reboot-cause watcher",
+        wait_for_platform_retry,
+    ) else {
+        return;
     };
     let reboot_cause = match db::open(CHASSIS_STATE_DB, "REBOOT_CAUSE") {
         Ok(t) => t,
@@ -1069,12 +1147,17 @@ fn init_dpu_admin_state(
         // `chassisd:ChassisdDaemon.set_initial_dpu_admin_state`).  Guessing
         // "unconfigured" would power a DPU off because a database was briefly
         // unavailable.
-        let Some(config) = tables.config else { continue };
+        let Some(config) = tables.config else {
+            continue;
+        };
         match config.get(&m.name) {
             Ok(None) => unconfigured.push((m.name.clone(), m.key.clone())),
             Ok(Some(_)) => {}
             Err(e) => {
-                log::error!("Error in run: {}: cannot read its CHASSIS_MODULE row: {e}", m.name)
+                log::error!(
+                    "Error in run: {}: cannot read its CHASSIS_MODULE row: {e}",
+                    m.name
+                )
             }
         }
     }
@@ -1195,7 +1278,10 @@ fn power_cycle_sequence(
     module: &str,
     key: &DeviceKey,
 ) -> Result<bool, PlatformError> {
-    if !answered(platform.set_module_state_transition(key, TRANSITION_TYPE_RECOVERY), false)? {
+    if !answered(
+        platform.set_module_state_transition(key, TRANSITION_TYPE_RECOVERY),
+        false,
+    )? {
         return Ok(false);
     }
     match answered(platform.module_pre_shutdown(key), true) {
@@ -1252,6 +1338,14 @@ fn answered(
 }
 
 impl<P: PlatformApi> dpu_recovery::PowerCycler for PlatformCycler<'_, P> {
+    fn transition_in_progress(&mut self, key: &DeviceKey) -> Result<Option<bool>, PlatformError> {
+        Ok(self
+            .platform
+            .get_modules(ModuleInfoCols::STATE_TRANSITION)?
+            .into_iter()
+            .find(|m| &m.key == key)
+            .and_then(|m| m.state_transition))
+    }
     fn power_cycle(&mut self, name: &str, key: &DeviceKey) -> Result<bool, PlatformError> {
         power_cycle_sequence(self.platform, name, key)
     }
@@ -1311,7 +1405,9 @@ fn thresholds_from(text: Option<&str>) -> dpu_recovery::Thresholds {
         let x = v.get(k)?;
         let n = match x {
             serde_json::Value::Number(n) => n.as_u64().or_else(|| {
-                n.as_f64().filter(|f| f.is_finite() && *f >= 0.0).map(|f| f.trunc() as u64)
+                n.as_f64()
+                    .filter(|f| f.is_finite() && *f >= 0.0)
+                    .map(|f| f.trunc() as u64)
             }),
             serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
             _ => None,
@@ -1383,7 +1479,7 @@ async fn run_smartswitch_loop<P: PlatformApi>(
         // the config one and the reboot-cause one, and either can raise it.
         if watcher_lost.load(Ordering::SeqCst) {
             log::error!("A watcher has stopped; stopping the daemon");
-            return ERR_DB_WRITE;
+            return ERR_WATCHER_LOST;
         }
         // A failed read skips the pass, as on a chassis (`chassis_pass`), and
         // departs from Python the same way: its reads go through
@@ -1391,7 +1487,15 @@ async fn run_smartswitch_loop<P: PlatformApi>(
         // default (`chassisd:SmartSwitchModuleUpdater.module_db_update`), so
         // any other failure ends its daemon.  Skipping keeps every DPU's rows
         // and recovery state for the next pass.
-        let modules = match platform.get_modules(ModuleInfoCols::ALL) {
+        let modules = match platform.get_modules(
+            MODULE_PUBLICATION_COLS.with(
+                ModuleInfoCols::DESCRIPTION
+                    .with(ModuleInfoCols::SERIAL)
+                    .with(ModuleInfoCols::OPER_STATUS)
+                    .with(ModuleInfoCols::MIDPLANE_IP)
+                    .with(ModuleInfoCols::IS_MIDPLANE_REACHABLE),
+            ),
+        ) {
             Ok(m) => {
                 pmon_common::recovered!(read, "module read recovered");
                 m
@@ -1406,10 +1510,17 @@ async fn run_smartswitch_loop<P: PlatformApi>(
         // through it.  The reboot cause is not asked here at all: it is
         // recorded when a DPU's boot_id changes, by the watcher that
         // subscribes to them.
-        let mut hw = PlatformCycler { platform: &mut *platform };
-        if let Err(e) =
-            smartswitch_pass(&modules, &mut hw, updater, tables, chassis_state, Instant::now())
-        {
+        let mut hw = PlatformCycler {
+            platform: &mut *platform,
+        };
+        if let Err(e) = smartswitch_pass(
+            &modules,
+            &mut hw,
+            updater,
+            tables,
+            chassis_state,
+            Instant::now(),
+        ) {
             // Same reasoning as the modular loop: a STATE_DB that will not
             // take a write is a redis this process has lost, and only a
             // restart gets it back.
@@ -1503,12 +1614,20 @@ async fn run_smartswitch<P: PlatformApi>(
         spawn_watcher(Watch::BootIds, Arc::clone(&flags)),
     ];
 
-    let code =
-        run_smartswitch_loop(platform, &mut updater, &tables, chassis_state, cycles, &flags.lost)
-            .await;
+    let code = run_smartswitch_loop(
+        platform,
+        &mut updater,
+        &tables,
+        chassis_state,
+        cycles,
+        &flags.lost,
+    )
+    .await;
 
     stop_watchers(&flags, watchers).await;
-    updater.clear(&modules_for_teardown(platform, modules), &tables);
+    if clean_shutdown(code) {
+        updater.clear(&modules_for_teardown(platform, modules), &tables);
+    }
     code
 }
 
@@ -1520,6 +1639,12 @@ async fn run_smartswitch<P: PlatformApi>(
 /// seconds -- among them `get_reboot_cause` and the LED, which the facade's
 /// own rule keeps out of anything read per cycle.  Python's DPU side calls the
 /// two plane getters and nothing else.
+const MODULE_PUBLICATION_COLS: ModuleInfoCols = ModuleInfoCols::NAME_TEXT
+    .with(ModuleInfoCols::PRESENCE_TEXT)
+    .with(ModuleInfoCols::REPLACEABLE_TEXT)
+    .with(ModuleInfoCols::SLOT_TEXT)
+    .with(ModuleInfoCols::OPER_STATUS_TEXT);
+
 const DPU_PLANE_COLS: ChassisInfoCols =
     ChassisInfoCols::DATAPLANE_STATE.with(ChassisInfoCols::CONTROLPLANE_STATE);
 
@@ -1531,11 +1656,73 @@ struct Sources<'a> {
     system_ready: Option<&'a dyn TableLike>,
 }
 
+struct PlaneEvents {
+    receiver: tokio::sync::mpsc::UnboundedReceiver<Result<(), String>>,
+    stop: Arc<AtomicBool>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+impl Drop for PlaneEvents {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+impl PlaneEvents {
+    fn subscribe() -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let workers = [
+            (CONFIG_DB, "PORT"),
+            ("APPL_DB", "PORT_TABLE"),
+            (db::STATE_DB, "SYSTEM_READY"),
+        ]
+        .into_iter()
+        .map(|(db, table)| {
+            let sender = sender.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let result = (|| -> Result<(), String> {
+                    let db = swss_common::DbConnector::new_named(db, true, 0)
+                        .map_err(|e| format!("{e:?}"))?;
+                    let subscription =
+                        swss_common::SubscriberStateTable::new(db, table, None, None)
+                            .map_err(|e| format!("{e:?}"))?;
+                    sender.send(Ok(())).map_err(|e| e.to_string())?;
+                    while !stop.load(Ordering::Acquire) {
+                        if matches!(
+                            subscription.wait(Duration::from_millis(200))?,
+                            swss_common::SelectResult::Data
+                        ) {
+                            subscription.take()?;
+                            if sender.send(Ok(())).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(e) = result {
+                    let _ = sender.send(Err(e));
+                }
+            })
+        })
+        .collect();
+        Self {
+            receiver,
+            stop,
+            workers,
+        }
+    }
+}
+
 /// The DPU-side loop, with everything it needs handed to it.
 ///
 /// Separated from the wiring so it can be driven by a test.  Publishing `down`
 /// on the way out is part of it: this daemon stopping is the DPU's SONiC going
 /// away, and the NPU should hear it now rather than infer it from a timeout.
+#[cfg(test)]
 async fn run_dpu_loop(
     platform: &mut dyn PlatformApi,
     name: &str,
@@ -1543,6 +1730,18 @@ async fn run_dpu_loop(
     sources: Sources<'_>,
     table: &dyn TableLike,
     cycles: &mut Cycles,
+) -> i32 {
+    run_dpu_loop_events(platform, name, boot_id, sources, table, cycles, None).await
+}
+
+async fn run_dpu_loop_events(
+    platform: &mut dyn PlatformApi,
+    name: &str,
+    boot_id: Option<&str>,
+    sources: Sources<'_>,
+    table: &dyn TableLike,
+    cycles: &mut Cycles,
+    mut events: Option<PlaneEvents>,
 ) -> i32 {
     // Written once before anything else, as `chassisd:DpuStateManagerTask`
     // does: the write is the event the NPU records a reboot on, and a daemon
@@ -1593,12 +1792,26 @@ async fn run_dpu_loop(
             break ERR_DB_WRITE;
         }
 
-        match cycles.next(UPDATE_PERIOD, &mut *platform).await {
+        let tick = if let Some(events) = events.as_mut() {
+            tokio::select! {
+                biased;
+                event = events.receiver.recv() => match event {
+                    Some(Ok(())) => Tick::Cycle,
+                    _ => { log::error!("DPU plane subscription was lost"); break ERR_WATCHER_LOST; }
+                },
+                tick = cycles.next(UPDATE_PERIOD, &mut *platform) => tick,
+            }
+        } else {
+            cycles.next(UPDATE_PERIOD, &mut *platform).await
+        };
+        match tick {
             Tick::Exit(code) => break code,
             Tick::Cycle => {}
         }
     };
-    dpu_state::shutdown(name, table);
+    if clean_shutdown(code) {
+        dpu_state::shutdown(name, table);
+    }
     code
 }
 
@@ -1629,7 +1842,9 @@ fn dpu_planes(
     let control = match info.and_then(|c| c.controlplane_state) {
         Some(state) => state,
         None => {
-            let ready = sources.system_ready.ok_or_else(|| missing("SYSTEM_READY"))?;
+            let ready = sources
+                .system_ready
+                .ok_or_else(|| missing("SYSTEM_READY"))?;
             dpu_state::control_plane_from_system_ready(ready)?
         }
     };
@@ -1680,7 +1895,12 @@ async fn run_on_dpu<P: PlatformApi>(
     };
 
     let boot_id = dpu_state::read_boot_id(Path::new(dpu_state::BOOT_ID_PATH));
-    run_dpu_loop(
+    let event_mode = platform
+        .get_chassis_info(DPU_PLANE_COLS)
+        .map(|info| info.dataplane_state != Some(true) && info.controlplane_state != Some(true))
+        .unwrap_or(true);
+    let events = (event_mode && matches!(cycles, Cycles::Signals(_))).then(PlaneEvents::subscribe);
+    run_dpu_loop_events(
         platform,
         &name,
         boot_id.as_deref(),
@@ -1691,6 +1911,7 @@ async fn run_on_dpu<P: PlatformApi>(
         },
         dpu_state_tbl.as_ref(),
         cycles,
+        events,
     )
     .await
 }
@@ -1706,6 +1927,320 @@ mod tests {
 
     use super::*;
     use crate::dpu_updater::tests::key_of;
+
+    #[test]
+    fn a_platform_load_failure_retries_without_marking_the_watcher_lost() {
+        let flags = WatchFlags::default();
+        let mut attempts = 0;
+        let platform = watcher_platform(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(PlatformError::Backend("load failed".into()))
+                } else {
+                    Ok(42)
+                }
+            },
+            &flags,
+            "config watcher",
+            |flags| {
+                assert!(!flags.lost.load(Ordering::SeqCst));
+            },
+        );
+        assert_eq!(platform, Some(42));
+        assert_eq!(attempts, 2);
+        assert!(!flags.lost.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_long_watcher_outage_is_reported_periodically_and_once_on_recovery() {
+        let log = pmon_common::logging::capture();
+        let flags = WatchFlags::default();
+        let mut attempts = 0;
+        let result = watcher_platform(
+            || {
+                attempts += 1;
+                if attempts <= 120 {
+                    Err(PlatformError::Backend("offline".into()))
+                } else {
+                    Ok(42)
+                }
+            },
+            &flags,
+            "config watcher",
+            |_| {},
+        );
+        assert_eq!(result, Some(42));
+        let lines = log.lines();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|(_, text)| text.contains("still unavailable"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|(_, text)| text.contains("initialization recovered"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_watcher_stops_retrying_when_the_daemon_stops() {
+        let flags = WatchFlags::default();
+        let platform: Option<()> = watcher_platform(
+            || Err(PlatformError::Backend("still unavailable".into())),
+            &flags,
+            "config watcher",
+            |flags| flags.stop.store(true, Ordering::SeqCst),
+        );
+        assert!(platform.is_none());
+        assert!(!flags.lost.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn main_publication_continues_while_watchers_retry_platform_initialization() {
+        let opener = MockOpener::new();
+        let mut platform = Shaped {
+            modules: vec![online_dpu0()],
+            midplane_ok: true,
+            ..Default::default()
+        };
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let watcher = |_: Watch, flags: Arc<WatchFlags>| {
+            let attempts = Arc::clone(&attempts);
+            let (started, ready) = std::sync::mpsc::channel();
+            let task = tokio::task::spawn_blocking(move || {
+                let _: Option<()> = watcher_platform(
+                    || {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        let _ = started.send(());
+                        Err(PlatformError::Backend("worker platform unavailable".into()))
+                    },
+                    &flags,
+                    "test watcher",
+                    |flags| {
+                        assert!(!flags.lost.load(Ordering::SeqCst));
+                        std::thread::sleep(Duration::from_millis(1));
+                    },
+                );
+            });
+            ready.recv_timeout(Duration::from_secs(2)).unwrap();
+            task
+        };
+        let code = run_smartswitch(
+            &mut platform,
+            &|d, t| opener.open(d, t),
+            None,
+            None,
+            dpu_recovery::Thresholds::default(),
+            &watcher,
+            &no_shutdown,
+            &mut Cycles::Fixed {
+                remaining: 2,
+                code: 143,
+            },
+        )
+        .await;
+        assert_eq!(
+            code, 143,
+            "platform retry must not become watcher-loss exit"
+        );
+        assert!(attempts.load(Ordering::SeqCst) >= 2);
+        assert!(
+            opener
+                .table("CHASSIS_MODULE_TABLE")
+                .unwrap()
+                .writes()
+                .iter()
+                .any(|(key, _)| key == "DPU0"),
+            "main-loop module publication must continue during worker retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_watcher_preserves_existing_smartswitch_publication() {
+        let opener = MockOpener::new();
+        for name in ["CHASSIS_MODULE_TABLE", "CHASSIS_MIDPLANE_TABLE"] {
+            opener
+                .open(CHASSIS_STATE_DB, name)
+                .unwrap()
+                .set("DPU0", &[("retained", "last-known-state".into())])
+                .unwrap();
+        }
+        let mut platform = Shaped {
+            modules: vec![ModuleInfo {
+                key: key_of("DPU0"),
+                name: "DPU0".into(),
+                presence: true,
+                r#type: Some(ModuleType::Dpu),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let watcher = |_: Watch, flags: Arc<WatchFlags>| {
+            flags.lost.store(true, Ordering::SeqCst);
+            tokio::spawn(async {})
+        };
+        let code = run_smartswitch(
+            &mut platform,
+            &|d, t| opener.open(d, t),
+            None,
+            None,
+            dpu_recovery::Thresholds::default(),
+            &watcher,
+            &no_shutdown,
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
+        )
+        .await;
+        assert_eq!(code, ERR_WATCHER_LOST);
+        for name in ["CHASSIS_MODULE_TABLE", "CHASSIS_MIDPLANE_TABLE"] {
+            assert_eq!(
+                opener
+                    .table(name)
+                    .unwrap()
+                    .field("DPU0", "retained")
+                    .as_deref(),
+                Some("last-known-state")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_planned_midplane_loss_reads_transition_after_column_projection() {
+        struct Projected {
+            module: ModuleInfo,
+            reads: Vec<ModuleInfoCols>,
+        }
+        impl PlatformApi for Projected {
+            fn get_modules(
+                &mut self,
+                cols: ModuleInfoCols,
+            ) -> Result<Vec<ModuleInfo>, PlatformError> {
+                self.reads.push(cols);
+                let mut module = self.module.clone();
+                if cols.bits() & ModuleInfoCols::STATE_TRANSITION.bits() == 0 {
+                    module.state_transition = None;
+                }
+                Ok(vec![module])
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let module = ModuleInfo {
+            key: key_of("DPU0"),
+            name: "DPU0".into(),
+            presence: true,
+            r#type: Some(ModuleType::Dpu),
+            oper_status: Some(ModuleStatus::Online),
+            is_midplane_reachable: Some(false),
+            state_transition: Some(true),
+            ..Default::default()
+        };
+        let mut platform = Projected {
+            module: module.clone(),
+            reads: Vec::new(),
+        };
+        let (chassis, modules, midplane, dpu_state) = (
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+        );
+        modules
+            .set("DPU0", &[("transition_type", "shutdown".into())])
+            .unwrap();
+        let tables = dpu_updater::Tables {
+            chassis: &chassis,
+            module: &modules,
+            midplane: &midplane,
+            dpu_state: &dpu_state,
+            config: None,
+            device_metadata: None,
+        };
+        let mut updater = dpu_updater::DpuUpdater::new(
+            &[module],
+            dpu_recovery::Thresholds::default(),
+            true,
+            root.path(),
+            Instant::now(),
+        );
+        let code = run_smartswitch_loop(
+            &mut platform,
+            &mut updater,
+            &tables,
+            None,
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
+            &AtomicBool::new(false),
+        )
+        .await;
+        assert_eq!(code, 143);
+        assert_eq!(
+            dpu_state.field("DPU0", dpu_updater::MP_REASON).as_deref(),
+            Some("Planned: 'shutdown'")
+        );
+        assert_eq!(
+            platform.reads[0].bits() & ModuleInfoCols::STATE_TRANSITION.bits(),
+            0
+        );
+        assert!(platform.reads[1..].contains(&ModuleInfoCols::STATE_TRANSITION));
+    }
+
+    #[tokio::test]
+    async fn a_plane_event_triggers_a_pass_without_waiting_for_the_poll() {
+        struct Platform(usize);
+        impl PlatformApi for Platform {
+            fn get_chassis_info(
+                &mut self,
+                _: ChassisInfoCols,
+            ) -> Result<platform_api::ChassisInfo, PlatformError> {
+                self.0 += 1;
+                Ok(platform_api::ChassisInfo {
+                    dataplane_state: Some(true),
+                    controlplane_state: Some(true),
+                    ..Default::default()
+                })
+            }
+        }
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        sender.send(Ok(())).unwrap();
+        sender.send(Err("subscription lost".into())).unwrap();
+        let events = PlaneEvents {
+            receiver,
+            stop: Arc::new(AtomicBool::new(false)),
+            workers: Vec::new(),
+        };
+        let mut platform = Platform(0);
+        let table = MockTable::new();
+        let code = run_dpu_loop_events(
+            &mut platform,
+            "DPU0",
+            None,
+            Sources::default(),
+            &table,
+            &mut Cycles::Fixed {
+                remaining: 10,
+                code: 0,
+            },
+            Some(events),
+        )
+        .await;
+        assert_eq!(code, ERR_WATCHER_LOST);
+        assert_eq!(platform.0, 2);
+        assert_eq!(
+            table.field("DPU0", dpu_updater::DP_STATE).as_deref(),
+            Some("up"),
+            "a lost input subscription must retain the last published plane state"
+        );
+    }
 
     /// A scripted subscription: each `wait` and each `take` answers with the
     /// next entry.  A script that runs out is the shutdown: it raises `stop`,
@@ -1738,7 +2273,10 @@ mod tests {
             })
         }
         fn take(&self) -> Result<Vec<Change>, String> {
-            self.takes.borrow_mut().pop_front().unwrap_or(Ok(Vec::new()))
+            self.takes
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(Ok(Vec::new()))
         }
     }
 
@@ -1747,7 +2285,11 @@ mod tests {
             key: key.to_string(),
             deleted,
             fields: admin_status
-                .map(|v| [("admin_status".to_string(), v.to_string())].into_iter().collect())
+                .map(|v| {
+                    [("admin_status".to_string(), v.to_string())]
+                        .into_iter()
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }
@@ -1756,7 +2298,10 @@ mod tests {
     fn watched(feed: &Feed<'_>, machine: Machine, flags: &WatchFlags) -> Vec<String> {
         let mut applied = Vec::new();
         watch_config(feed, machine, flags, &mut |key, event| {
-            applied.push(format!("{key}:{}", config_updater::admin_state_for(machine, event)));
+            applied.push(format!(
+                "{key}:{}",
+                config_updater::admin_state_for(machine, event)
+            ));
         });
         applied
     }
@@ -1780,7 +2325,10 @@ mod tests {
         let feed = Feed::new(
             &flags,
             vec![data(), data(), data()],
-            vec![Err("connection reset".into()), Ok(vec![change("LINE-CARD0", false, None)])],
+            vec![
+                Err("connection reset".into()),
+                Ok(vec![change("LINE-CARD0", false, None)]),
+            ],
         );
         assert!(
             watched(&feed, Machine::Chassis, &flags).is_empty(),
@@ -1812,7 +2360,10 @@ mod tests {
             vec![Ok(SelectResult::Signal), Ok(SelectResult::Data)],
             vec![Ok(vec![change("LINE-CARD0", true, None)])],
         );
-        assert_eq!(watched(&feed, Machine::Chassis, &flags), vec!["LINE-CARD0:true".to_string()]);
+        assert_eq!(
+            watched(&feed, Machine::Chassis, &flags),
+            vec!["LINE-CARD0:true".to_string()]
+        );
         assert!(!flags.lost.load(Ordering::SeqCst));
     }
 
@@ -1826,15 +2377,24 @@ mod tests {
             &flags,
             vec![Ok(Timeout), Ok(Data), Ok(Timeout), Ok(Data)],
             vec![
-                Ok(vec![change("DPU0", false, Some("up")), change("LINE-CARD1", false, None)]),
-                Ok(vec![change("DPU1", true, None), change("DPU2", false, None)]),
+                Ok(vec![
+                    change("DPU0", false, Some("up")),
+                    change("LINE-CARD1", false, None),
+                ]),
+                Ok(vec![
+                    change("DPU1", true, None),
+                    change("DPU2", false, None),
+                ]),
             ],
         );
-        assert_eq!(watched(&feed, Machine::SmartSwitch, &flags), vec![
-            "DPU0:true".to_string(),
-            "DPU1:false".to_string(),
-            "DPU2:false".to_string(),
-        ]);
+        assert_eq!(
+            watched(&feed, Machine::SmartSwitch, &flags),
+            vec![
+                "DPU0:true".to_string(),
+                "DPU1:false".to_string(),
+                "DPU2:false".to_string(),
+            ]
+        );
         assert!(!flags.lost.load(Ordering::SeqCst));
     }
 
@@ -1850,12 +2410,27 @@ mod tests {
         };
         let mut u = ModuleUpdater::new(1, 16, Duration::from_secs(180), true);
         // Ten cycles are offered; the flag has to end it on the first.
-        let mut cycles = Cycles::Fixed { remaining: 10, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 10,
+            code: 143,
+        };
         let code = run_chassis(
-            &mut p, &mut u, &db.tables(), true, &mut cycles, &AtomicBool::new(true))
-            .await;
-        assert_eq!(code, ERR_DB_WRITE, "a stopped watcher is a non-zero exit");
-        assert_eq!(p.reads, 0, "and it leaves before reading the platform again");
+            &mut p,
+            &mut u,
+            &db.tables(),
+            true,
+            &mut cycles,
+            &AtomicBool::new(true),
+        )
+        .await;
+        assert_eq!(
+            code, ERR_WATCHER_LOST,
+            "a stopped watcher is a non-zero exit"
+        );
+        assert_eq!(
+            p.reads, 0,
+            "and it leaves before reading the platform again"
+        );
     }
 
     /// A STATE_DB that refuses a write ends the loop the same way.
@@ -1874,10 +2449,19 @@ mod tests {
         };
         let mut u = ModuleUpdater::new(1, 16, Duration::from_secs(180), true);
         db.module.fail_writes("redis is gone");
-        let mut cycles = Cycles::Fixed { remaining: 10, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 10,
+            code: 143,
+        };
         let code = run_chassis(
-            &mut p, &mut u, &db.tables(), true, &mut cycles, &AtomicBool::new(false))
-            .await;
+            &mut p,
+            &mut u,
+            &db.tables(),
+            true,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
         assert_eq!(code, ERR_DB_WRITE, "a lost STATE_DB is a non-zero exit");
     }
 
@@ -1921,13 +2505,24 @@ mod tests {
             ..Default::default()
         };
         let mut u = ModuleUpdater::new(1, 16, Duration::from_secs(180), true);
-        chassis_pass(&mut p, &mut u, &db.tables(), false, &mut Latch::new(), SystemTime::now())
-            .unwrap();
-        assert!(db.module.is_empty(), "nothing published from half a reading");
-        assert!(db.hostname.is_empty());
+        chassis_pass(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            false,
+            &mut Latch::new(),
+            SystemTime::now(),
+        )
+        .unwrap();
         assert!(
-            log.logged(log::Level::Error, "Failed to read the ASICs: platform error: i2c timeout")
+            db.module.is_empty(),
+            "nothing published from half a reading"
         );
+        assert!(db.hostname.is_empty());
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to read the ASICs: platform error: i2c timeout"
+        ));
     }
 
     /// An ASIC getter the platform does not implement *is* "none", as Python's
@@ -1941,9 +2536,19 @@ mod tests {
             ..Default::default()
         };
         let mut u = ModuleUpdater::new(1, 16, Duration::from_secs(180), true);
-        chassis_pass(&mut p, &mut u, &db.tables(), false, &mut Latch::new(), SystemTime::now())
-            .unwrap();
-        assert_eq!(db.module.field("LINE-CARD0", NUM_ASICS_FIELD).as_deref(), Some("0"));
+        chassis_pass(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            false,
+            &mut Latch::new(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        assert_eq!(
+            db.module.field("LINE-CARD0", NUM_ASICS_FIELD).as_deref(),
+            Some("0")
+        );
     }
 
     /// The way out waits for the watchers.  `abort` does nothing to a blocking
@@ -1961,7 +2566,10 @@ mod tests {
             finished.store(true, Ordering::SeqCst);
         });
         stop_watchers(&flags, vec![watcher]).await;
-        assert!(done.load(Ordering::SeqCst), "the watcher had returned before this did");
+        assert!(
+            done.load(Ordering::SeqCst),
+            "the watcher had returned before this did"
+        );
     }
 
     /// One wait for all of them, not one each: supervisord's stop timer is
@@ -1973,12 +2581,20 @@ mod tests {
         let start = tokio::time::Instant::now();
         stop_watchers(&WatchFlags::default(), vec![stuck(), stuck()]).await;
         let waited = start.elapsed();
-        assert!(waited >= WATCHER_STOP_WAIT && waited < 2 * WATCHER_STOP_WAIT, "{waited:?}");
+        assert!(
+            waited >= WATCHER_STOP_WAIT && waited < 2 * WATCHER_STOP_WAIT,
+            "{waited:?}"
+        );
     }
 
     fn card(name: &str, slot: i64, status: ModuleStatus) -> ModuleInfo {
         ModuleInfo {
             name: name.to_string(),
+            name_text: Some(name.to_string()),
+            presence_text: Some("True".into()),
+            replaceable_text: Some("True".into()),
+            slot_text: Some(slot.to_string()),
+            oper_status_text: Some(status.as_str().into()),
             key: key_of(name),
             parent_key: None,
             parent_name: CHASSIS_PARENT.to_string(),
@@ -2006,17 +2622,26 @@ mod tests {
     impl Db {
         fn new() -> Self {
             Self {
-                chassis: MockTable::new(), module: MockTable::new(),
-                midplane: MockTable::new(), entity: MockTable::new(),
-                asic: MockTable::new(), hostname: MockTable::new(),
+                chassis: MockTable::new(),
+                module: MockTable::new(),
+                midplane: MockTable::new(),
+                entity: MockTable::new(),
+                asic: MockTable::new(),
+                hostname: MockTable::new(),
                 module_reboot: MockTable::new(),
             }
         }
         fn tables(&self) -> Tables<'_> {
             Tables {
-                chassis: &self.chassis, module: &self.module, midplane: &self.midplane,
-                entity: &self.entity, asic: &self.asic, hostname: &self.hostname,
-                module_reboot: &self.module_reboot, config: None, device_metadata: None,
+                chassis: &self.chassis,
+                module: &self.module,
+                midplane: &self.midplane,
+                entity: &self.entity,
+                asic: &self.asic,
+                hostname: &self.hostname,
+                module_reboot: &self.module_reboot,
+                config: None,
+                device_metadata: None,
             }
         }
     }
@@ -2029,17 +2654,29 @@ mod tests {
     fn the_chassis_tables_are_opened_on_the_right_two_databases() {
         let o = MockOpener::new();
         open_chassis_tables(&|d, t| o.open(d, t), true).expect("opens");
-        assert_eq!(o.asked(), vec![
-            ("STATE_DB".to_string(), "CHASSIS_TABLE".to_string()),
-            ("STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string()),
-            ("STATE_DB".to_string(), "CHASSIS_MIDPLANE_TABLE".to_string()),
-            ("STATE_DB".to_string(), "PHYSICAL_ENTITY_INFO".to_string()),
-            ("CHASSIS_STATE_DB".to_string(), "CHASSIS_FABRIC_ASIC_TABLE".to_string()),
-            ("CHASSIS_STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string()),
-            ("CHASSIS_STATE_DB".to_string(), "CHASSIS_MODULE_REBOOT_INFO_TABLE".to_string()),
-            ("CONFIG_DB".to_string(), "CHASSIS_MODULE".to_string()),
-            ("CONFIG_DB".to_string(), "DEVICE_METADATA".to_string()),
-        ]);
+        assert_eq!(
+            o.asked(),
+            vec![
+                ("STATE_DB".to_string(), "CHASSIS_TABLE".to_string()),
+                ("STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string()),
+                ("STATE_DB".to_string(), "CHASSIS_MIDPLANE_TABLE".to_string()),
+                ("STATE_DB".to_string(), "PHYSICAL_ENTITY_INFO".to_string()),
+                (
+                    "CHASSIS_STATE_DB".to_string(),
+                    "CHASSIS_FABRIC_ASIC_TABLE".to_string()
+                ),
+                (
+                    "CHASSIS_STATE_DB".to_string(),
+                    "CHASSIS_MODULE_TABLE".to_string()
+                ),
+                (
+                    "CHASSIS_STATE_DB".to_string(),
+                    "CHASSIS_MODULE_REBOOT_INFO_TABLE".to_string()
+                ),
+                ("CONFIG_DB".to_string(), "CHASSIS_MODULE".to_string()),
+                ("CONFIG_DB".to_string(), "DEVICE_METADATA".to_string()),
+            ]
+        );
     }
 
     /// A line card writes its own ASICs; the supervisor writes the fabric
@@ -2049,23 +2686,31 @@ mod tests {
     fn a_line_card_opens_the_other_asic_table() {
         let o = MockOpener::new();
         open_chassis_tables(&|d, t| o.open(d, t), false).expect("opens");
-        assert!(o.asked().contains(
-            &("CHASSIS_STATE_DB".to_string(), "CHASSIS_ASIC_TABLE".to_string())));
-        assert!(!o.asked().iter().any(|(_, t)| t == "CHASSIS_FABRIC_ASIC_TABLE"));
+        assert!(o.asked().contains(&(
+            "CHASSIS_STATE_DB".to_string(),
+            "CHASSIS_ASIC_TABLE".to_string()
+        )));
+        assert!(!o
+            .asked()
+            .iter()
+            .any(|(_, t)| t == "CHASSIS_FABRIC_ASIC_TABLE"));
     }
 
     #[test]
     fn the_smartswitch_tables_are_opened_on_the_right_two_databases() {
         let o = MockOpener::new();
         open_dpu_tables(&|d, t| o.open(d, t)).expect("opens");
-        assert_eq!(o.asked(), vec![
-            ("STATE_DB".to_string(), "CHASSIS_TABLE".to_string()),
-            ("STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string()),
-            ("STATE_DB".to_string(), "CHASSIS_MIDPLANE_TABLE".to_string()),
-            ("CHASSIS_STATE_DB".to_string(), "DPU_STATE".to_string()),
-            ("CONFIG_DB".to_string(), "CHASSIS_MODULE".to_string()),
-            ("CONFIG_DB".to_string(), "DEVICE_METADATA".to_string()),
-        ]);
+        assert_eq!(
+            o.asked(),
+            vec![
+                ("STATE_DB".to_string(), "CHASSIS_TABLE".to_string()),
+                ("STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string()),
+                ("STATE_DB".to_string(), "CHASSIS_MIDPLANE_TABLE".to_string()),
+                ("CHASSIS_STATE_DB".to_string(), "DPU_STATE".to_string()),
+                ("CONFIG_DB".to_string(), "CHASSIS_MODULE".to_string()),
+                ("CONFIG_DB".to_string(), "DEVICE_METADATA".to_string()),
+            ]
+        );
     }
 
     /// There is nowhere to publish, so the daemon says which table and stops
@@ -2073,7 +2718,9 @@ mod tests {
     #[test]
     fn a_table_that_will_not_open_names_its_database() {
         let o = MockOpener::failing("CHASSIS_MIDPLANE_TABLE");
-        let e = open_chassis_tables(&|d, t| o.open(d, t), true).err().expect("stops");
+        let e = open_chassis_tables(&|d, t| o.open(d, t), true)
+            .err()
+            .expect("stops");
         assert!(e.contains("STATE_DB"), "{e}");
 
         let o = MockOpener::failing("DPU_STATE");
@@ -2135,9 +2782,11 @@ mod tests {
             self.calls.push(format!("admin({m},{up})"));
             Ok(Some(true))
         }
-        fn set_module_admin_state_gracefully(&mut self, m: &DeviceKey, up: bool)
-            -> Result<Option<bool>, PlatformError>
-        {
+        fn set_module_admin_state_gracefully(
+            &mut self,
+            m: &DeviceKey,
+            up: bool,
+        ) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("graceful({m},{up})"));
             Ok(Some(true))
         }
@@ -2152,15 +2801,21 @@ mod tests {
     #[test]
     fn a_power_cycle_tells_the_dpu_before_and_after_and_holds_the_lock() {
         let mut p = RecordingPlatform::default();
-        assert_eq!(power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")), Ok(true));
-        assert_eq!(p.calls, vec![
-            "lock(modules[0],recovery)".to_string(),
-            "pre_shutdown(modules[0])".to_string(),
-            "admin(modules[0],false)".to_string(),
-            "admin(modules[0],true)".to_string(),
-            "post_startup(modules[0])".to_string(),
-            "unlock(modules[0])".to_string(),
-        ]);
+        assert_eq!(
+            power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")),
+            Ok(true)
+        );
+        assert_eq!(
+            p.calls,
+            vec![
+                "lock(modules[0],recovery)".to_string(),
+                "pre_shutdown(modules[0])".to_string(),
+                "admin(modules[0],false)".to_string(),
+                "admin(modules[0],true)".to_string(),
+                "post_startup(modules[0])".to_string(),
+                "unlock(modules[0])".to_string(),
+            ]
+        );
     }
 
     /// Another operation owns the DPU.  Nothing is done to it -- not even the
@@ -2179,13 +2834,24 @@ mod tests {
         for (refusal, answer) in [
             (Ok(Some(false)), Ok(false)),
             (Ok(None), Ok(false)),
-            (Err(PlatformError::NotSupported("set_module_state_transition".into())), Ok(false)),
+            (
+                Err(PlatformError::NotSupported(
+                    "set_module_state_transition".into(),
+                )),
+                Ok(false),
+            ),
             (Err(failed.clone()), Err(failed.clone())),
         ] {
-            let mut p =
-                RecordingPlatform { refuse_lock: Some(refusal.clone()), ..Default::default() };
+            let mut p = RecordingPlatform {
+                refuse_lock: Some(refusal.clone()),
+                ..Default::default()
+            };
             let key = key_of("DPU0");
-            assert_eq!(power_cycle_sequence(&mut p, "DPU0", &key), answer, "{refusal:?}");
+            assert_eq!(
+                power_cycle_sequence(&mut p, "DPU0", &key),
+                answer,
+                "{refusal:?}"
+            );
             assert!(p.calls.is_empty(), "{refusal:?}");
         }
     }
@@ -2204,13 +2870,26 @@ mod tests {
     fn a_dpu_is_shut_down_gracefully_and_a_line_card_is_not() {
         let mut p = RecordingPlatform::default();
         let handed = RefCell::new(Vec::new());
-        apply_config_event(&mut p, Machine::SmartSwitch, "DPU0",
-                           config_updater::Event::Set { admin_status: Some("up") },
-                           &recording_gracefully(&handed));
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD0",
-                           config_updater::Event::Set { admin_status: None },
-                           &recording_gracefully(&handed));
-        assert_eq!(handed.into_inner(), vec!["graceful(modules[0],true)".to_string()]);
+        apply_config_event(
+            &mut p,
+            Machine::SmartSwitch,
+            "DPU0",
+            config_updater::Event::Set {
+                admin_status: Some("up"),
+            },
+            &recording_gracefully(&handed),
+        );
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD0",
+            config_updater::Event::Set { admin_status: None },
+            &recording_gracefully(&handed),
+        );
+        assert_eq!(
+            handed.into_inner(),
+            vec!["graceful(modules[0],true)".to_string()]
+        );
         assert_eq!(p.calls, vec!["admin(modules[0],false)".to_string()]);
     }
 
@@ -2223,16 +2902,28 @@ mod tests {
         let mut p = RecordingPlatform::default();
         let handed = RefCell::new(Vec::new());
         for (key, status) in [("DPU0", "down"), ("DPU1", "down"), ("DPU2", "up")] {
-            apply_config_event(&mut p, Machine::SmartSwitch, key,
-                               config_updater::Event::Set { admin_status: Some(status) },
-                               &recording_gracefully(&handed));
+            apply_config_event(
+                &mut p,
+                Machine::SmartSwitch,
+                key,
+                config_updater::Event::Set {
+                    admin_status: Some(status),
+                },
+                &recording_gracefully(&handed),
+            );
         }
-        assert_eq!(handed.into_inner(), vec![
-            "graceful(modules[0],false)".to_string(),
-            "graceful(modules[1],false)".to_string(),
-            "graceful(modules[2],true)".to_string(),
-        ]);
-        assert!(p.calls.is_empty(), "the shared platform must not be used for a DPU");
+        assert_eq!(
+            handed.into_inner(),
+            vec![
+                "graceful(modules[0],false)".to_string(),
+                "graceful(modules[1],false)".to_string(),
+                "graceful(modules[2],true)".to_string(),
+            ]
+        );
+        assert!(
+            p.calls.is_empty(),
+            "the shared platform must not be used for a DPU"
+        );
     }
 
     /// A CONFIG_DB key is a module's name, resolved as Python resolves it.  A
@@ -2241,19 +2932,37 @@ mod tests {
     #[test]
     fn a_module_name_the_platform_does_not_know_changes_nothing() {
         let log = pmon_common::logging::capture();
-        let mut p = RecordingPlatform { no_modules: true, ..Default::default() };
+        let mut p = RecordingPlatform {
+            no_modules: true,
+            ..Default::default()
+        };
         let handed = RefCell::new(Vec::new());
-        apply_config_event(&mut p, Machine::SmartSwitch, "DPU9",
-                           config_updater::Event::Set { admin_status: Some("up") },
-                           &recording_gracefully(&handed));
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD9", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
+        apply_config_event(
+            &mut p,
+            Machine::SmartSwitch,
+            "DPU9",
+            config_updater::Event::Set {
+                admin_status: Some("up"),
+            },
+            &recording_gracefully(&handed),
+        );
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD9",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
         assert!(handed.into_inner().is_empty());
         assert!(p.calls.is_empty());
-        assert!(log.logged(log::Level::Error,
-            "Unable to get module-index for key DPU9 to set admin-state 1"));
-        assert!(log.logged(log::Level::Error,
-            "Unable to get module-index for key LINE-CARD9 to set admin-state 1"));
+        assert!(log.logged(
+            log::Level::Error,
+            "Unable to get module-index for key DPU9 to set admin-state 1"
+        ));
+        assert!(log.logged(
+            log::Level::Error,
+            "Unable to get module-index for key LINE-CARD9 to set admin-state 1"
+        ));
         assert!(!log.contains("Changing module"));
     }
 
@@ -2264,30 +2973,62 @@ mod tests {
     #[test]
     fn a_lookup_that_raises_ends_only_its_own_event() {
         let log = pmon_common::logging::capture();
-        let mut p = RecordingPlatform { lookup_error: Some("DPU1"), ..Default::default() };
+        let mut p = RecordingPlatform {
+            lookup_error: Some("DPU1"),
+            ..Default::default()
+        };
         let handed = RefCell::new(Vec::new());
-        apply_config_event(&mut p, Machine::SmartSwitch, "DPU1",
-                           config_updater::Event::Set { admin_status: Some("down") },
-                           &recording_gracefully(&handed));
+        apply_config_event(
+            &mut p,
+            Machine::SmartSwitch,
+            "DPU1",
+            config_updater::Event::Set {
+                admin_status: Some("down"),
+            },
+            &recording_gracefully(&handed),
+        );
         assert!(handed.borrow().is_empty());
-        assert!(log.logged(log::Level::Error,
-            "Failed to look up module DPU1 to set admin-state 0: "));
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to look up module DPU1 to set admin-state 0: "
+        ));
         assert!(log.logged(log::Level::Error, "no index for DPU1"));
         assert!(!log.contains("Changing module"));
-        apply_config_event(&mut p, Machine::SmartSwitch, "DPU0",
-                           config_updater::Event::Set { admin_status: Some("up") },
-                           &recording_gracefully(&handed));
-        assert_eq!(handed.into_inner(), vec!["graceful(modules[0],true)".to_string()]);
+        apply_config_event(
+            &mut p,
+            Machine::SmartSwitch,
+            "DPU0",
+            config_updater::Event::Set {
+                admin_status: Some("up"),
+            },
+            &recording_gracefully(&handed),
+        );
+        assert_eq!(
+            handed.into_inner(),
+            vec!["graceful(modules[0],true)".to_string()]
+        );
 
         p.lookup_error = Some("LINE-CARD1");
         let handed = RefCell::new(Vec::new());
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD1", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD1",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
         assert!(p.calls.is_empty());
-        assert!(log.logged(log::Level::Error,
-            "Failed to look up module LINE-CARD1 to set admin-state 1: "));
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD0", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to look up module LINE-CARD1 to set admin-state 1: "
+        ));
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD0",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
         assert_eq!(p.calls, vec!["admin(modules[0],true)".to_string()]);
         assert!(handed.into_inner().is_empty());
     }
@@ -2298,12 +3039,25 @@ mod tests {
     fn a_removed_row_is_applied_oppositely_on_the_two_machines() {
         let mut p = RecordingPlatform::default();
         let handed = RefCell::new(Vec::new());
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD0", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
-        apply_config_event(&mut p, Machine::SmartSwitch, "DPU0", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD0",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
+        apply_config_event(
+            &mut p,
+            Machine::SmartSwitch,
+            "DPU0",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
         assert_eq!(p.calls, vec!["admin(modules[0],true)".to_string()]);
-        assert_eq!(handed.into_inner(), vec!["graceful(modules[0],false)".to_string()]);
+        assert_eq!(
+            handed.into_inner(),
+            vec!["graceful(modules[0],false)".to_string()]
+        );
     }
 
     /// Start-up helpers: one DPU, and a config table that may or may not hold
@@ -2329,21 +3083,37 @@ mod tests {
     fn an_unconfigured_dpu_is_shut_down_at_start_up() {
         let (modules, t) = startup_fixture(ModuleStatus::Online);
         let tables = dpu_updater::Tables {
-            chassis: &t[0], module: &t[1], midplane: &t[2],
+            chassis: &t[0],
+            module: &t[1],
+            midplane: &t[2],
             dpu_state: &t[3],
-            config: Some(&t[5]), device_metadata: None,
+            config: Some(&t[5]),
+            device_metadata: None,
         };
         let mut p = RecordingPlatform::default();
         let shut = RefCell::new(Vec::new());
 
-        init_dpu_admin_state(&mut p, &modules, &tables, Path::new("/nonexistent"),
-                             &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n));
+        init_dpu_admin_state(
+            &mut p,
+            &modules,
+            &tables,
+            Path::new("/nonexistent"),
+            &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n),
+        );
 
-        assert_eq!(p.calls,
-            vec!["unlock(modules[0])".to_string(), "clear_halt(modules[0])".to_string()],
-            "the flags are cleared on the daemon's own handle");
-        assert_eq!(*shut.borrow(), vec![("DPU0".to_string(), key_of("DPU0"))],
-            "and the DPU with no CONFIG_DB row is handed to the shutdown");
+        assert_eq!(
+            p.calls,
+            vec![
+                "unlock(modules[0])".to_string(),
+                "clear_halt(modules[0])".to_string()
+            ],
+            "the flags are cleared on the daemon's own handle"
+        );
+        assert_eq!(
+            *shut.borrow(),
+            vec![("DPU0".to_string(), key_of("DPU0"))],
+            "and the DPU with no CONFIG_DB row is handed to the shutdown"
+        );
     }
 
     /// A row that exists is an operator's word, and start-up does not overrule
@@ -2353,22 +3123,31 @@ mod tests {
     fn a_configured_dpu_is_left_alone_at_start_up() {
         for admin in ["up", "down"] {
             let (modules, t) = startup_fixture(ModuleStatus::Online);
-            t[5].set("DPU0", &[(CHASSIS_MODULE_ADMIN_STATUS, admin.to_string())]).unwrap();
+            t[5].set("DPU0", &[(CHASSIS_MODULE_ADMIN_STATUS, admin.to_string())])
+                .unwrap();
             let tables = dpu_updater::Tables {
-                chassis: &t[0], module: &t[1], midplane: &t[2],
+                chassis: &t[0],
+                module: &t[1],
+                midplane: &t[2],
                 dpu_state: &t[3],
-                config: Some(&t[5]), device_metadata: None,
+                config: Some(&t[5]),
+                device_metadata: None,
             };
             let mut p = RecordingPlatform::default();
             let shut = RefCell::new(Vec::new());
 
-            init_dpu_admin_state(&mut p, &modules, &tables, Path::new("/nonexistent"),
-                                 &|n: &[(String, DeviceKey)]| {
-                                     shut.borrow_mut().extend_from_slice(n)
-                                 });
+            init_dpu_admin_state(
+                &mut p,
+                &modules,
+                &tables,
+                Path::new("/nonexistent"),
+                &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n),
+            );
 
-            assert!(shut.borrow().is_empty(),
-                "admin_status={admin} is configured; start-up must not override it");
+            assert!(
+                shut.borrow().is_empty(),
+                "admin_status={admin} is configured; start-up must not override it"
+            );
         }
     }
 
@@ -2381,20 +3160,32 @@ mod tests {
         let (modules, t) = startup_fixture(ModuleStatus::Online);
         t[5].fail_reads("CONFIG_DB is gone");
         let tables = dpu_updater::Tables {
-            chassis: &t[0], module: &t[1], midplane: &t[2],
+            chassis: &t[0],
+            module: &t[1],
+            midplane: &t[2],
             dpu_state: &t[3],
-            config: Some(&t[5]), device_metadata: None,
+            config: Some(&t[5]),
+            device_metadata: None,
         };
         let mut p = RecordingPlatform::default();
         let shut = RefCell::new(Vec::new());
 
-        init_dpu_admin_state(&mut p, &modules, &tables, Path::new("/nonexistent"),
-                             &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n));
-
-        assert!(shut.borrow().is_empty(), "a read that failed is not a missing row");
-        assert!(
-            log.logged(log::Level::Error, "Error in run: DPU0: cannot read its CHASSIS_MODULE row")
+        init_dpu_admin_state(
+            &mut p,
+            &modules,
+            &tables,
+            Path::new("/nonexistent"),
+            &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n),
         );
+
+        assert!(
+            shut.borrow().is_empty(),
+            "a read that failed is not a missing row"
+        );
+        assert!(log.logged(
+            log::Level::Error,
+            "Error in run: DPU0: cannot read its CHASSIS_MODULE row"
+        ));
         assert!(
             p.calls.iter().any(|c| c == "unlock(modules[0])"),
             "the flags are still cleared; only the shutdown is withheld"
@@ -2410,15 +3201,23 @@ mod tests {
         let (modules, t) = startup_fixture(ModuleStatus::Online);
         t[3].fail_writes("connection reset");
         let tables = dpu_updater::Tables {
-            chassis: &t[0], module: &t[1], midplane: &t[2],
+            chassis: &t[0],
+            module: &t[1],
+            midplane: &t[2],
             dpu_state: &t[3],
-            config: Some(&t[5]), device_metadata: None,
+            config: Some(&t[5]),
+            device_metadata: None,
         };
         let mut p = RecordingPlatform::default();
         let shut = RefCell::new(Vec::new());
 
-        init_dpu_admin_state(&mut p, &modules, &tables, Path::new("/nonexistent"),
-                             &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n));
+        init_dpu_admin_state(
+            &mut p,
+            &modules,
+            &tables,
+            Path::new("/nonexistent"),
+            &|n: &[(String, DeviceKey)]| shut.borrow_mut().extend_from_slice(n),
+        );
 
         assert!(log.logged(log::Level::Error, "Unexpected error: connection reset"));
         assert_eq!(*shut.borrow(), vec![("DPU0".to_string(), key_of("DPU0"))]);
@@ -2434,9 +3233,12 @@ mod tests {
         ] {
             let (modules, t) = startup_fixture(oper);
             let tables = dpu_updater::Tables {
-                chassis: &t[0], module: &t[1], midplane: &t[2],
+                chassis: &t[0],
+                module: &t[1],
+                midplane: &t[2],
                 dpu_state: &t[3],
-                config: Some(&t[5]), device_metadata: None,
+                config: Some(&t[5]),
+                device_metadata: None,
             };
             let mut p = RecordingPlatform::default();
 
@@ -2448,10 +3250,15 @@ mod tests {
                 &|_: &[(String, DeviceKey)]| {},
             );
 
-            assert_eq!(t[3].field("DPU0", dpu_updater::MP_STATE).as_deref(), Some(want));
             assert_eq!(
-                t[3].field("DPU0", dpu_updater::CP_STATE).is_some(), planes_down,
-                "a midplane that is down takes the other planes with it");
+                t[3].field("DPU0", dpu_updater::MP_STATE).as_deref(),
+                Some(want)
+            );
+            assert_eq!(
+                t[3].field("DPU0", dpu_updater::CP_STATE).is_some(),
+                planes_down,
+                "a midplane that is down takes the other planes with it"
+            );
         }
     }
 
@@ -2480,13 +3287,18 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let (chassis, module, midplane, dpu_state) = (
-            MockTable::new(), MockTable::new(), MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
             MockTable::new(),
         );
         let tables = dpu_updater::Tables {
-            chassis: &chassis, module: &module, midplane: &midplane,
+            chassis: &chassis,
+            module: &module,
+            midplane: &midplane,
             dpu_state: &dpu_state,
-            config: None, device_metadata: None,
+            config: None,
+            device_metadata: None,
         };
         let modules = vec![ModuleInfo {
             name: "DPU0".to_string(),
@@ -2495,14 +3307,26 @@ mod tests {
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Online),
+            oper_status_text: Some(ModuleStatus::Online.as_str().into()),
             is_midplane_reachable: Some(true),
             ..Default::default()
         }];
-        let mut p = Dpus { modules: modules.clone(), fail: false };
+        let mut p = Dpus {
+            modules: modules.clone(),
+            fail: false,
+        };
         let mut u = dpu_updater::DpuUpdater::new(
-            &modules, dpu_recovery::Thresholds::default(), true, root.path(), Instant::now());
+            &modules,
+            dpu_recovery::Thresholds::default(),
+            true,
+            root.path(),
+            Instant::now(),
+        );
 
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
         let code = run_smartswitch_loop(
             &mut p,
             &mut u,
@@ -2513,15 +3337,34 @@ mod tests {
         )
         .await;
         assert_eq!(code, 143);
-        assert_eq!(module.field("DPU0", "oper_status").as_deref(), Some("Online"));
-        assert_eq!(dpu_state.field("DPU0", dpu_updater::MP_STATE).as_deref(), Some("up"));
+        assert_eq!(
+            module.field("DPU0", "oper_status").as_deref(),
+            Some("Online")
+        );
+        assert_eq!(
+            dpu_state.field("DPU0", dpu_updater::MP_STATE).as_deref(),
+            Some("up")
+        );
 
         p.fail = true;
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
-        run_smartswitch_loop(&mut p, &mut u, &tables, None, &mut cycles, &AtomicBool::new(false))
-            .await;
-        assert_eq!(module.field("DPU0", "oper_status").as_deref(), Some("Online"),
-            "a transient failure is not read as every DPU vanishing");
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
+        run_smartswitch_loop(
+            &mut p,
+            &mut u,
+            &tables,
+            None,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
+        assert_eq!(
+            module.field("DPU0", "oper_status").as_deref(),
+            Some("Online"),
+            "a transient failure is not read as every DPU vanishing"
+        );
     }
 
     /// The DPU-side loop end to end.  Publishing `down` on the way out is part
@@ -2546,13 +3389,29 @@ mod tests {
         }
 
         let t = MockTable::new();
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
-        let code =
-            run_dpu_loop(&mut Answering, "DPU0", None, Sources::default(), &t, &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 143,
+        };
+        let code = run_dpu_loop(
+            &mut Answering,
+            "DPU0",
+            None,
+            Sources::default(),
+            &t,
+            &mut cycles,
+        )
+        .await;
 
         assert_eq!(code, 143);
-        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), Some("down"));
-        assert_eq!(t.field("DPU0", dpu_updater::CP_STATE).as_deref(), Some("down"));
+        assert_eq!(
+            t.field("DPU0", dpu_updater::DP_STATE).as_deref(),
+            Some("down")
+        );
+        assert_eq!(
+            t.field("DPU0", dpu_updater::CP_STATE).as_deref(),
+            Some("down")
+        );
     }
 
     /// A platform that cannot answer, with no table to answer from either, is
@@ -2568,12 +3427,25 @@ mod tests {
         impl PlatformApi for Silent {}
 
         let t = MockTable::new();
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        let code = run_dpu_loop(&mut Silent, "DPU0", None, Sources::default(), &t, &mut cycles)
-            .await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
+        let code = run_dpu_loop(
+            &mut Silent,
+            "DPU0",
+            None,
+            Sources::default(),
+            &t,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, ERR_DB_WRITE);
-        assert!(log.logged(log::Level::Error, "no PORT table to read the plane state from"));
-        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), Some("down"));
+        assert!(log.logged(
+            log::Level::Error,
+            "no PORT table to read the plane state from"
+        ));
+        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), None);
     }
 
     /// The two planes, from whichever source can answer.  A DPU whose platform
@@ -2595,9 +3467,13 @@ mod tests {
     #[test]
     fn a_dpu_falls_back_to_the_databases() {
         let (cfg, app, ready) = (MockTable::new(), MockTable::new(), MockTable::new());
-        cfg.set("Ethernet0", &[("admin_status", "up".to_string())]).unwrap();
-        app.set("Ethernet0", &[("oper_status", "up".to_string())]).unwrap();
-        ready.set("SYSTEM_STATE", &[("Status", "UP".to_string())]).unwrap();
+        cfg.set("Ethernet0", &[("admin_status", "up".to_string())])
+            .unwrap();
+        app.set("Ethernet0", &[("oper_status", "up".to_string())])
+            .unwrap();
+        ready
+            .set("SYSTEM_STATE", &[("Status", "UP".to_string())])
+            .unwrap();
         let sources = Sources {
             config_ports: Some(&cfg),
             port_table: Some(&app),
@@ -2607,7 +3483,8 @@ mod tests {
         let p = dpu_planes(None, sources).unwrap();
         assert!(p.data && p.control);
 
-        app.set("Ethernet0", &[("oper_status", "down".to_string())]).unwrap();
+        app.set("Ethernet0", &[("oper_status", "down".to_string())])
+            .unwrap();
         let p = dpu_planes(None, sources).unwrap();
         assert!(!p.data && p.control, "one port down is the data plane down");
     }
@@ -2635,13 +3512,18 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let (chassis, module, midplane, dpu_state) = (
-            MockTable::new(), MockTable::new(), MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
             MockTable::new(),
         );
         let tables = dpu_updater::Tables {
-            chassis: &chassis, module: &module, midplane: &midplane,
+            chassis: &chassis,
+            module: &module,
+            midplane: &midplane,
             dpu_state: &dpu_state,
-            config: None, device_metadata: None,
+            config: None,
+            device_metadata: None,
         };
         let dpu = ModuleInfo {
             name: "DPU0".to_string(),
@@ -2650,19 +3532,31 @@ mod tests {
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Online),
+            oper_status_text: Some(ModuleStatus::Online.as_str().into()),
             midplane_ip: Some("169.254.200.1".to_string()),
             is_midplane_reachable: Some(true),
             ..Default::default()
         };
         let modules = [dpu];
         let mut u = dpu_updater::DpuUpdater::new(
-            &modules, dpu_recovery::Thresholds::default(), true, root.path(), Instant::now());
+            &modules,
+            dpu_recovery::Thresholds::default(),
+            true,
+            root.path(),
+            Instant::now(),
+        );
         let mut hw = NoHw(0);
 
         smartswitch_pass(&modules, &mut hw, &mut u, &tables, None, Instant::now()).unwrap();
 
-        assert_eq!(module.field("DPU0", "oper_status").as_deref(), Some("Online"));
-        assert_eq!(dpu_state.field("DPU0", dpu_updater::MP_STATE).as_deref(), Some("up"));
+        assert_eq!(
+            module.field("DPU0", "oper_status").as_deref(),
+            Some("Online")
+        );
+        assert_eq!(
+            dpu_state.field("DPU0", dpu_updater::MP_STATE).as_deref(),
+            Some("up")
+        );
         assert_eq!(hw.0, 0, "nothing said this DPU should be up");
     }
 
@@ -2684,13 +3578,23 @@ mod tests {
     fn platform_json_overrides_each_threshold_on_its_own() {
         let t = thresholds_from(Some(r#"{"dpu_boot_timeout": 120}"#));
         assert_eq!(t.boot_timeout, Duration::from_secs(120));
-        assert_eq!(t.reset_limit, dpu_recovery::Thresholds::default().reset_limit,
-            "the ones it did not name are unchanged");
+        assert_eq!(
+            t.reset_limit,
+            dpu_recovery::Thresholds::default().reset_limit,
+            "the ones it did not name are unchanged"
+        );
 
         let t = thresholds_from(Some(
-            r#"{"dpu_boot_timeout": 1, "dpu_self_recovery_timeout": 2, "dpu_reset_limit": 3}"#));
-        assert_eq!((t.boot_timeout.as_secs(), t.self_recovery_timeout.as_secs(), t.reset_limit),
-                   (1, 2, 3));
+            r#"{"dpu_boot_timeout": 1, "dpu_self_recovery_timeout": 2, "dpu_reset_limit": 3}"#,
+        ));
+        assert_eq!(
+            (
+                t.boot_timeout.as_secs(),
+                t.self_recovery_timeout.as_secs(),
+                t.reset_limit
+            ),
+            (1, 2, 3)
+        );
     }
 
     /// A value of the wrong shape is ignored rather than taken as zero -- a
@@ -2701,7 +3605,10 @@ mod tests {
     fn a_threshold_of_the_wrong_type_is_ignored_and_said_so() {
         let log = pmon_common::logging::capture();
         let t = thresholds_from(Some(r#"{"dpu_reset_limit": "two"}"#));
-        assert_eq!(t.reset_limit, dpu_recovery::Thresholds::default().reset_limit);
+        assert_eq!(
+            t.reset_limit,
+            dpu_recovery::Thresholds::default().reset_limit
+        );
         assert!(log.logged(
             log::Level::Error,
             "dpu_reset_limit is \"two\", not a non-negative whole number"
@@ -2722,8 +3629,14 @@ mod tests {
         assert_eq!(t.boot_timeout, d.boot_timeout);
         assert_eq!(t.self_recovery_timeout, d.self_recovery_timeout);
         assert_eq!(t.reset_limit, d.reset_limit);
-        assert!(log.logged(log::Level::Error, "dpu_boot_timeout is -1, not a non-negative"));
-        assert!(log.logged(log::Level::Error, "dpu_reset_limit is true, not a non-negative"));
+        assert!(log.logged(
+            log::Level::Error,
+            "dpu_boot_timeout is -1, not a non-negative"
+        ));
+        assert!(log.logged(
+            log::Level::Error,
+            "dpu_reset_limit is true, not a non-negative"
+        ));
     }
 
     /// What Python's `int()` takes, this takes: a string of digits, and a
@@ -2744,8 +3657,10 @@ mod tests {
     fn an_unparseable_platform_json_says_why() {
         let log = pmon_common::logging::capture();
         thresholds_from(Some("{not json"));
-        assert!(log
-            .logged(log::Level::Error, "Error parsing /usr/share/sonic/platform/platform.json: "));
+        assert!(log.logged(
+            log::Level::Error,
+            "Error parsing /usr/share/sonic/platform/platform.json: "
+        ));
     }
 
     /// The default is three minutes: how long an expected line-card reboot may
@@ -2771,20 +3686,45 @@ mod tests {
             ..Default::default()
         };
         let mut u = ModuleUpdater::new(16, 16, Duration::from_secs(180), true);
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
-        let code =
-            run_chassis(&mut p, &mut u, &db.tables(), true, &mut cycles, &AtomicBool::new(false))
-                .await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
+        let code = run_chassis(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            true,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
 
         assert_eq!(code, 143);
-        assert_eq!(db.module.field("LINE-CARD0", "oper_status").as_deref(), Some("Online"));
+        assert_eq!(
+            db.module.field("LINE-CARD0", "oper_status").as_deref(),
+            Some("Online")
+        );
         assert_eq!(db.asic.len(), 1);
 
         p.modules = vec![card("LINE-CARD0", 1, ModuleStatus::Offline)];
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run_chassis(&mut p, &mut u, &db.tables(), true, &mut cycles, &AtomicBool::new(false))
-            .await;
-        assert!(db.asic.is_empty(), "nothing routes to a card that is not there");
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
+        run_chassis(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            true,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
+        assert!(
+            db.asic.is_empty(),
+            "nothing routes to a card that is not there"
+        );
         assert_eq!(u.down_modules().len(), 1);
     }
 
@@ -2805,23 +3745,50 @@ mod tests {
             ..Default::default()
         };
         let mut u = ModuleUpdater::new(16, 16, Duration::from_secs(180), true);
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run_chassis(&mut p, &mut u, &db.tables(), true, &mut cycles, &AtomicBool::new(false))
-            .await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
+        run_chassis(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            true,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
         assert_eq!(db.asic.len(), 1);
 
         p.fail = true;
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
-        run_chassis(&mut p, &mut u, &db.tables(), true, &mut cycles, &AtomicBool::new(false))
-            .await;
-        assert_eq!(db.asic.len(), 1, "the rows the last good pass wrote are still there");
-        assert_eq!(db.module.field("LINE-CARD0", "oper_status").as_deref(), Some("Online"));
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
+        run_chassis(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            true,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
+        assert_eq!(
+            db.asic.len(),
+            1,
+            "the rows the last good pass wrote are still there"
+        );
+        assert_eq!(
+            db.module.field("LINE-CARD0", "oper_status").as_deref(),
+            Some("Online")
+        );
     }
 
     /// A line card has no view of the chassis app DB, so nothing is cleaned up
     /// from one however long a peer has been out.
     #[tokio::test]
-    async fn a_line_card_cleans_up_nothing() {
+    async fn a_line_card_polls_without_a_chassis_app_database() {
         tokio::time::pause();
         let db = Db::new();
         let mut p = FakePlatform {
@@ -2829,9 +3796,19 @@ mod tests {
             ..Default::default()
         };
         let mut u = ModuleUpdater::new(1, 16, Duration::from_secs(180), true);
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
-        run_chassis(&mut p, &mut u, &db.tables(), false, &mut cycles, &AtomicBool::new(false))
-            .await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
+        run_chassis(
+            &mut p,
+            &mut u,
+            &db.tables(),
+            false,
+            &mut cycles,
+            &AtomicBool::new(false),
+        )
+        .await;
         // Nothing to assert on the app DB from here; what matters is that the
         // pass completed without reaching for a redis that is not there.
         assert_eq!(p.reads, 2);
@@ -2869,7 +3846,9 @@ mod tests {
             &mut self,
             _cols: ChassisInfoCols,
         ) -> Result<platform_api::ChassisInfo, PlatformError> {
-            self.info.clone().ok_or(PlatformError::Backend("no chassis".into()))
+            self.info
+                .clone()
+                .ok_or(PlatformError::Backend("no chassis".into()))
         }
         fn get_modules(&mut self, _cols: ModuleInfoCols) -> Result<Vec<ModuleInfo>, PlatformError> {
             Ok(self.modules.clone())
@@ -2906,14 +3885,23 @@ mod tests {
             &|d, t| o.open(d, t),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
-        assert!(o.asked().is_empty(), "nothing is opened before the shape is known");
+        assert!(
+            o.asked().is_empty(),
+            "nothing is opened before the shape is known"
+        );
         // And it says the platform raised, not that the platform is wrong.
         assert!(log.logged(log::Level::Error, "Failed to read chassis info"));
-        assert!(!log.contains("Chassisd not supported"), "that is a different thing");
+        assert!(
+            !log.contains("Chassisd not supported"),
+            "that is a different thing"
+        );
     }
 
     /// A fixed switch answers neither slot.  Python exits with a code of its
@@ -2922,18 +3910,26 @@ mod tests {
     async fn a_fixed_switch_is_not_supported_rather_than_broken() {
         let log = pmon_common::logging::capture();
         let o = MockOpener::new();
-        let mut p =
-            Shaped { info: Some(platform_api::ChassisInfo::default()), ..Default::default() };
+        let mut p = Shaped {
+            info: Some(platform_api::ChassisInfo::default()),
+            ..Default::default()
+        };
         let code = dispatch(
             &mut p,
             &|d, t| o.open(d, t),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_NOT_SUPPORTED);
-        assert!(log.logged(log::Level::Error, "Chassisd not supported for this platform"));
+        assert!(log.logged(
+            log::Level::Error,
+            "Chassisd not supported for this platform"
+        ));
     }
 
     /// The shape is told with the getters Python asks, in its order, on the
@@ -2956,17 +3952,30 @@ mod tests {
             }
         }
 
-        let npu = ChassisInfo { is_smartswitch: true, ..Default::default() };
-        let dpu = ChassisInfo { is_dpu: true, dpu_id: Some(3), ..npu.clone() };
+        let npu = ChassisInfo {
+            is_smartswitch: true,
+            ..Default::default()
+        };
+        let dpu = ChassisInfo {
+            is_dpu: true,
+            dpu_id: Some(3),
+            ..npu.clone()
+        };
         // `is_dpu` answering true off a SmartSwitch is not a DPU, and is not
         // asked: `chassisd:main` checks `is_smartswitch()` first.
-        let fixed = ChassisInfo { is_dpu: true, ..Default::default() };
+        let fixed = ChassisInfo {
+            is_dpu: true,
+            ..Default::default()
+        };
         for (info, kind, asked) in [
             (fixed, "modular", vec![C::IS_SMARTSWITCH, SLOT_COLS]),
             (npu, "smartswitch", vec![C::IS_SMARTSWITCH, C::IS_DPU]),
             (dpu, "dpu", vec![C::IS_SMARTSWITCH, C::IS_DPU, C::DPU_ID]),
         ] {
-            let mut p = Recording { info, asked: Vec::new() };
+            let mut p = Recording {
+                info,
+                asked: Vec::new(),
+            };
             let told = match shape(&mut p) {
                 Ok(Shape::Modular(_)) => "modular",
                 Ok(Shape::SmartSwitch) => "smartswitch",
@@ -3002,15 +4011,24 @@ mod tests {
             &|d, t| o.open(d, t),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143);
-        assert_eq!(o.asked()[0], ("CHASSIS_STATE_DB".to_string(), "DPU_STATE".to_string()));
+        assert_eq!(
+            o.asked()[0],
+            ("CHASSIS_STATE_DB".to_string(), "DPU_STATE".to_string())
+        );
         // The name is the dpu_id the platform answered, not the slot: the NPU
         // addresses its DPUs by that name and a mismatch is a row nobody reads.
         let t = o.table("DPU_STATE").unwrap();
-        assert_eq!(t.field("DPU3", dpu_updater::DP_STATE).as_deref(), Some("down"));
+        assert_eq!(
+            t.field("DPU3", dpu_updater::DP_STATE).as_deref(),
+            Some("down")
+        );
     }
 
     /// And a DPU whose state table will not open stops rather than looping
@@ -3020,9 +4038,15 @@ mod tests {
         let o = MockOpener::failing("DPU_STATE");
         let code = run_on_dpu(
             &mut Shaped::default(),
-            &platform_api::ChassisInfo { dpu_id: Some(0), ..Default::default() },
+            &platform_api::ChassisInfo {
+                dpu_id: Some(0),
+                ..Default::default()
+            },
             &|d, t| o.open(d, t),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
@@ -3035,9 +4059,15 @@ mod tests {
         let o = MockOpener::failing("SYSTEM_READY");
         let code = run_on_dpu(
             &mut Shaped::default(),
-            &platform_api::ChassisInfo { dpu_id: Some(0), ..Default::default() },
+            &platform_api::ChassisInfo {
+                dpu_id: Some(0),
+                ..Default::default()
+            },
             &|d, t| o.open(d, t),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
@@ -3054,7 +4084,10 @@ mod tests {
             &mut Shaped::default(),
             &platform_api::ChassisInfo::default(),
             &|d, t| o.open(d, t),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
@@ -3079,7 +4112,10 @@ mod tests {
             &supervisor_info(),
             &|d, t| o.open(d, t),
             &no_watcher,
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143);
@@ -3088,15 +4124,26 @@ mod tests {
         // CHASSIS_STATE_DB, and the two tables have the same name.
         let asked = o.asked();
         assert!(asked.contains(&("STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string())));
-        assert!(
-            asked.contains(&("CHASSIS_STATE_DB".to_string(), "CHASSIS_MODULE_TABLE".to_string()))
-        );
+        assert!(asked.contains(&(
+            "CHASSIS_STATE_DB".to_string(),
+            "CHASSIS_MODULE_TABLE".to_string()
+        )));
         // And nothing is left behind.  A stale CHASSIS_MODULE_TABLE row reads
         // as a card that is still there to everything downstream, and a stale
         // `module_num` to the entity MIB; clearing both is what the Python
         // daemon does from __del__.
-        assert!(o.table("CHASSIS_MODULE_TABLE").unwrap().get("LINE-CARD0").unwrap().is_none());
-        assert!(o.table("CHASSIS_TABLE").unwrap().get(CHASSIS_INFO_KEY).unwrap().is_none());
+        assert!(o
+            .table("CHASSIS_MODULE_TABLE")
+            .unwrap()
+            .get("LINE-CARD0")
+            .unwrap()
+            .is_none());
+        assert!(o
+            .table("CHASSIS_TABLE")
+            .unwrap()
+            .get(CHASSIS_INFO_KEY)
+            .unwrap()
+            .is_none());
     }
 
     /// A module list that cannot be read at start-up ends the daemon, as
@@ -3110,18 +4157,35 @@ mod tests {
             spawned.set(spawned.get() + 1);
             tokio::spawn(async {})
         };
-        let cycles = || Cycles::Fixed { remaining: 1, code: 0 };
+        let cycles = || Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
 
         let o = MockOpener::new();
-        let mut p = FakePlatform { fail: true, ..Default::default() };
-        let code =
-            run_modular(&mut p, &supervisor_info(), &|d, t| o.open(d, t), &watcher, &mut cycles())
-                .await;
+        let mut p = FakePlatform {
+            fail: true,
+            ..Default::default()
+        };
+        let code = run_modular(
+            &mut p,
+            &supervisor_info(),
+            &|d, t| o.open(d, t),
+            &watcher,
+            &mut cycles(),
+        )
+        .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
-        assert!(o.table(CHASSIS_INFO_TABLE).unwrap().is_empty(), "no card count published");
+        assert!(
+            o.table(CHASSIS_INFO_TABLE).unwrap().is_empty(),
+            "no card count published"
+        );
 
         let o = MockOpener::new();
-        let mut p = FakePlatform { fail: true, ..Default::default() };
+        let mut p = FakePlatform {
+            fail: true,
+            ..Default::default()
+        };
         let code = run_smartswitch(
             &mut p,
             &|d, t| o.open(d, t),
@@ -3134,10 +4198,16 @@ mod tests {
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
-        assert!(o.table(CHASSIS_INFO_TABLE).unwrap().is_empty(), "no card count published");
+        assert!(
+            o.table(CHASSIS_INFO_TABLE).unwrap().is_empty(),
+            "no card count published"
+        );
 
         assert_eq!(spawned.get(), 0, "no watcher started");
-        assert!(log.logged(log::Level::Error, "Failed to read the modules: platform error: "));
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to read the modules: platform error: "
+        ));
     }
 
     /// The way out reads the modules again, so a card that came or went is the
@@ -3152,11 +4222,17 @@ mod tests {
             modules: vec![card("LINE-CARD1", 2, ModuleStatus::Online)],
             ..Default::default()
         };
-        assert_eq!(names(modules_for_teardown(&mut p, at_start.clone())), ["LINE-CARD1"]);
+        assert_eq!(
+            names(modules_for_teardown(&mut p, at_start.clone())),
+            ["LINE-CARD1"]
+        );
         assert!(!log.contains("on the way out"));
 
         p.fail = true;
-        assert_eq!(names(modules_for_teardown(&mut p, at_start)), ["LINE-CARD0"]);
+        assert_eq!(
+            names(modules_for_teardown(&mut p, at_start)),
+            ["LINE-CARD0"]
+        );
         assert!(log.logged(
             log::Level::Warn,
             "Failed to read the modules on the way out, clearing the start-up list: \
@@ -3170,11 +4246,17 @@ mod tests {
     async fn a_modular_chassis_with_a_missing_table_stops() {
         let o = MockOpener::failing("PHYSICAL_ENTITY_INFO");
         let code = run_modular(
-            &mut Shaped { info: Some(supervisor_info()), ..Default::default() },
+            &mut Shaped {
+                info: Some(supervisor_info()),
+                ..Default::default()
+            },
             &supervisor_info(),
             &|d, t| o.open(d, t),
             &no_watcher,
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
@@ -3194,10 +4276,15 @@ mod tests {
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Online),
+            oper_status_text: Some(ModuleStatus::Online.as_str().into()),
             is_midplane_reachable: Some(true),
             ..Default::default()
         }];
-        let mut p = Shaped { info: None, modules: modules.clone(), midplane_ok: true };
+        let mut p = Shaped {
+            info: None,
+            modules: modules.clone(),
+            midplane_ok: true,
+        };
 
         let code = run_smartswitch(
             &mut p,
@@ -3207,18 +4294,28 @@ mod tests {
             dpu_recovery::Thresholds::default(),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143);
         assert!(
-            o.table("CHASSIS_TABLE").unwrap().get(CHASSIS_INFO_KEY).unwrap().is_none(),
+            o.table("CHASSIS_TABLE")
+                .unwrap()
+                .get(CHASSIS_INFO_KEY)
+                .unwrap()
+                .is_none(),
             "the card count is published at start-up and cleared on the way out"
         );
         // DEVICE_METADATA has to be opened: `dpu_auto_recovery` lives there,
         // and a daemon without it reads auto-recovery as off -- leaving every
         // DPU of a switch that turned it on for an operator.
-        assert!(o.asked().iter().any(|(d, t)| d == CONFIG_DB && t == "DEVICE_METADATA"));
+        assert!(o
+            .asked()
+            .iter()
+            .any(|(d, t)| d == CONFIG_DB && t == "DEVICE_METADATA"));
     }
 
     /// And one whose tables will not open stops with the load error rather
@@ -3235,7 +4332,10 @@ mod tests {
             dpu_recovery::Thresholds::default(),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, CHASSIS_LOAD_ERROR);
@@ -3276,7 +4376,10 @@ mod tests {
                 })
             };
 
-            let mut cycles = Cycles::Fixed { remaining: 0, code: 0 };
+            let mut cycles = Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            };
             if smartswitch {
                 let mut p = Shaped {
                     modules: vec![online_dpu0()],
@@ -3300,15 +4403,31 @@ mod tests {
                     modules: vec![card("LINE-CARD0", 1, ModuleStatus::Online)],
                     midplane_ok: true,
                 };
-                run_modular(&mut p, &supervisor_info(), &|d, t| o.open(d, t), &watcher, &mut cycles)
-                    .await;
+                run_modular(
+                    &mut p,
+                    &supervisor_info(),
+                    &|d, t| o.open(d, t),
+                    &watcher,
+                    &mut cycles,
+                )
+                .await;
             }
 
             let n = spawned.load(Ordering::SeqCst);
-            assert_eq!(n, if smartswitch { 2 } else { 1 }, "smartswitch={smartswitch}");
-            assert_eq!(stopped_before_the_clear.load(Ordering::SeqCst), n,
-                "smartswitch={smartswitch}: every watcher saw `stop` with the rows still there");
-            assert!(chassis.get(CHASSIS_INFO_KEY).unwrap().is_none(), "and then they were cleared");
+            assert_eq!(
+                n,
+                if smartswitch { 2 } else { 1 },
+                "smartswitch={smartswitch}"
+            );
+            assert_eq!(
+                stopped_before_the_clear.load(Ordering::SeqCst),
+                n,
+                "smartswitch={smartswitch}: every watcher saw `stop` with the rows still there"
+            );
+            assert!(
+                chassis.get(CHASSIS_INFO_KEY).unwrap().is_none(),
+                "and then they were cleared"
+            );
         }
     }
 
@@ -3317,8 +4436,14 @@ mod tests {
     #[test]
     fn a_reboot_timeout_that_is_not_a_number_of_seconds_keeps_the_default() {
         assert_eq!(reboot_timeout_from(Some(" 240 ")), Duration::from_secs(240));
-        assert_eq!(reboot_timeout_from(Some("180s")), DEFAULT_LINECARD_REBOOT_TIMEOUT);
-        assert_eq!(reboot_timeout_from(Some("")), DEFAULT_LINECARD_REBOOT_TIMEOUT);
+        assert_eq!(
+            reboot_timeout_from(Some("180s")),
+            DEFAULT_LINECARD_REBOOT_TIMEOUT
+        );
+        assert_eq!(
+            reboot_timeout_from(Some("")),
+            DEFAULT_LINECARD_REBOOT_TIMEOUT
+        );
         assert_eq!(reboot_timeout_from(None), DEFAULT_LINECARD_REBOOT_TIMEOUT);
     }
 
@@ -3366,9 +4491,11 @@ mod tests {
             self.calls.push(format!("admin({m},{up})"));
             self.answer("set_module_admin_state")
         }
-        fn set_module_admin_state_gracefully(&mut self, m: &DeviceKey, up: bool)
-            -> Result<Option<bool>, PlatformError>
-        {
+        fn set_module_admin_state_gracefully(
+            &mut self,
+            m: &DeviceKey,
+            up: bool,
+        ) -> Result<Option<bool>, PlatformError> {
             self.calls.push(format!("graceful({m},{up})"));
             self.answer("set_module_admin_state_gracefully")
         }
@@ -3406,13 +4533,19 @@ mod tests {
                     refusal: Some(refusal.clone()),
                     ..Default::default()
                 };
-                assert_eq!(power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")), Ok(true));
+                assert_eq!(
+                    power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")),
+                    Ok(true)
+                );
                 let said = format!("{hook} answering {refusal:?}");
                 let warning = format!("DPU0: {hook}() failed");
                 assert_eq!(log.logged(log::Level::Warn, &warning), warned, "{said}");
                 let error = "DPU0: Power-cycle failed: platform error: refused";
                 assert_eq!(log.logged(log::Level::Error, error), failed, "{said}");
-                assert_eq!(p.calls.last().map(String::as_str), Some("unlock(modules[0])"));
+                assert_eq!(
+                    p.calls.last().map(String::as_str),
+                    Some("unlock(modules[0])")
+                );
             }
         }
     }
@@ -3426,15 +4559,26 @@ mod tests {
     #[test]
     fn a_power_cycle_that_half_fails_still_releases_the_lock() {
         for refuse in ["set_module_admin_state", "module_post_startup"] {
-            let mut p = Refusing { refuse, ..Default::default() };
+            let mut p = Refusing {
+                refuse,
+                ..Default::default()
+            };
             let key = key_of("DPU0");
-            assert_eq!(power_cycle_sequence(&mut p, "DPU0", &key), Ok(true), "the lock was taken");
+            assert_eq!(
+                power_cycle_sequence(&mut p, "DPU0", &key),
+                Ok(true),
+                "the lock was taken"
+            );
             assert_eq!(
                 p.calls.last().map(String::as_str),
                 Some("unlock(modules[0])"),
                 "{refuse} failing must not leave the lock held"
             );
-            assert_eq!(p.calls.len(), 6, "{refuse} failing must not stop the sequence");
+            assert_eq!(
+                p.calls.len(),
+                6,
+                "{refuse} failing must not stop the sequence"
+            );
         }
     }
 
@@ -3445,10 +4589,22 @@ mod tests {
     #[test]
     fn a_pre_shutdown_that_raises_cuts_no_power() {
         let log = pmon_common::logging::capture();
-        let mut p = Refusing { refuse: "module_pre_shutdown", ..Default::default() };
-        assert_eq!(power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")), Ok(true));
-        assert_eq!(p.calls, vec!["lock(modules[0])", "pre(modules[0])", "unlock(modules[0])"]);
-        assert!(log.logged(log::Level::Error, "DPU0: Power-cycle failed: platform error: refused"));
+        let mut p = Refusing {
+            refuse: "module_pre_shutdown",
+            ..Default::default()
+        };
+        assert_eq!(
+            power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")),
+            Ok(true)
+        );
+        assert_eq!(
+            p.calls,
+            vec!["lock(modules[0])", "pre(modules[0])", "unlock(modules[0])"]
+        );
+        assert!(log.logged(
+            log::Level::Error,
+            "DPU0: Power-cycle failed: platform error: refused"
+        ));
     }
 
     /// A power call the platform does not implement is Python's
@@ -3461,7 +4617,10 @@ mod tests {
             refusal: Some(Err(PlatformError::NotSupported("set_admin_state".into()))),
             ..Default::default()
         };
-        assert_eq!(power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")), Ok(true));
+        assert_eq!(
+            power_cycle_sequence(&mut p, "DPU0", &key_of("DPU0")),
+            Ok(true)
+        );
         assert!(!log.contains("Power-cycle failed"));
     }
 
@@ -3471,16 +4630,32 @@ mod tests {
     /// with nothing but one line in the log to say so.
     #[test]
     fn a_refused_admin_state_is_logged_and_not_fatal() {
-        let mut p = Refusing { refuse: "set_module_admin_state", ..Default::default() };
+        let mut p = Refusing {
+            refuse: "set_module_admin_state",
+            ..Default::default()
+        };
         let handed = RefCell::new(Vec::new());
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD0", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
-        apply_config_event(&mut p, Machine::Chassis, "LINE-CARD1", config_updater::Event::Del,
-                           &recording_gracefully(&handed));
-        assert_eq!(p.calls, vec![
-            "admin(modules[0],true)".to_string(),
-            "admin(modules[1],true)".to_string(),
-        ]);
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD0",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
+        apply_config_event(
+            &mut p,
+            Machine::Chassis,
+            "LINE-CARD1",
+            config_updater::Event::Del,
+            &recording_gracefully(&handed),
+        );
+        assert_eq!(
+            p.calls,
+            vec![
+                "admin(modules[0],true)".to_string(),
+                "admin(modules[1],true)".to_string(),
+            ]
+        );
     }
 
     /// A midplane that does not come up is reported and not fatal: the module
@@ -3501,12 +4676,17 @@ mod tests {
             &supervisor_info(),
             &|d, t| o.open(d, t),
             &no_watcher,
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143, "the daemon runs and shuts down normally");
-        assert!(log.logged(log::Level::Error, "Chassisd midplane intialization failed"),
-                "reported, and the Python daemon's spelling of it kept");
+        assert!(
+            log.logged(log::Level::Error, "Chassisd midplane intialization failed"),
+            "reported, and the Python daemon's spelling of it kept"
+        );
     }
 
     /// The same on the NPU side, plus a SmartSwitch that reports no DPUs at
@@ -3517,19 +4697,29 @@ mod tests {
         tokio::time::pause();
         let o = MockOpener::new();
         let code = run_smartswitch(
-            &mut Shaped { midplane_ok: false, ..Default::default() },
+            &mut Shaped {
+                midplane_ok: false,
+                ..Default::default()
+            },
             &|d, t| o.open(d, t),
             None,
             None,
             dpu_recovery::Thresholds::default(),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143);
         assert!(
-            o.table("CHASSIS_TABLE").unwrap().get(CHASSIS_INFO_KEY).unwrap().is_none(),
+            o.table("CHASSIS_TABLE")
+                .unwrap()
+                .get(CHASSIS_INFO_KEY)
+                .unwrap()
+                .is_none(),
             "no DPUs means no card count, not a count of zero"
         );
         assert!(log.logged(log::Level::Error, "Chassisd has no modules available"));
@@ -3541,7 +4731,6 @@ mod tests {
     /// `Table` hands back unqualified keys.
     #[test]
     fn a_shut_down_dpu_is_swept_out_of_the_key_space() {
-
         struct NoHw;
         impl dpu_recovery::PowerCycler for NoHw {
             fn power_cycle(&mut self, _: &str, _: &DeviceKey) -> Result<bool, PlatformError> {
@@ -3551,13 +4740,18 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let (chassis, module, midplane, dpu_state) = (
-            MockTable::new(), MockTable::new(), MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
             MockTable::new(),
         );
         let tables = dpu_updater::Tables {
-            chassis: &chassis, module: &module, midplane: &midplane,
+            chassis: &chassis,
+            module: &module,
+            midplane: &midplane,
             dpu_state: &dpu_state,
-            config: None, device_metadata: None,
+            config: None,
+            device_metadata: None,
         };
         let modules = vec![ModuleInfo {
             name: "DPU0".to_string(),
@@ -3566,6 +4760,7 @@ mod tests {
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Offline),
+            oper_status_text: Some(ModuleStatus::Offline.as_str().into()),
             ..Default::default()
         }];
         let keys = MockKeyspace::new(&[
@@ -3574,14 +4769,32 @@ mod tests {
             "TEMPERATURE_INFO|DPU0",
         ]);
         let mut u = dpu_updater::DpuUpdater::new(
-            &modules, dpu_recovery::Thresholds::default(), true, root.path(), Instant::now());
+            &modules,
+            dpu_recovery::Thresholds::default(),
+            true,
+            root.path(),
+            Instant::now(),
+        );
 
-        smartswitch_pass(&modules, &mut NoHw, &mut u, &tables, Some(&keys), Instant::now())
-            .unwrap();
+        smartswitch_pass(
+            &modules,
+            &mut NoHw,
+            &mut u,
+            &tables,
+            Some(&keys),
+            Instant::now(),
+        )
+        .unwrap();
 
         let left = keys.remaining();
-        assert!(left.iter().any(|k| k.starts_with("DPU_STATE")), "the NPU still needs this one");
-        assert!(left.iter().any(|k| k.starts_with("REBOOT_CAUSE")), "and this one");
+        assert!(
+            left.iter().any(|k| k.starts_with("DPU_STATE")),
+            "the NPU still needs this one"
+        );
+        assert!(
+            left.iter().any(|k| k.starts_with("REBOOT_CAUSE")),
+            "and this one"
+        );
         assert!(
             !left.iter().any(|k| k.starts_with("TEMPERATURE_INFO")),
             "everything else the DPU left behind goes"
@@ -3602,6 +4815,7 @@ mod tests {
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Online),
+            oper_status_text: Some(ModuleStatus::Online.as_str().into()),
             is_midplane_reachable: Some(true),
             ..Default::default()
         }
@@ -3614,7 +4828,9 @@ mod tests {
         let log = pmon_common::logging::capture();
         let o = MockOpener::new();
         o.open(db::STATE_DB, CHASSIS_INFO_TABLE).unwrap();
-        o.table(CHASSIS_INFO_TABLE).unwrap().fail_writes("connection reset");
+        o.table(CHASSIS_INFO_TABLE)
+            .unwrap()
+            .fail_writes("connection reset");
         let mut p = Shaped {
             info: Some(supervisor_info()),
             modules: vec![card("LINE-CARD0", 1, ModuleStatus::Online)],
@@ -3625,13 +4841,22 @@ mod tests {
             &supervisor_info(),
             &|d, t| o.open(d, t),
             &no_watcher,
-            &mut Cycles::Fixed { remaining: 5, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 5,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, ERR_DB_WRITE);
         assert!(log.logged(log::Level::Error, "connection reset"));
-        assert!(o.table("CHASSIS_MODULE_TABLE").unwrap().get("LINE-CARD0").unwrap().is_none(),
-                "the loop never ran");
+        assert!(
+            o.table("CHASSIS_MODULE_TABLE")
+                .unwrap()
+                .get("LINE-CARD0")
+                .unwrap()
+                .is_none(),
+            "the loop never ran"
+        );
     }
 
     /// The NPU side's card count, the same.
@@ -3639,9 +4864,14 @@ mod tests {
     async fn a_smartswitch_that_cannot_publish_its_card_count_stops() {
         let o = MockOpener::new();
         o.open(db::STATE_DB, CHASSIS_INFO_TABLE).unwrap();
-        o.table(CHASSIS_INFO_TABLE).unwrap().fail_writes("connection reset");
-        let mut p =
-            Shaped { modules: vec![online_dpu0()], midplane_ok: true, ..Default::default() };
+        o.table(CHASSIS_INFO_TABLE)
+            .unwrap()
+            .fail_writes("connection reset");
+        let mut p = Shaped {
+            modules: vec![online_dpu0()],
+            midplane_ok: true,
+            ..Default::default()
+        };
         let code = run_smartswitch(
             &mut p,
             &|d, t| o.open(d, t),
@@ -3650,12 +4880,21 @@ mod tests {
             dpu_recovery::Thresholds::default(),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 5, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 5,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, ERR_DB_WRITE);
-        assert!(o.table(dpu_updater::DPU_STATE_TABLE).unwrap().get("DPU0").unwrap().is_none(),
-                "the DPU sweep never ran");
+        assert!(
+            o.table(dpu_updater::DPU_STATE_TABLE)
+                .unwrap()
+                .get("DPU0")
+                .unwrap()
+                .is_none(),
+            "the DPU sweep never ran"
+        );
     }
 
     /// A DPU_STATE that refuses every write: the admin-state seed is only
@@ -3666,12 +4905,18 @@ mod tests {
     async fn a_dpu_state_that_will_not_write_still_lets_the_sweep_shut_down() {
         let log = pmon_common::logging::capture();
         let o = MockOpener::new();
-        o.open(CHASSIS_STATE_DB, dpu_updater::DPU_STATE_TABLE).unwrap();
-        o.table(dpu_updater::DPU_STATE_TABLE).unwrap().fail_writes("connection reset");
+        o.open(CHASSIS_STATE_DB, dpu_updater::DPU_STATE_TABLE)
+            .unwrap();
+        o.table(dpu_updater::DPU_STATE_TABLE)
+            .unwrap()
+            .fail_writes("connection reset");
         let shut = RefCell::new(Vec::<(String, DeviceKey)>::new());
         let record = |dpus: &[(String, DeviceKey)]| shut.borrow_mut().extend(dpus.iter().cloned());
-        let mut p =
-            Shaped { modules: vec![online_dpu0()], midplane_ok: true, ..Default::default() };
+        let mut p = Shaped {
+            modules: vec![online_dpu0()],
+            midplane_ok: true,
+            ..Default::default()
+        };
         let code = run_smartswitch(
             &mut p,
             &|d, t| o.open(d, t),
@@ -3680,7 +4925,10 @@ mod tests {
             dpu_recovery::Thresholds::default(),
             &no_watcher,
             &record,
-            &mut Cycles::Fixed { remaining: 5, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 5,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, ERR_DB_WRITE);
@@ -3694,12 +4942,18 @@ mod tests {
     async fn a_recovery_seed_that_will_not_write_stops() {
         let log = pmon_common::logging::capture();
         let o = MockOpener::new();
-        o.open(CHASSIS_STATE_DB, dpu_updater::DPU_STATE_TABLE).unwrap();
+        o.open(CHASSIS_STATE_DB, dpu_updater::DPU_STATE_TABLE)
+            .unwrap();
         // The admin-state sweep's one row goes through; the recovery seed's
         // first does not.
-        o.table(dpu_updater::DPU_STATE_TABLE).unwrap().fail_writes_after(1, "connection reset");
-        let mut p =
-            Shaped { modules: vec![online_dpu0()], midplane_ok: true, ..Default::default() };
+        o.table(dpu_updater::DPU_STATE_TABLE)
+            .unwrap()
+            .fail_writes_after(1, "connection reset");
+        let mut p = Shaped {
+            modules: vec![online_dpu0()],
+            midplane_ok: true,
+            ..Default::default()
+        };
         let code = run_smartswitch(
             &mut p,
             &|d, t| o.open(d, t),
@@ -3708,13 +4962,22 @@ mod tests {
             dpu_recovery::Thresholds::default(),
             &no_watcher,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 5, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 5,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, ERR_DB_WRITE);
         assert!(log.logged(log::Level::Error, "connection reset"));
-        assert!(o.table("CHASSIS_MODULE_TABLE").unwrap().get("DPU0").unwrap().is_none(),
-                "the loop never ran");
+        assert!(
+            o.table("CHASSIS_MODULE_TABLE")
+                .unwrap()
+                .get("DPU0")
+                .unwrap()
+                .is_none(),
+            "the loop never ran"
+        );
     }
 
     /// The pieces of the SmartSwitch loop a test drives directly.
@@ -3732,8 +4995,12 @@ mod tests {
         fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
             let updater = dpu_updater::DpuUpdater::new(
-                &[online_dpu0()], dpu_recovery::Thresholds::default(), true, root.path(),
-                Instant::now());
+                &[online_dpu0()],
+                dpu_recovery::Thresholds::default(),
+                true,
+                root.path(),
+                Instant::now(),
+            );
             Self {
                 _root: root,
                 chassis: MockTable::new(),
@@ -3746,15 +5013,28 @@ mod tests {
 
         async fn run(&mut self, lost: bool) -> i32 {
             let tables = dpu_updater::Tables {
-                chassis: &self.chassis, module: &self.module, midplane: &self.midplane,
+                chassis: &self.chassis,
+                module: &self.module,
+                midplane: &self.midplane,
                 dpu_state: &self.dpu_state,
-                config: None, device_metadata: None,
+                config: None,
+                device_metadata: None,
             };
-            let mut p =
-                Shaped { modules: vec![online_dpu0()], midplane_ok: true, ..Default::default() };
+            let mut p = Shaped {
+                modules: vec![online_dpu0()],
+                midplane_ok: true,
+                ..Default::default()
+            };
             run_smartswitch_loop(
-                &mut p, &mut self.updater, &tables, None,
-                &mut Cycles::Fixed { remaining: 5, code: 143 }, &AtomicBool::new(lost),
+                &mut p,
+                &mut self.updater,
+                &tables,
+                None,
+                &mut Cycles::Fixed {
+                    remaining: 5,
+                    code: 143,
+                },
+                &AtomicBool::new(lost),
             )
             .await
         }
@@ -3766,7 +5046,7 @@ mod tests {
     async fn a_lost_config_db_stops_the_smartswitch_loop() {
         tokio::time::pause();
         let mut npu = Npu::new();
-        assert_eq!(npu.run(true).await, ERR_DB_WRITE);
+        assert_eq!(npu.run(true).await, ERR_WATCHER_LOST);
         assert!(npu.module.get("DPU0").unwrap().is_none());
     }
 
@@ -3777,7 +5057,10 @@ mod tests {
         let mut npu = Npu::new();
         npu.module.fail_writes("connection reset");
         assert_eq!(npu.run(false).await, ERR_DB_WRITE);
-        assert!(npu.midplane.get("DPU0").unwrap().is_none(), "nothing is written after it");
+        assert!(
+            npu.midplane.get("DPU0").unwrap().is_none(),
+            "nothing is written after it"
+        );
     }
 
     /// And the control: the same DPU, with nothing refused, is published and
@@ -3788,8 +5071,14 @@ mod tests {
         tokio::time::pause();
         let mut npu = Npu::new();
         assert_eq!(npu.run(false).await, 143);
-        assert_eq!(npu.module.field("DPU0", "oper_status").as_deref(), Some("Online"));
-        assert!(npu.chassis.get_keys().unwrap().is_empty(), "the loop does not own the card count");
+        assert_eq!(
+            npu.module.field("DPU0", "oper_status").as_deref(),
+            Some("Online")
+        );
+        assert!(
+            npu.chassis.get_keys().unwrap().is_empty(),
+            "the loop does not own the card count"
+        );
         assert!(npu.midplane.get("DPU0").unwrap().is_some());
         assert!(npu.dpu_state.get("DPU0").unwrap().is_some());
     }
@@ -3803,24 +5092,38 @@ mod tests {
         impl PlatformApi for Silent {}
 
         let log = pmon_common::logging::capture();
-        let (config_ports, port_table, system_ready, t) =
-            (MockTable::new(), MockTable::new(), MockTable::new(), MockTable::new());
+        let (config_ports, port_table, system_ready, t) = (
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+        );
         config_ports.fail_reads("connection reset");
         let sources = Sources {
             config_ports: Some(&config_ports),
             port_table: Some(&port_table),
             system_ready: Some(&system_ready),
         };
-        let mut cycles = Cycles::Fixed { remaining: 5, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 5,
+            code: 143,
+        };
         let code = run_dpu_loop(&mut Silent, "DPU0", None, sources, &t, &mut cycles).await;
         assert_eq!(code, ERR_DB_WRITE);
-        assert!(
-            log.logged(log::Level::Error, "Failed to read the DPU's plane state: connection reset")
-        );
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to read the DPU's plane state: connection reset"
+        ));
         // The shutdown row is still written on the way out: the process is
         // going, and that part the NPU must hear.  It is the only write.
-        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), Some("down"));
-        assert_eq!(t.writes().iter().filter(|(_, f)| f == dpu_updater::DP_STATE).count(), 1);
+        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), None);
+        assert_eq!(
+            t.writes()
+                .iter()
+                .filter(|(_, f)| f == dpu_updater::DP_STATE)
+                .count(),
+            0
+        );
     }
 
     /// A plane read that fails is answered from the databases rather than
@@ -3848,16 +5151,25 @@ mod tests {
             }
         }
 
-        let (config_ports, port_table, system_ready, t) =
-            (MockTable::new(), MockTable::new(), MockTable::new(), MockTable::new());
-        system_ready.set("SYSTEM_STATE", &[("Status", "UP".to_string())]).unwrap();
+        let (config_ports, port_table, system_ready, t) = (
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+        );
+        system_ready
+            .set("SYSTEM_STATE", &[("Status", "UP".to_string())])
+            .unwrap();
         let sources = Sources {
             config_ports: Some(&config_ports),
             port_table: Some(&port_table),
             system_ready: Some(&system_ready),
         };
         let mut p = Flaky(0);
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 143,
+        };
         let code = run_dpu_loop(&mut p, "DPU0", None, sources, &t, &mut cycles).await;
 
         assert_eq!(code, 143);
@@ -3871,7 +5183,11 @@ mod tests {
         // The data plane up from the databases -- no ports configured -- and
         // then down, the platform's own answer once it gives one: two writes.
         // A failed read that published nothing would have left one.
-        let dp = t.writes().into_iter().filter(|(_, f)| f == dpu_updater::DP_STATE).count();
+        let dp = t
+            .writes()
+            .into_iter()
+            .filter(|(_, f)| f == dpu_updater::DP_STATE)
+            .count();
         assert_eq!(dp, 2);
     }
 
@@ -3895,9 +5211,19 @@ mod tests {
         }
         let t = MockTable::new();
         t.fail_writes("connection reset");
-        let mut cycles = Cycles::Fixed { remaining: 5, code: 143 };
-        let code =
-            run_dpu_loop(&mut Answering, "DPU0", None, Sources::default(), &t, &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 5,
+            code: 143,
+        };
+        let code = run_dpu_loop(
+            &mut Answering,
+            "DPU0",
+            None,
+            Sources::default(),
+            &t,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, ERR_DB_WRITE);
         assert!(log.logged(log::Level::Error, "connection reset"));
     }
@@ -3909,7 +5235,11 @@ mod tests {
             key: key.to_string(),
             deleted,
             fields: boot_id
-                .map(|b| [(dpu_state::BOOT_ID.to_string(), b.to_string())].into_iter().collect())
+                .map(|b| {
+                    [(dpu_state::BOOT_ID.to_string(), b.to_string())]
+                        .into_iter()
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }
@@ -3964,10 +5294,15 @@ mod tests {
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Online),
+            oper_status_text: Some(ModuleStatus::Online.as_str().into()),
             is_midplane_reachable: Some(true),
             ..Default::default()
         }];
-        let mut p = Shaped { info: None, modules, midplane_ok: true };
+        let mut p = Shaped {
+            info: None,
+            modules,
+            midplane_ok: true,
+        };
         let started = std::sync::Mutex::new(Vec::new());
         let recording = |w: Watch, _flags: Arc<WatchFlags>| {
             started.lock().unwrap().push(w);
@@ -3981,12 +5316,17 @@ mod tests {
             dpu_recovery::Thresholds::default(),
             &recording,
             &no_shutdown,
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143);
-        assert_eq!(*started.lock().unwrap(),
-                   vec![Watch::Config(Machine::SmartSwitch), Watch::BootIds]);
+        assert_eq!(
+            *started.lock().unwrap(),
+            vec![Watch::Config(Machine::SmartSwitch), Watch::BootIds]
+        );
     }
 
     /// The DPU publishes its boot_id before anything else, so the NPU hears
@@ -4003,10 +5343,16 @@ mod tests {
             port_table: Some(&port_table),
             system_ready: Some(&ready),
         };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
         let code = run_dpu_loop(&mut Silent, "DPU0", Some("b-1"), sources, &t, &mut cycles).await;
         assert_eq!(code, 143);
-        assert_eq!(t.writes().first(), Some(&("DPU0".to_string(), dpu_state::BOOT_ID.to_string())));
+        assert_eq!(
+            t.writes().first(),
+            Some(&("DPU0".to_string(), dpu_state::BOOT_ID.to_string()))
+        );
         assert_eq!(t.field("DPU0", dpu_state::BOOT_ID).as_deref(), Some("b-1"));
     }
 
@@ -4043,10 +5389,19 @@ mod tests {
         impl PlatformApi for Silent {}
         let t = MockTable::new();
         t.fail_writes("redis is gone");
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
-        let code =
-            run_dpu_loop(&mut Silent, "DPU0", Some("b-1"), Sources::default(), &t, &mut cycles)
-                .await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
+        let code = run_dpu_loop(
+            &mut Silent,
+            "DPU0",
+            Some("b-1"),
+            Sources::default(),
+            &t,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, ERR_DB_WRITE);
         assert!(log.logged(log::Level::Error, "Failed to publish the boot_id for DPU0"));
     }

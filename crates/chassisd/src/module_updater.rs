@@ -60,7 +60,10 @@ pub struct ModuleUpdater {
 
 /// One field out of a row, or None.
 fn field(row: &Option<Vec<(String, String)>>, name: &str) -> Option<String> {
-    row.as_ref()?.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    row.as_ref()?
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.clone())
 }
 
 impl ModuleUpdater {
@@ -125,14 +128,14 @@ impl ModuleUpdater {
                 .map(|(_, v)| v)
                 .unwrap_or_else(|| ModuleStatus::Empty.as_str().to_string());
 
-            let presence = fmt::bool(m.presence);
+            let presence = fmt::opt_str(&m.presence_text);
             let serial = fmt::opt_str(&m.serial);
             let model = fmt::opt_str(&m.model);
-            let replaceable = fmt::bool(m.is_replaceable);
+            let replaceable = fmt::opt_str(&m.replaceable_text);
             let fvs = [
                 (DESC_FIELD, fmt::opt_str(&m.description)),
-                (SLOT_FIELD, slot.to_string()),
-                (OPERSTATUS_FIELD, status.as_str().to_string()),
+                (SLOT_FIELD, fmt::opt_str(&m.slot_text)),
+                (OPERSTATUS_FIELD, fmt::opt_str(&m.oper_status_text)),
                 (NUM_ASICS_FIELD, module_asics.len().to_string()),
                 (SERIAL_FIELD, serial.clone()),
                 (PRESENCE_FIELD, presence.clone()),
@@ -179,7 +182,11 @@ impl ModuleUpdater {
                     // cleanup clock on every cycle.
                     self.down_modules.entry(down_key).or_insert_with(|| {
                         log::warn!("Module {} (Slot {slot}) went off-line!", m.name);
-                        DownModule { down_time: SystemTime::now(), cleaned: false, slot }
+                        DownModule {
+                            down_time: SystemTime::now(),
+                            cleaned: false,
+                            slot,
+                        }
                     });
                 }
                 continue;
@@ -218,7 +225,9 @@ impl ModuleUpdater {
     /// has no `try`, and read as "up" a CONFIG_DB failure would publish the
     /// ASICs of every card an operator had shut down.
     fn admin_status(&self, name: &str, tables: &Tables<'_>) -> Result<String, String> {
-        let Some(config) = tables.config else { return Ok("up".to_string()) };
+        let Some(config) = tables.config else {
+            return Ok("up".to_string());
+        };
         let row = config
             .get(name)
             .map_err(|e| format!("Failed to read the admin status of {name}: {e}"))?;
@@ -226,7 +235,7 @@ impl ModuleUpdater {
     }
 
     fn publish_asics(
-        &self,
+        &mut self,
         module: &str,
         asics: &[&AsicInfo],
         table: &dyn TableLike,
@@ -300,7 +309,9 @@ impl ModuleUpdater {
     /// read is said once, where Python says nothing: a card published as
     /// `"None"` is one the supervisor cannot clean up after.
     fn hostname(&mut self, tables: &Tables<'_>) -> String {
-        let Some(metadata) = tables.device_metadata else { return "None".to_string() };
+        let Some(metadata) = tables.device_metadata else {
+            return "None".to_string();
+        };
         match metadata.get("localhost") {
             Ok(row) => {
                 pmon_common::recovered!(self.hostname_read, "hostname read recovered");
@@ -343,12 +354,14 @@ impl ModuleUpdater {
                 continue;
             }
 
-            let key = if m.name.is_empty() {
-                format!("MODULE {index}")
-            } else {
-                m.name.clone()
-            };
-            let ip = m.midplane_ip.clone().unwrap_or_else(|| INVALID_IP.to_string());
+            let key = m
+                .name_text
+                .clone()
+                .unwrap_or_else(|| format!("MODULE {index}"));
+            let ip = m
+                .midplane_ip
+                .clone()
+                .unwrap_or_else(|| INVALID_IP.to_string());
             let reachable = m.is_midplane_reachable.unwrap_or(false);
             let was = field(&tables.midplane.get(&key)?, MIDPLANE_ACCESS_FIELD)
                 .unwrap_or_else(|| fmt::bool(false));
@@ -361,19 +374,21 @@ impl ModuleUpdater {
                     if self.reboot_expected(&key, tables)? {
                         self.set_reboot_time(&key, tables)?;
                         log::warn!(
-                            "Expected: Module {key} (Slot {slot}) lost midplane connectivity");
+                            "Expected: Module {key} (Slot {slot}) lost midplane connectivity"
+                        );
                     } else {
                         log::warn!(
-                            "Unexpected: Module {key} (Slot {slot}) lost midplane connectivity");
+                            "Unexpected: Module {key} (Slot {slot}) lost midplane connectivity"
+                        );
                     }
                 }
                 (true, false) => {
-                    pmon_common::notice!(
-                        "Module {key} (Slot {slot}) midplane connectivity is up");
+                    pmon_common::notice!("Module {key} (Slot {slot}) midplane connectivity is up");
                     if tables.module_reboot.get(&key)?.is_some() {
-                        tables.module_reboot.del(&key).map_err(|e| {
-                            format!("Failed to drop the reboot row for {key}: {e}")
-                        })?;
+                        tables
+                            .module_reboot
+                            .del(&key)
+                            .map_err(|e| format!("Failed to drop the reboot row for {key}: {e}"))?;
                     }
                 }
                 (false, false) => {
@@ -383,7 +398,8 @@ impl ModuleUpdater {
                         log::warn!(
                             "Unexpected: Module {key} (Slot {slot}) midplane connectivity is \
                              not restored in {} seconds",
-                            self.linecard_reboot_timeout.as_secs());
+                            self.linecard_reboot_timeout.as_secs()
+                        );
                     }
                 }
                 (true, true) => {}
@@ -402,8 +418,10 @@ impl ModuleUpdater {
     }
 
     fn reboot_expected(&self, key: &str, tables: &Tables<'_>) -> Result<bool, String> {
-        Ok(field(&tables.module_reboot.get(key)?, REBOOT_REBOOT_FIELD).as_deref()
-            == Some(REBOOT_EXPECTED))
+        Ok(
+            field(&tables.module_reboot.get(key)?, REBOOT_REBOOT_FIELD).as_deref()
+                == Some(REBOOT_EXPECTED),
+        )
     }
 
     fn set_reboot_time(&self, key: &str, tables: &Tables<'_>) -> Result<(), String> {
@@ -427,7 +445,9 @@ impl ModuleUpdater {
         let Some(ts) = field(&tables.module_reboot.get(key)?, REBOOT_TIMESTAMP_FIELD) else {
             return Ok(false);
         };
-        let Ok(ts) = ts.trim().parse::<f64>() else { return Ok(false) };
+        let Ok(ts) = ts.trim().parse::<f64>() else {
+            return Ok(false);
+        };
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -486,6 +506,13 @@ impl ModuleUpdater {
             match tables.asic.get_keys() {
                 Ok(keys) => {
                     for key in keys {
+                        if !key.starts_with(&format!(
+                            "{}{}|",
+                            ModuleType::LineCard.as_str(),
+                            self.my_slot - 1
+                        )) {
+                            continue;
+                        }
                         warn(
                             &format!("{key} from {CHASSIS_ASIC_INFO_TABLE}"),
                             tables.asic.del(&key),
@@ -581,6 +608,11 @@ mod tests {
     fn module(name: &str, slot: i64, status: ModuleStatus) -> ModuleInfo {
         ModuleInfo {
             name: name.to_string(),
+            name_text: Some(name.to_string()),
+            presence_text: Some("True".into()),
+            replaceable_text: Some("True".into()),
+            slot_text: Some(slot.to_string()),
+            oper_status_text: Some(status.as_str().into()),
             key: key_of(name),
             parent_key: None,
             parent_name: CHASSIS_PARENT.to_string(),
@@ -622,13 +654,24 @@ mod tests {
     #[test]
     fn a_card_is_published_with_its_asic_count() {
         let db = Db::new();
-        supervisor().refresh(
-            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
-            &[asic("LINE-CARD0", "0", "0000:03:00.0"), asic("LINE-CARD0", "1", "0000:04:00.0")],
-            &db.tables(),
-        ).unwrap();
-        assert_eq!(db.module.field("LINE-CARD0", "num_asics").as_deref(), Some("2"));
-        assert_eq!(db.module.field("LINE-CARD0", "oper_status").as_deref(), Some("Online"));
+        supervisor()
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[
+                    asic("LINE-CARD0", "0", "0000:03:00.0"),
+                    asic("LINE-CARD0", "1", "0000:04:00.0"),
+                ],
+                &db.tables(),
+            )
+            .unwrap();
+        assert_eq!(
+            db.module.field("LINE-CARD0", "num_asics").as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            db.module.field("LINE-CARD0", "oper_status").as_deref(),
+            Some("Online")
+        );
         assert_eq!(db.module.field("LINE-CARD0", "slot").as_deref(), Some("1"));
     }
 
@@ -649,14 +692,23 @@ mod tests {
     fn pulling_a_card_removes_its_entity_row() {
         let db = Db::new();
         let mut u = supervisor();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         assert!(db.entity.field("LINE-CARD0", "parent_name").is_some());
 
         let mut gone = module("LINE-CARD0", 1, ModuleStatus::Empty);
         gone.presence = false;
+        gone.presence_text = Some("False".into());
         u.refresh(&[gone], &[], &db.tables()).unwrap();
         assert!(db.entity.is_empty());
-        assert_eq!(db.module.field("LINE-CARD0", "presence").as_deref(), Some("False"));
+        assert_eq!(
+            db.module.field("LINE-CARD0", "presence").as_deref(),
+            Some("False")
+        );
     }
 
     /// The supervisor's ASIC keys are bare; a line card's are scoped by module,
@@ -665,19 +717,23 @@ mod tests {
     #[test]
     fn a_line_card_scopes_its_asic_keys_by_module() {
         let db = Db::new();
-        line_card().refresh(
-            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
-            &[asic("LINE-CARD0", "0", "0000:03:00.0")],
-            &db.tables(),
-        ).unwrap();
+        line_card()
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[asic("LINE-CARD0", "0", "0000:03:00.0")],
+                &db.tables(),
+            )
+            .unwrap();
         assert_eq!(db.asic.keys(), vec!["LINE-CARD0|asic0".to_string()]);
 
         let db2 = Db::new();
-        supervisor().refresh(
-            &[module("FABRIC-CARD0", 2, ModuleStatus::Online)],
-            &[asic("FABRIC-CARD0", "0", "0000:03:00.0")],
-            &db2.tables(),
-        ).unwrap();
+        supervisor()
+            .refresh(
+                &[module("FABRIC-CARD0", 2, ModuleStatus::Online)],
+                &[asic("FABRIC-CARD0", "0", "0000:03:00.0")],
+                &db2.tables(),
+            )
+            .unwrap();
         assert_eq!(db2.asic.keys(), vec!["asic0".to_string()]);
     }
 
@@ -687,27 +743,37 @@ mod tests {
     fn a_card_configured_down_publishes_no_asics() {
         let db = Db::new();
         db.config
-            .set("LINE-CARD0", &[(CHASSIS_MODULE_ADMIN_STATUS, "down".to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(CHASSIS_MODULE_ADMIN_STATUS, "down".to_string())],
+            )
             .unwrap();
-        supervisor().refresh(
-            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
-            &[asic("LINE-CARD0", "0", "0000:03:00.0")],
-            &db.tables(),
-        ).unwrap();
+        supervisor()
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[asic("LINE-CARD0", "0", "0000:03:00.0")],
+                &db.tables(),
+            )
+            .unwrap();
         assert!(db.asic.is_empty());
-        assert_eq!(db.module.field("LINE-CARD0", "oper_status").as_deref(), Some("Online"),
-            "the card is still reported, it is just not carrying traffic");
+        assert_eq!(
+            db.module.field("LINE-CARD0", "oper_status").as_deref(),
+            Some("Online"),
+            "the card is still reported, it is just not carrying traffic"
+        );
     }
 
     /// The absence of a CONFIG_DB row is not a decision to keep the card out.
     #[test]
     fn an_unconfigured_card_is_treated_as_up() {
         let db = Db::new();
-        supervisor().refresh(
-            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
-            &[asic("LINE-CARD0", "0", "0000:03:00.0")],
-            &db.tables(),
-        ).unwrap();
+        supervisor()
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[asic("LINE-CARD0", "0", "0000:03:00.0")],
+                &db.tables(),
+            )
+            .unwrap();
         assert_eq!(db.asic.len(), 1);
     }
 
@@ -721,9 +787,15 @@ mod tests {
             &[module("LINE-CARD0", 1, ModuleStatus::Online)],
             &[asic("LINE-CARD0", "0", "0000:03:00.0")],
             &db.tables(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(db.asic.len(), 1);
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Offline)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Offline)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         assert!(db.asic.is_empty());
         assert_eq!(u.down_modules().len(), 1);
     }
@@ -734,10 +806,25 @@ mod tests {
     fn the_down_clock_starts_once_and_does_not_restart() {
         let db = Db::new();
         let mut u = supervisor();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Offline)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Offline)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         let first = u.down_modules()["LINE-CARD0|"].down_time;
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Offline)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Offline)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         assert_eq!(u.down_modules()["LINE-CARD0|"].down_time, first);
         assert_eq!(u.down_modules().len(), 1);
     }
@@ -746,10 +833,25 @@ mod tests {
     fn coming_back_clears_the_down_record() {
         let db = Db::new();
         let mut u = supervisor();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Offline)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Offline)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         assert_eq!(u.down_modules().len(), 1);
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         assert!(u.down_modules().is_empty());
     }
 
@@ -759,10 +861,12 @@ mod tests {
         let db = Db::new();
         let mut sup = module("SUPERVISOR0", 16, ModuleStatus::Online);
         sup.r#type = Some(ModuleType::Supervisor);
-        supervisor().check_midplane(
-            &[sup, module("LINE-CARD0", 1, ModuleStatus::Online)],
-            &db.tables(),
-        ).unwrap();
+        supervisor()
+            .check_midplane(
+                &[sup, module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &db.tables(),
+            )
+            .unwrap();
         assert_eq!(db.midplane.keys(), vec!["LINE-CARD0".to_string()]);
     }
 
@@ -772,10 +876,12 @@ mod tests {
         let db = Db::new();
         let mut sup = module("SUPERVISOR0", 16, ModuleStatus::Online);
         sup.r#type = Some(ModuleType::Supervisor);
-        line_card().check_midplane(
-            &[sup, module("LINE-CARD1", 2, ModuleStatus::Online)],
-            &db.tables(),
-        ).unwrap();
+        line_card()
+            .check_midplane(
+                &[sup, module("LINE-CARD1", 2, ModuleStatus::Online)],
+                &db.tables(),
+            )
+            .unwrap();
         assert_eq!(db.midplane.keys(), vec!["SUPERVISOR0".to_string()]);
     }
 
@@ -796,17 +902,29 @@ mod tests {
     fn an_expected_reboot_records_when_it_started() {
         let db = Db::new();
         let mut u = supervisor();
-        u.check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables()).unwrap();
+        u.check_midplane(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &db.tables(),
+        )
+        .unwrap();
         db.module_reboot
-            .set("LINE-CARD0", &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())],
+            )
             .unwrap();
 
         let mut down = module("LINE-CARD0", 1, ModuleStatus::Online);
         down.is_midplane_reachable = Some(false);
         u.check_midplane(&[down], &db.tables()).unwrap();
-        assert!(db.module_reboot.field("LINE-CARD0", REBOOT_TIMESTAMP_FIELD).is_some());
+        assert!(db
+            .module_reboot
+            .field("LINE-CARD0", REBOOT_TIMESTAMP_FIELD)
+            .is_some());
         assert_eq!(
-            db.midplane.field("LINE-CARD0", MIDPLANE_ACCESS_FIELD).as_deref(),
+            db.midplane
+                .field("LINE-CARD0", MIDPLANE_ACCESS_FIELD)
+                .as_deref(),
             Some("False")
         );
     }
@@ -817,12 +935,22 @@ mod tests {
         let db = Db::new();
         let mut u = supervisor();
         db.midplane
-            .set("LINE-CARD0", &[(MIDPLANE_ACCESS_FIELD, "False".to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(MIDPLANE_ACCESS_FIELD, "False".to_string())],
+            )
             .unwrap();
         db.module_reboot
-            .set("LINE-CARD0", &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())],
+            )
             .unwrap();
-        u.check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables()).unwrap();
+        u.check_midplane(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &db.tables(),
+        )
+        .unwrap();
         assert!(db.module_reboot.is_empty());
     }
 
@@ -846,7 +974,10 @@ mod tests {
     fn an_uninitialised_midplane_publishes_nothing() {
         let db = Db::new();
         ModuleUpdater::new(16, 16, Duration::from_secs(180), false)
-            .check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables())
+            .check_midplane(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &db.tables(),
+            )
             .unwrap();
         assert!(db.midplane.is_empty());
     }
@@ -855,10 +986,19 @@ mod tests {
     fn the_module_count_is_published_but_never_as_zero() {
         let db = Db::new();
         publish_module_count(&[], &db.chassis).unwrap();
-        assert!(db.chassis.is_empty(), "a chassis that has not enumerated is not an empty one");
-        publish_module_count(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.chassis)
-            .unwrap();
-        assert_eq!(db.chassis.field(CHASSIS_INFO_KEY, "module_num").as_deref(), Some("1"));
+        assert!(
+            db.chassis.is_empty(),
+            "a chassis that has not enumerated is not an empty one"
+        );
+        publish_module_count(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &db.chassis,
+        )
+        .unwrap();
+        assert_eq!(
+            db.chassis.field(CHASSIS_INFO_KEY, "module_num").as_deref(),
+            Some("1")
+        );
     }
 
     /// A refusing table ends the pass at the card it refused, as Python's
@@ -870,15 +1010,23 @@ mod tests {
         db.module.fail_writes("read-only replica");
         let e = supervisor()
             .refresh(
-                &[module("LINE-CARD0", 1, ModuleStatus::Online),
-                  module("LINE-CARD1", 2, ModuleStatus::Online)],
+                &[
+                    module("LINE-CARD0", 1, ModuleStatus::Online),
+                    module("LINE-CARD1", 2, ModuleStatus::Online),
+                ],
                 &[],
                 &db.tables(),
             )
             .expect_err("a table that will not take a write has to be reported");
-        assert!(e.contains("LINE-CARD0"), "it stops on the first card, not the last: {e}");
+        assert!(
+            e.contains("LINE-CARD0"),
+            "it stops on the first card, not the last: {e}"
+        );
         assert!(db.module.is_empty());
-        assert!(db.entity.is_empty(), "the entity row is not written for a card that failed");
+        assert!(
+            db.entity.is_empty(),
+            "the entity row is not written for a card that failed"
+        );
     }
 
     /// A card the platform has no name for still gets a midplane row, under
@@ -887,7 +1035,8 @@ mod tests {
     #[test]
     fn an_unnamed_module_is_keyed_by_its_position() {
         let db = Db::new();
-        let anon = module("", 1, ModuleStatus::Online);
+        let mut anon = module("", 1, ModuleStatus::Online);
+        anon.name_text = None;
         supervisor().check_midplane(&[anon], &db.tables()).unwrap();
         assert_eq!(db.midplane.keys(), vec!["MODULE 0".to_string()]);
     }
@@ -900,8 +1049,12 @@ mod tests {
         let db = Db::new();
         let mut no_slot = module("LINE-CARD0", 1, ModuleStatus::Online);
         no_slot.slot = None;
+        no_slot.slot_text = None;
         supervisor().refresh(&[no_slot], &[], &db.tables()).unwrap();
-        assert_eq!(db.module.field("LINE-CARD0", "slot").as_deref(), Some("-1"));
+        assert_eq!(
+            db.module.field("LINE-CARD0", "slot").as_deref(),
+            Some("N/A")
+        );
     }
 
     /// The hostname a line card publishes is the key the chassis app DB is
@@ -910,9 +1063,16 @@ mod tests {
     fn a_line_card_publishes_its_hostname_under_a_zero_based_key() {
         let db = Db::new();
         line_card()
-            .refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[],
+                &db.tables(),
+            )
             .unwrap();
-        assert_eq!(db.hostname.field("LINE-CARD0", "slot").as_deref(), Some("1"));
+        assert_eq!(
+            db.hostname.field("LINE-CARD0", "slot").as_deref(),
+            Some("1")
+        );
         assert!(db.hostname.field("LINE-CARD0", "num_asics").is_some());
     }
 
@@ -924,11 +1084,19 @@ mod tests {
         let db = Db::new();
         let lc0 = [module("LINE-CARD0", 1, ModuleStatus::Online)];
         line_card().refresh(&lc0, &[], &db.tables()).unwrap();
-        assert_eq!(db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("None"));
+        assert_eq!(
+            db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(),
+            Some("None")
+        );
 
-        db.device_metadata.set("localhost", &[(HOSTNAME_FIELD, "lc-a".to_string())]).unwrap();
+        db.device_metadata
+            .set("localhost", &[(HOSTNAME_FIELD, "lc-a".to_string())])
+            .unwrap();
         line_card().refresh(&lc0, &[], &db.tables()).unwrap();
-        assert_eq!(db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("lc-a"));
+        assert_eq!(
+            db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(),
+            Some("lc-a")
+        );
     }
 
     /// A hostname that cannot be read does not fail the pass: Python's
@@ -944,17 +1112,35 @@ mod tests {
         let broken = Db::new();
         broken.device_metadata.fail_reads("CONFIG_DB is gone");
         u.refresh(&lc0, &[], &broken.tables()).unwrap();
-        assert_eq!(broken.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("None"));
-        assert_eq!(broken.module.field("LINE-CARD0", "slot").as_deref(), Some("1"));
+        assert_eq!(
+            broken
+                .hostname
+                .field("LINE-CARD0", HOSTNAME_FIELD)
+                .as_deref(),
+            Some("None")
+        );
+        assert_eq!(
+            broken.module.field("LINE-CARD0", "slot").as_deref(),
+            Some("1")
+        );
         assert!(log.logged(
             log::Level::Warn,
             "Failed to read the hostname from DEVICE_METADATA: CONFIG_DB is gone"
         ));
 
         let fixed = Db::new();
-        fixed.device_metadata.set("localhost", &[(HOSTNAME_FIELD, "lc-a".to_string())]).unwrap();
+        fixed
+            .device_metadata
+            .set("localhost", &[(HOSTNAME_FIELD, "lc-a".to_string())])
+            .unwrap();
         u.refresh(&lc0, &[], &fixed.tables()).unwrap();
-        assert_eq!(fixed.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some("lc-a"));
+        assert_eq!(
+            fixed
+                .hostname
+                .field("LINE-CARD0", HOSTNAME_FIELD)
+                .as_deref(),
+            Some("lc-a")
+        );
         assert!(log.contains("hostname read recovered"));
     }
 
@@ -963,10 +1149,20 @@ mod tests {
     #[test]
     fn an_empty_hostname_is_published_as_it_is() {
         let db = Db::new();
-        db.device_metadata.set("localhost", &[(HOSTNAME_FIELD, String::new())]).unwrap();
-        line_card().refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+        db.device_metadata
+            .set("localhost", &[(HOSTNAME_FIELD, String::new())])
             .unwrap();
-        assert_eq!(db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(), Some(""));
+        line_card()
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[],
+                &db.tables(),
+            )
+            .unwrap();
+        assert_eq!(
+            db.hostname.field("LINE-CARD0", HOSTNAME_FIELD).as_deref(),
+            Some("")
+        );
     }
 
     /// An admin status that cannot be read ends the pass.  Read as "up", a
@@ -994,11 +1190,18 @@ mod tests {
         let db = Db::new();
         let u = ModuleUpdater::new(16, 16, Duration::from_secs(0), true);
         db.module_reboot
-            .set("LINE-CARD0", &[(REBOOT_TIMESTAMP_FIELD, "soon".to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(REBOOT_TIMESTAMP_FIELD, "soon".to_string())],
+            )
             .unwrap();
-        assert!(!u.reboot_deadline_passed("LINE-CARD0", &db.tables()).unwrap());
+        assert!(!u
+            .reboot_deadline_passed("LINE-CARD0", &db.tables())
+            .unwrap());
         db.module_reboot.del("LINE-CARD0").unwrap();
-        assert!(!u.reboot_deadline_passed("LINE-CARD0", &db.tables()).unwrap());
+        assert!(!u
+            .reboot_deadline_passed("LINE-CARD0", &db.tables())
+            .unwrap());
     }
 
     /// The midplane's four transitions, each said once.  "Expected" and
@@ -1031,7 +1234,10 @@ mod tests {
 
         let log = pmon_common::logging::capture();
         u.check_midplane(&[with(false)], &db.tables()).unwrap();
-        assert!(!log.contains("midplane connectivity"), "still lost is not news");
+        assert!(
+            !log.contains("midplane connectivity"),
+            "still lost is not news"
+        );
 
         let log = pmon_common::logging::capture();
         u.check_midplane(&[with(true)], &db.tables()).unwrap();
@@ -1048,14 +1254,22 @@ mod tests {
         let mut down = module("LINE-CARD0", 1, ModuleStatus::Online);
         down.is_midplane_reachable = Some(false);
 
-        db.midplane.set("LINE-CARD0", &[(MIDPLANE_ACCESS_FIELD, "True".to_string())]).unwrap();
+        db.midplane
+            .set("LINE-CARD0", &[(MIDPLANE_ACCESS_FIELD, "True".to_string())])
+            .unwrap();
         db.module_reboot
-            .set("LINE-CARD0", &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())],
+            )
             .unwrap();
         u.check_midplane(&[down.clone()], &db.tables()).unwrap();
         // Still down: the deadline has passed, so this is the one warning.
         u.check_midplane(&[down.clone()], &db.tables()).unwrap();
-        assert!(db.module_reboot.is_empty(), "the record is consumed by the warning");
+        assert!(
+            db.module_reboot.is_empty(),
+            "the record is consumed by the warning"
+        );
         u.check_midplane(&[down], &db.tables()).unwrap();
     }
 
@@ -1065,7 +1279,10 @@ mod tests {
         let db = Db::new();
         db.midplane.fail_writes("read-only replica");
         supervisor()
-            .check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables())
+            .check_midplane(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &db.tables(),
+            )
             .expect_err("a midplane table that will not take a write has to be reported");
         assert!(db.midplane.is_empty());
     }
@@ -1088,7 +1305,10 @@ mod tests {
         // The module row went in before the ASIC row was tried, which is the
         // order Python writes them in too (`module_table.set` then
         // `asic_table.set` in `chassisd:ModuleUpdater.module_db_update`).
-        assert_eq!(db.module.field("LINE-CARD0", "oper_status").as_deref(), Some("Online"));
+        assert_eq!(
+            db.module.field("LINE-CARD0", "oper_status").as_deref(),
+            Some("Online")
+        );
     }
 
     /// A chassis table that refuses the count is reported to the caller, which
@@ -1097,8 +1317,11 @@ mod tests {
     fn a_refusing_chassis_table_is_reported() {
         let db = Db::new();
         db.chassis.fail_writes("read-only replica");
-        publish_module_count(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.chassis)
-            .expect_err("a chassis table that will not take the count has to be reported");
+        publish_module_count(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &db.chassis,
+        )
+        .expect_err("a chassis table that will not take the count has to be reported");
         assert!(db.chassis.is_empty());
     }
 
@@ -1108,8 +1331,18 @@ mod tests {
     fn marking_a_module_cleaned_takes_it_out_of_the_queue() {
         let db = Db::new();
         let mut u = supervisor();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Offline)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Offline)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
         assert!(!u.down_modules()["LINE-CARD0|"].cleaned);
         u.mark_cleaned("LINE-CARD0|");
         assert!(u.down_modules()["LINE-CARD0|"].cleaned);
@@ -1127,7 +1360,11 @@ mod tests {
         let db = Db::new();
         db.entity.fail_writes("redis is gone");
         let e = supervisor()
-            .refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[],
+                &db.tables(),
+            )
             .expect_err("an entity row that will not write has to be reported");
         assert!(e.contains("entity row for LINE-CARD0"), "{e}");
     }
@@ -1136,16 +1373,25 @@ mod tests {
     fn an_entity_row_that_will_not_delete_stops_the_pass() {
         let db = Db::new();
         let mut u = supervisor();
-        u.refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables()).unwrap();
+        u.refresh(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &[],
+            &db.tables(),
+        )
+        .unwrap();
 
         let mut gone = module("LINE-CARD0", 1, ModuleStatus::Empty);
         gone.presence = false;
+        gone.presence_text = Some("False".into());
         db.entity.fail_writes("redis is gone");
         let e = u
             .refresh(&[gone], &[], &db.tables())
             .expect_err("an entity row that will not go has to be reported");
         assert!(e.contains("drop the entity row"), "{e}");
-        assert!(!db.entity.is_empty(), "and the row it could not drop is still there");
+        assert!(
+            !db.entity.is_empty(),
+            "and the row it could not drop is still there"
+        );
     }
 
     #[test]
@@ -1153,7 +1399,11 @@ mod tests {
         let db = Db::new();
         db.hostname.fail_writes("redis is gone");
         let e = line_card()
-            .refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[],
+                &db.tables(),
+            )
             .expect_err("a hostname that will not publish has to be reported");
         assert!(e.contains("hostname"), "{e}");
     }
@@ -1171,19 +1421,34 @@ mod tests {
 
         db.asic.fail_writes("redis is gone");
         let e = u
-            .refresh(&[module("LINE-CARD0", 1, ModuleStatus::Offline)], &[], &db.tables())
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Offline)],
+                &[],
+                &db.tables(),
+            )
             .expect_err("an ASIC row that will not go has to be reported");
         assert!(e.contains("drop the ASIC row"), "{e}");
-        assert_eq!(db.asic.len(), 1, "and the row it could not drop is still there");
+        assert_eq!(
+            db.asic.len(),
+            1,
+            "and the row it could not drop is still there"
+        );
     }
 
     #[test]
     fn a_reboot_time_that_will_not_record_stops_the_pass() {
         let db = Db::new();
         let mut u = supervisor();
-        u.check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables()).unwrap();
+        u.check_midplane(
+            &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+            &db.tables(),
+        )
+        .unwrap();
         db.module_reboot
-            .set("LINE-CARD0", &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())],
+            )
             .unwrap();
 
         let mut down = module("LINE-CARD0", 1, ModuleStatus::Online);
@@ -1200,14 +1465,23 @@ mod tests {
         let db = Db::new();
         let mut u = supervisor();
         db.midplane
-            .set("LINE-CARD0", &[(MIDPLANE_ACCESS_FIELD, "False".to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(MIDPLANE_ACCESS_FIELD, "False".to_string())],
+            )
             .unwrap();
         db.module_reboot
-            .set("LINE-CARD0", &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())])
+            .set(
+                "LINE-CARD0",
+                &[(REBOOT_REBOOT_FIELD, REBOOT_EXPECTED.to_string())],
+            )
             .unwrap();
         db.module_reboot.fail_writes("redis is gone");
         let e = u
-            .check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables())
+            .check_midplane(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &db.tables(),
+            )
             .expect_err("a reboot row that will not clear has to be reported");
         assert!(e.contains("drop the reboot row"), "{e}");
     }
@@ -1230,7 +1504,10 @@ mod tests {
             .check_midplane(&[down], &db.tables())
             .expect_err("an overrun whose row will not go has to be reported");
         assert!(e.contains("drop the reboot row"), "{e}");
-        assert!(!db.module_reboot.is_empty(), "the row is still there to be retried");
+        assert!(
+            !db.module_reboot.is_empty(),
+            "the row is still there to be retried"
+        );
     }
 
     /// A reboot still inside its window is not an overrun, and its row stays.
@@ -1245,8 +1522,13 @@ mod tests {
         db.module_reboot
             .set("LINE-CARD0", &[(REBOOT_TIMESTAMP_FIELD, fmt::float(now))])
             .unwrap();
-        assert!(!u.reboot_deadline_passed("LINE-CARD0", &db.tables()).unwrap());
-        assert!(!db.module_reboot.is_empty(), "the row stays for the next cycle");
+        assert!(!u
+            .reboot_deadline_passed("LINE-CARD0", &db.tables())
+            .unwrap());
+        assert!(
+            !db.module_reboot.is_empty(),
+            "the row stays for the next cycle"
+        );
     }
 
     /// And a table that cannot be read ends the pass before anything is
@@ -1256,14 +1538,21 @@ mod tests {
         let db = Db::new();
         db.module.fail_reads("redis is gone");
         supervisor()
-            .refresh(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &[], &db.tables())
+            .refresh(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &[],
+                &db.tables(),
+            )
             .expect_err("a module table that cannot be read has to be reported");
         assert!(db.module.is_empty(), "nothing was written on a guess");
 
         let db = Db::new();
         db.midplane.fail_reads("redis is gone");
         supervisor()
-            .check_midplane(&[module("LINE-CARD0", 1, ModuleStatus::Online)], &db.tables())
+            .check_midplane(
+                &[module("LINE-CARD0", 1, ModuleStatus::Online)],
+                &db.tables(),
+            )
             .expect_err("a midplane table that cannot be read has to be reported");
     }
 

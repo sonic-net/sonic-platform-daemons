@@ -141,6 +141,12 @@ pub enum Effect {
 /// through the same handle because the pass holds the platform through this
 /// one borrow and cannot take a second.
 pub trait PowerCycler {
+    fn transition_in_progress(&mut self, _key: &DeviceKey) -> Result<Option<bool>, PlatformError> {
+        Ok(None)
+    }
+    fn flush_effects(&mut self, _name: &str, _effects: &mut Vec<Effect>) -> bool {
+        true
+    }
     /// Take the state-transition lock, run the graceful down/up, release it.
     ///
     /// The DPU named `name` for the log, at `key` for the platform, as
@@ -158,7 +164,9 @@ pub trait PowerCycler {
         key: &DeviceKey,
     ) -> Result<ModuleMidplaneDownReason, PlatformError> {
         let _ = key;
-        Err(PlatformError::NotSupported("get_module_midplane_down_reason".to_string()))
+        Err(PlatformError::NotSupported(
+            "get_module_midplane_down_reason".to_string(),
+        ))
     }
 }
 
@@ -247,21 +255,31 @@ impl Recovery {
             self.state = DpuState::Unrecoverable;
             out.push(Effect::RecoveryStatus(RECOVERY_UNRECOVERABLE));
             log::error!(
-                "{name}: Reached reset_limit ({}). Marking as unrecoverable.", t.reset_limit);
+                "{name}: Reached reset_limit ({}). Marking as unrecoverable.",
+                t.reset_limit
+            );
             return;
         }
 
         self.reset_count += 1;
         out.push(Effect::ResetCount(self.reset_count));
         log::warn!(
-            "{name}: Initiating power-cycle (reset_count={}/{})", self.reset_count, t.reset_limit);
+            "{name}: Initiating power-cycle (reset_count={}/{})",
+            self.reset_count,
+            t.reset_limit
+        );
 
+        if !hw.flush_effects(name, out) {
+            return;
+        }
+        let started = Instant::now();
         let cycled = match hw.power_cycle(name, key) {
             Ok(true) => true,
             Ok(false) => {
                 log::warn!(
                     "{name}: Cannot acquire state transition lock; another operation in \
-                     progress — skipping power-cycle");
+                     progress — skipping power-cycle"
+                );
                 false
             }
             // Not another operation: the lock call itself failed.  Python's
@@ -282,7 +300,7 @@ impl Recovery {
         // Entered either way: the boot timeout is what brings the daemon back
         // to try again, and a DPU whose lock was busy still needs watching.
         self.state = DpuState::PowerCycle;
-        self.boot_start = now;
+        self.boot_start = now + started.elapsed();
     }
 
     fn boot_timeout_expired(
@@ -294,7 +312,10 @@ impl Recovery {
         hw: &mut dyn PowerCycler,
         out: &mut Vec<Effect>,
     ) {
-        log::warn!("{name}: Boot timeout ({}s) expired {context}", t.boot_timeout.as_secs());
+        log::warn!(
+            "{name}: Boot timeout ({}s) expired {context}",
+            t.boot_timeout.as_secs()
+        );
         out.push(Effect::ReadyStatus(false));
         if input.auto_recovery {
             self.power_cycle_or_give_up(name, input.key, t, input.now, hw, out);
@@ -364,7 +385,8 @@ impl Recovery {
                     out.push(Effect::ResetCount(0));
                     out.push(Effect::RecoveryStatus(RECOVERY_RECOVERABLE));
                     pmon_common::notice!(
-                        "{name}: Operator module startup — resetting recovery state");
+                        "{name}: Operator module startup — resetting recovery state"
+                    );
                 }
                 self.enter_booting(now);
             }
@@ -380,12 +402,20 @@ impl Recovery {
                     if input.planes.cp_up() && input.planes.mp_up() {
                         if !self.boot_dp_warning_logged {
                             log::warn!(
-                                "{name}: data plane not up after {}s", t.boot_timeout.as_secs());
+                                "{name}: data plane not up after {}s",
+                                t.boot_timeout.as_secs()
+                            );
                             self.boot_dp_warning_logged = true;
                         }
                     } else {
                         self.boot_timeout_expired(
-                            name, t, "without reaching Ready", input, hw, &mut out);
+                            name,
+                            t,
+                            "without reaching Ready",
+                            input,
+                            hw,
+                            &mut out,
+                        );
                     }
                 }
             }
@@ -395,7 +425,8 @@ impl Recovery {
                     log::warn!(
                         "{name}: failure detected (mp={}, cp={})",
                         Planes::show(&input.planes.midplane),
-                        Planes::show(&input.planes.control));
+                        Planes::show(&input.planes.control)
+                    );
                     out.push(Effect::ReadyStatus(false));
                     out.push(Effect::LastDownTime);
                     if input.auto_recovery {
@@ -432,12 +463,15 @@ impl Recovery {
                     pmon_common::notice!(
                         "{name}: self-recovering (mp={}, cp={}); entering Booting",
                         Planes::show(&input.planes.midplane),
-                        Planes::show(&input.planes.control));
+                        Planes::show(&input.planes.control)
+                    );
                     self.enter_booting(now);
                 } else if now.duration_since(self.self_recovery_start) >= t.self_recovery_timeout {
                     log::warn!(
                         "{name}: self-recovery timeout ({}s) expired; both cp and midplane \
-                         still down", t.self_recovery_timeout.as_secs());
+                         still down",
+                        t.self_recovery_timeout.as_secs()
+                    );
                     if input.auto_recovery {
                         self.power_cycle_or_give_up(name, input.key, t, now, hw, &mut out);
                     } else {
@@ -544,13 +578,22 @@ mod tests {
 
     impl Hw {
         fn new() -> Self {
-            Self { cycles: Vec::new(), lock: Some(true) }
+            Self {
+                cycles: Vec::new(),
+                lock: Some(true),
+            }
         }
         fn busy() -> Self {
-            Self { cycles: Vec::new(), lock: Some(false) }
+            Self {
+                cycles: Vec::new(),
+                lock: Some(false),
+            }
         }
         fn broken() -> Self {
-            Self { cycles: Vec::new(), lock: None }
+            Self {
+                cycles: Vec::new(),
+                lock: None,
+            }
         }
     }
 
@@ -558,7 +601,8 @@ mod tests {
         fn power_cycle(&mut self, name: &str, key: &DeviceKey) -> Result<bool, PlatformError> {
             assert_eq!(key.as_str(), "modules[0]");
             self.cycles.push(name.to_string());
-            self.lock.ok_or_else(|| PlatformError::Backend("lock refused".to_string()))
+            self.lock
+                .ok_or_else(|| PlatformError::Backend("lock refused".to_string()))
         }
     }
 
@@ -618,6 +662,27 @@ mod tests {
             };
             self.r.step("DPU0", &input, &self.t, &mut self.hw)
         }
+    }
+
+    #[test]
+    fn the_boot_allowance_starts_when_a_slow_power_cycle_finishes() {
+        struct Slow;
+        impl PowerCycler for Slow {
+            fn power_cycle(&mut self, _: &str, _: &DeviceKey) -> Result<bool, PlatformError> {
+                std::thread::sleep(Duration::from_millis(20));
+                Ok(true)
+            }
+        }
+        let before = Instant::now();
+        let mut recovery = Recovery::new(before);
+        recovery.force_power_cycle(
+            "DPU0",
+            &DeviceKey::from("modules[0]"),
+            &Thresholds::default(),
+            before,
+            &mut Slow,
+        );
+        assert!(recovery.boot_start >= before + Duration::from_millis(20));
     }
 
     #[test]
@@ -685,13 +750,16 @@ mod tests {
         c.step(&planes("down", "down", "down"));
 
         // Two polls, one second apart: inside both limits.
-        c.advance(Duration::from_secs(1)).step(&planes("down", "down", "down"));
-        c.advance(Duration::from_secs(1)).step(&planes("down", "down", "down"));
+        c.advance(Duration::from_secs(1))
+            .step(&planes("down", "down", "down"));
+        c.advance(Duration::from_secs(1))
+            .step(&planes("down", "down", "down"));
         assert_eq!(c.r.state, DpuState::WaitForSelfRecovery);
         assert!(c.hw.cycles.is_empty());
 
         // Past the self-recovery timeout, and still down.
-        c.advance(Duration::from_secs(400)).step(&planes("down", "down", "down"));
+        c.advance(Duration::from_secs(400))
+            .step(&planes("down", "down", "down"));
         assert_eq!(c.hw.cycles, vec!["DPU0".to_string()]);
     }
 
@@ -704,16 +772,24 @@ mod tests {
         let mut c = Ctx::new();
         c.step(&all_up());
         c.step(&planes("down", "down", "down"));
-        c.advance(Duration::from_secs(1)).step(&planes("up", "down", "down"));
-        c.advance(Duration::from_secs(1)).step(&planes("up", "down", "down"));
-        assert_eq!(c.r.state, DpuState::WaitForSelfRecovery, "two polls, two seconds");
-        c.advance(Duration::from_secs(1)).step(&planes("up", "down", "down"));
+        c.advance(Duration::from_secs(1))
+            .step(&planes("up", "down", "down"));
+        c.advance(Duration::from_secs(1))
+            .step(&planes("up", "down", "down"));
+        assert_eq!(
+            c.r.state,
+            DpuState::WaitForSelfRecovery,
+            "two polls, two seconds"
+        );
+        c.advance(Duration::from_secs(1))
+            .step(&planes("up", "down", "down"));
         assert_eq!(c.r.state, DpuState::Booting, "the third poll evaluates");
 
         let mut c = Ctx::new();
         c.step(&all_up());
         c.step(&planes("down", "down", "down"));
-        c.advance(Duration::from_secs(31)).step(&planes("up", "down", "down"));
+        c.advance(Duration::from_secs(31))
+            .step(&planes("up", "down", "down"));
         assert_eq!(c.r.state, DpuState::Booting, "one poll, past 30 seconds");
     }
 
@@ -724,7 +800,8 @@ mod tests {
         let mut c = Ctx::new();
         c.step(&all_up());
         c.step(&planes("down", "down", "down"));
-        c.advance(Duration::from_secs(40)).step(&planes("up", "up", "down"));
+        c.advance(Duration::from_secs(40))
+            .step(&planes("up", "up", "down"));
         assert_eq!(c.r.state, DpuState::Booting);
         assert!(c.hw.cycles.is_empty());
         c.step(&all_up());
@@ -737,7 +814,9 @@ mod tests {
     fn a_data_plane_down_alone_never_power_cycles() {
         let mut c = Ctx::new();
         c.step(&all_up());
-        let out = c.advance(Duration::from_secs(10)).step(&planes("up", "up", "down"));
+        let out = c
+            .advance(Duration::from_secs(10))
+            .step(&planes("up", "up", "down"));
         assert_eq!(c.r.state, DpuState::Ready);
         assert!(out.contains(&Effect::ReadyStatus(false)));
         assert!(c.hw.cycles.is_empty());
@@ -886,7 +965,11 @@ mod tests {
         c.advance(Duration::from_secs(700));
         c.step(&planes("down", "down", "down"));
         assert_eq!(c.r.reset_count, 0, "the attempt is given back");
-        assert_eq!(c.r.state, DpuState::PowerCycle, "but the DPU is still watched");
+        assert_eq!(
+            c.r.state,
+            DpuState::PowerCycle,
+            "but the DPU is still watched"
+        );
     }
 
     /// A lock call that fails is not another operation holding the DPU, and
@@ -903,7 +986,8 @@ mod tests {
         assert_eq!(c.r.state, DpuState::PowerCycle);
         assert!(log.logged(
             log::Level::Error,
-            "DPU0: set_module_state_transition() failed: platform error: lock refused"));
+            "DPU0: set_module_state_transition() failed: platform error: lock refused"
+        ));
         assert!(!log.contains("another operation in progress"));
     }
 
@@ -1005,7 +1089,11 @@ mod tests {
         c.auto = false;
         c.step(&all_up());
         c.step(&planes("down", "up", "up"));
-        assert_eq!(c.r.state, DpuState::ManualIntervention, "not WaitForSelfRecovery");
+        assert_eq!(
+            c.r.state,
+            DpuState::ManualIntervention,
+            "not WaitForSelfRecovery"
+        );
     }
 
     /// `unknown` is what a first boot reports.  Treating it as a crash would
