@@ -1,6 +1,6 @@
 //! Which DPUs are on their way off the bus.
 //!
-//! Ports `pcied:DaemonPcied.is_dpu_in_detaching_mode`.  A SmartSwitch detaches
+//! Ports `pcied:DaemonPcied.is_device_in_detaching_mode`.  A SmartSwitch detaches
 //! a DPU by writing PCIE_DETACH_INFO and then removing it from the bus, so for
 //! the length of the operation the device is both absent and expected to be --
 //! and a daemon that reported it missing would put the switch into FAILED for
@@ -29,23 +29,22 @@ impl Detaching {
     /// caller reads it only on a pass that has a missing device.
     ///
     /// An unreadable table is an error, never an empty set.  Python reads it
-    /// unwrapped (`pcied:DaemonPcied.is_dpu_in_detaching_mode`), so a redis it
+    /// unwrapped (`pcied:DaemonPcied.is_device_in_detaching_mode`), so a redis it
     /// cannot reach ends the daemon; read as "nothing is detaching" it would
     /// have this daemon report a DPU's PCIe device missing while it is being
     /// detached on purpose.
-    pub fn read(is_smartswitch: bool, table: &dyn TableLike) -> Result<Self, String> {
-        // Nothing but a SmartSwitch has DPUs, and Python gates on exactly this
-        // before it looks (`pcied:DaemonPcied.check_pcie_devices`).
-        if !is_smartswitch {
-            return Ok(Self::default());
-        }
+    pub fn read(table: &dyn TableLike) -> Result<Self, String> {
         let mut out = BTreeSet::new();
         for key in table.get_keys()? {
-            let Some(row) = table.get(&key)? else { continue };
-            let field = |name: &str| {
-                row.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+            let Some(row) = table.get(&key)? else {
+                continue;
             };
-            if field(DPU_STATE_FIELD) == Some(DETACHING) {
+            let field = |name: &str| row.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+            if field("device_state")
+                .filter(|v| !v.is_empty())
+                .or_else(|| field(DPU_STATE_FIELD))
+                == Some(DETACHING)
+            {
                 if let Some(bus) = field(BUS_INFO_FIELD) {
                     out.insert(bus.to_string());
                 }
@@ -63,6 +62,17 @@ impl Detaching {
 mod tests {
     use super::*;
     use pmon_common::db::MockTable;
+
+    #[test]
+    fn device_state_takes_precedence_with_legacy_fallback() {
+        let table = table();
+        table
+            .set("DPU0", &[("device_state", "online".into())])
+            .unwrap();
+        assert!(!Detaching::read(&table).unwrap().contains("0000:3b:00.0"));
+        table.set("DPU0", &[("device_state", "".into())]).unwrap();
+        assert!(Detaching::read(&table).unwrap().contains("0000:3b:00.0"));
+    }
 
     fn table() -> MockTable {
         let t = MockTable::new();
@@ -87,26 +97,28 @@ mod tests {
 
     #[test]
     fn only_the_rows_that_say_detaching_count() {
-        let d = Detaching::read(true, &table()).unwrap();
+        let d = Detaching::read(&table()).unwrap();
         assert!(d.contains("0000:3b:00.0"));
-        assert!(!d.contains("0000:3c:00.0"), "an online DPU that is missing is still missing");
+        assert!(
+            !d.contains("0000:3c:00.0"),
+            "an online DPU that is missing is still missing"
+        );
     }
 
-    /// The table exists on a SmartSwitch and nowhere else; reading it anyway
-    /// would be a scan per cycle on every fixed platform in the fleet.
+    /// Read detach state on every platform; no chassis-role predicate gates it.
     #[test]
-    fn a_platform_without_dpus_does_not_read_the_table() {
+    fn every_platform_reads_the_detach_table() {
         let t = table();
-        let d = Detaching::read(false, &t).unwrap();
-        assert!(!d.contains("0000:3b:00.0"));
-        assert_eq!(t.scans(), 0);
+        let d = Detaching::read(&t).unwrap();
+        assert!(d.contains("0000:3b:00.0"));
+        assert_eq!(t.scans(), 1);
     }
 
     /// One read per pass, however many devices are missing.
     #[test]
     fn the_table_is_read_once_per_pass() {
         let t = table();
-        let d = Detaching::read(true, &t).unwrap();
+        let d = Detaching::read(&t).unwrap();
         assert_eq!(t.scans(), 1);
         for _ in 0..10 {
             d.contains("0000:3b:00.0");
@@ -119,8 +131,9 @@ mod tests {
     #[test]
     fn a_row_without_a_bus_info_matches_nothing() {
         let t = MockTable::new();
-        t.set("DPU0", &[(DPU_STATE_FIELD, DETACHING.to_string())]).unwrap();
-        let d = Detaching::read(true, &t).unwrap();
+        t.set("DPU0", &[(DPU_STATE_FIELD, DETACHING.to_string())])
+            .unwrap();
+        let d = Detaching::read(&t).unwrap();
         assert!(!d.contains(""));
         assert!(!d.contains("0000:3b:00.0"));
     }

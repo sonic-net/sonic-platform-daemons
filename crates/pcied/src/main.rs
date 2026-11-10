@@ -7,8 +7,8 @@
 //! The parts list and the AER counters do not come through the chassis: pcied
 //! builds its own `Pcie` object, as stormond builds its storage one; see the
 //! two escape hatches behind `get_pcie_devices`.  The chassis is still built --
-//! the PyO3 bridge is opened over one -- and asked one question, whether this
-//! is a SmartSwitch.
+//! the PyO3 bridge is opened over one. Detach state applies to all platforms;
+//! no chassis-role query controls that lookup.
 
 mod detach;
 #[cfg(all(test, feature = "parity"))]
@@ -18,7 +18,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use clap::Parser;
-use platform_api::{ChassisInfoCols, PcieDevice, PlatformApi, PlatformError};
+use platform_api::{PcieDevice, PlatformApi, PlatformError};
 use platform_provider::PlatformImpl;
 use pmon_common::cycles::{Cycles, Tick};
 use pmon_common::db::{self, TableLike};
@@ -66,19 +66,11 @@ const PCIEUTIL_LOAD_ERROR: i32 = 2;
 /// What the daemon leaves with when a table it must read is unreachable.
 ///
 /// Python has no constant: the `getKeys()` in
-/// `pcied:DaemonPcied.is_dpu_in_detaching_mode` is unwrapped and the
+/// `pcied:DaemonPcied.is_device_in_detaching_mode` is unwrapped and the
 /// interpreter exits 1.  Non-zero is what supervisord's
 /// `autorestart=unexpected` reads, and a restart is the only way back --
 /// `DBConnector` does not reconnect.
 const ERR_DB_READ: i32 = 1;
-
-/// The one `ChassisInfo` column pcied reads.
-///
-/// It asks whether this is a SmartSwitch and nothing else; the other nineteen
-/// columns reach the vendor for a reboot cause, a serial, a slot number that
-/// pcied has no use for.  See `Snapshot(projected=True)` in sonic_platform_api's
-/// facade, which is what leaves the undeclared columns unread.
-const CHASSIS_COLS: ChassisInfoCols = ChassisInfoCols::IS_SMARTSWITCH;
 
 /// `bb:dd.f`, which is the PCIE_DEVICE key and the sysfs directory name.
 ///
@@ -100,9 +92,15 @@ fn bus_info(d: &PcieDevice) -> String {
 /// would be a round trip through Python to `open()`.  The root is an argument
 /// so a test can supply one.
 fn read_id_in(root: &Path, key: &str) -> Option<String> {
-    std::fs::read_to_string(root.join(format!("0000:{key}")).join("device"))
-        .ok()
-        .map(|s| s.trim().to_string())
+    let path = root.join(format!("0000:{key}")).join("device");
+    match std::fs::read_to_string(&path) {
+        Ok(value) => Some(value.trim().to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            log::error!("Exception while checking AER attributes for {key}: {e}");
+            None
+        }
+    }
 }
 
 /// One pass: check every device, publish what was found, answer the count of
@@ -122,7 +120,10 @@ fn check_devices(
             // minute would train an operator to ignore the message that
             // matters (`pcied:DaemonPcied.check_pcie_devices`).
             if detaching(&bus_info(d)) {
-                log::debug!("PCIe Device: {} is in detaching mode, skipping warning.", bus_info(d));
+                log::debug!(
+                    "PCIe Device: {} is in detaching mode, skipping warning.",
+                    bus_info(d)
+                );
                 continue;
             }
             log::warn!("PCIe Device: {} Not Found", d.name);
@@ -130,7 +131,9 @@ fn check_devices(
             continue;
         }
 
-        let Some(id) = read_id_in(sysfs, &key) else { continue };
+        let Some(id) = read_id_in(sysfs, &key) else {
+            continue;
+        };
         if let Err(e) = table.set(&key, &[("id", id)]) {
             log::error!("Exception while checking AER attributes for {key}: {e}");
             continue;
@@ -208,7 +211,6 @@ fn clear(table: &dyn TableLike) -> Result<(), String> {
 /// directory the test owns otherwise.
 fn one_pass(
     platform: &mut dyn PlatformApi,
-    is_smartswitch: bool,
     sysfs: &Path,
     tables: &Tables<'_>,
     read: &mut Latch,
@@ -245,6 +247,8 @@ fn one_pass(
     // (`pcied:DaemonPcied.check_pcie_devices`); the facade answers both as
     // empty, and neither is a check that ran.
     if devices.is_empty() {
+        clear(tables.device)?;
+        clear(tables.status)?;
         return Ok(());
     }
 
@@ -255,7 +259,7 @@ fn one_pass(
     // mean reporting a DPU's device missing while it is being detached
     // deliberately.
     let detaching = if devices.iter().any(|d| !d.present) {
-        detach::Detaching::read(is_smartswitch, tables.detach)
+        detach::Detaching::read(tables.detach)
             .map_err(|e| format!("Failed to read the detach table: {e}"))?
     } else {
         detach::Detaching::default()
@@ -315,7 +319,6 @@ fn open_all(open: db::Opener<'_>) -> Result<Handles, String> {
 /// part worth being sure of.
 async fn run(
     platform: &mut dyn PlatformApi,
-    is_smartswitch: bool,
     sysfs: &Path,
     tables: &Tables<'_>,
     cycles: &mut Cycles,
@@ -326,7 +329,7 @@ async fn run(
             Tick::Exit(code) => break code,
             Tick::Cycle => {}
         }
-        if let Err(e) = one_pass(platform, is_smartswitch, sysfs, tables, &mut read) {
+        if let Err(e) = one_pass(platform, sysfs, tables, &mut read) {
             log::error!("{e}");
             break ERR_DB_READ;
         }
@@ -346,6 +349,7 @@ async fn run(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let mut cycles = Cycles::signals().expect("failed to install the signal handlers");
     let args = Args::parse();
     logging::init(SYSLOG_IDENTIFIER);
     log::info!("Starting up...");
@@ -368,21 +372,13 @@ async fn main() {
         }
     };
 
-    // After the platform is opened, not before as Python's `DaemonBase`
-    // orders it, and the order is load-bearing.  Opening the PyO3 bridge ends
-    // with `signal.signal(SIGTERM/SIGINT, SIG_DFL)` -- a real `sigaction`,
-    // undoing whatever a vendor chassis installed -- and tokio installs its
-    // own `sigaction` once per signal, on first registration.  Registered
-    // first, the handlers would be overwritten and never put back, and every
-    // SIGTERM for the life of the process would kill it before the teardown
-    // runs.  What the Python order buys -- a clean exit for a SIGTERM during
-    // the import -- has nothing to clean up here: nothing has been published
-    // yet.
+    // Signal handling was installed before vendor initialization. The bridge
+    // preserves those dispositions when this or another platform handle opens.
     let code = start(
         &mut platform,
         &db::open,
         Path::new(PCI_DEVICES_DIR),
-        &mut Cycles::signals().expect("failed to install the signal handlers"),
+        &mut cycles,
     )
     .await;
 
@@ -392,41 +388,6 @@ async fn main() {
     // not need to know that is what it holds.
     platform.finalize();
     std::process::exit(code);
-}
-
-/// Whether to look in the detach table: whether this is a SmartSwitch.
-///
-/// Asked once, at start-up, and the answer kept, so a failed read cannot be
-/// the answer: Python asks `device_info.is_smartswitch()` on every pass
-/// (`pcied:DaemonPcied.check_pcie_devices`), which reads configuration and
-/// cannot fail transiently, and a `false` latched from one bad chassis read
-/// would have a SmartSwitch report every detaching DPU as missing -- FAILED
-/// for a planned operation -- for the life of the process.  So a read that
-/// fails is treated as "yes".  That is the cheap mistake: the detach table is
-/// empty anywhere else, and the cost is one scan of it per pass.
-///
-/// `NotSupported` is not a failure.  A platform that does not answer is one
-/// whose `ChassisBase.is_smartswitch` answers False, and says nothing about it.
-///
-/// The chassis is not where Python looks: `device_info.py:is_smartswitch`
-/// reads `platform.json` for a `DPUS` key.  The two agree wherever it
-/// matters.  The rows this daemon looks for are written by
-/// `ModuleBase.module_pre_shutdown`, which chassisd reaches only on its
-/// SmartSwitch path, and chassisd chooses that path by asking the chassis
-/// (`chassisd:ChassisdDaemon.run`).  A switch whose chassis says no has no
-/// detaching DPU to find.
-fn is_smartswitch(platform: &mut dyn PlatformApi) -> bool {
-    match platform.get_chassis_info(CHASSIS_COLS) {
-        Ok(c) => c.is_smartswitch,
-        Err(PlatformError::NotSupported(_)) => false,
-        Err(e) => {
-            log::warn!(
-                "Failed to read whether this is a SmartSwitch, \
-                 checking the detach table every pass: {e}"
-            );
-            true
-        }
-    }
 }
 
 /// Open the tables, decide what this platform needs, and run.
@@ -453,7 +414,6 @@ async fn start(
 
     // Only a SmartSwitch has DPUs to detach; elsewhere the table is empty and
     // the lookup would be a scan per absent device for nothing.
-    let is_smartswitch = is_smartswitch(platform);
 
     let tables = Tables {
         device: device_table.as_ref(),
@@ -461,31 +421,23 @@ async fn start(
         detach: detach_table.as_ref(),
     };
 
-    run(platform, is_smartswitch, sysfs, &tables, cycles).await
+    run(platform, sysfs, &tables, cycles).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_api::{ChassisInfoCols, PcieAerStat, PlatformError};
+    use platform_api::{PcieAerStat, PlatformError};
     use pmon_common::db::MockTable;
 
-    /// `CHASSIS_COLS` has to name every column pcied reads.
-    ///
-    /// A column left out arrives as its absent value with nothing to say so --
-    /// `is_smartswitch` would silently read `false` and pcied would stop
-    /// publishing DPU PCIe state.  Cheaper to assert than to find in the field.
-    #[test]
-    fn pcied_asks_for_every_chassis_column_it_reads() {
-        use platform_api::ChassisInfoCol;
-        assert!(CHASSIS_COLS.contains(ChassisInfoCol::IsSmartswitch));
-        // And nothing more: the other nineteen reach the vendor for a reboot
-        // cause, a serial, a slot number pcied has no use for.
-        assert_eq!(CHASSIS_COLS.bits().count_ones(), 1);
-    }
-
     fn device(name: &str, bus: i64, dev: i64, func: i64, present: bool) -> PcieDevice {
-        PcieDevice { name: name.to_string(), bus, dev, r#fn: func, present }
+        PcieDevice {
+            name: name.to_string(),
+            bus,
+            dev,
+            r#fn: func,
+            present,
+        }
     }
 
     struct FakePlatform {
@@ -497,7 +449,12 @@ mod tests {
 
     impl FakePlatform {
         fn new() -> Self {
-            Self { stats: vec![], calls: 0, devices: vec![], fail: false }
+            Self {
+                stats: vec![],
+                calls: 0,
+                devices: vec![],
+                fail: false,
+            }
         }
     }
 
@@ -541,7 +498,10 @@ mod tests {
         let mut p = FakePlatform::new();
         let missing = check_devices(
             &mut p,
-            &[device("RootPort", 0, 0, 0, false), device("NIC", 1, 0, 0, false)],
+            &[
+                device("RootPort", 0, 0, 0, false),
+                device("NIC", 1, 0, 0, false),
+            ],
             &never,
             Path::new("/nonexistent"),
             &t,
@@ -615,7 +575,10 @@ mod tests {
             ..FakePlatform::new()
         };
         publish_aer(&mut p, &device("x", 3, 0, 0, true), "03:00.0", &t);
-        assert_eq!(t.field("03:00.0", "correctable|BadTLP").as_deref(), Some("0"));
+        assert_eq!(
+            t.field("03:00.0", "correctable|BadTLP").as_deref(),
+            Some("0")
+        );
         assert_eq!(t.field("03:00.0", "non_fatal|RxOF").as_deref(), Some("2"));
     }
 
@@ -633,11 +596,14 @@ mod tests {
     fn the_three_tables_are_opened_on_state_db() {
         let o = pmon_common::db::MockOpener::new();
         open_all(&|d, t| o.open(d, t)).expect("opens");
-        assert_eq!(o.asked(), vec![
-            ("STATE_DB".to_string(), "PCIE_DEVICE".to_string()),
-            ("STATE_DB".to_string(), "PCIE_DEVICES".to_string()),
-            ("STATE_DB".to_string(), "PCIE_DETACH_INFO".to_string()),
-        ]);
+        assert_eq!(
+            o.asked(),
+            vec![
+                ("STATE_DB".to_string(), "PCIE_DEVICE".to_string()),
+                ("STATE_DB".to_string(), "PCIE_DEVICES".to_string()),
+                ("STATE_DB".to_string(), "PCIE_DETACH_INFO".to_string()),
+            ]
+        );
     }
 
     /// And says which one: the three open in a row, and a log line that does
@@ -645,8 +611,13 @@ mod tests {
     #[test]
     fn a_table_that_will_not_open_stops_the_daemon() {
         let o = pmon_common::db::MockOpener::failing("PCIE_DEVICES");
-        let e = open_all(&|d, t| o.open(d, t)).err().expect("cannot publish");
-        assert!(e.starts_with("Failed to connect to STATE_DB or create table"), "{e}");
+        let e = open_all(&|d, t| o.open(d, t))
+            .err()
+            .expect("cannot publish");
+        assert!(
+            e.starts_with("Failed to connect to STATE_DB or create table"),
+            "{e}"
+        );
         assert!(e.contains("PCIE_DEVICES"), "{e}");
     }
 
@@ -665,7 +636,11 @@ mod tests {
     fn a_devices_id_comes_out_of_the_kernels_own_file() {
         let fs = sysfs(&[("03:00.0", "0x1017")]);
         assert_eq!(read_id_in(fs.path(), "03:00.0").as_deref(), Some("0x1017"));
-        assert_eq!(read_id_in(fs.path(), "04:00.0"), None, "a device with no such file");
+        assert_eq!(
+            read_id_in(fs.path(), "04:00.0"),
+            None,
+            "a device with no such file"
+        );
     }
 
     /// A present device gets its id and its AER counters; the id read is what
@@ -676,20 +651,28 @@ mod tests {
         let t = MockTable::new();
         let mut p = FakePlatform {
             stats: vec![PcieAerStat {
-                severity: "correctable".into(), field: "BadTLP".into(), value: "0".into(),
+                severity: "correctable".into(),
+                field: "BadTLP".into(),
+                value: "0".into(),
             }],
             ..FakePlatform::new()
         };
         let missing = check_devices(
             &mut p,
-            &[device("RootPort", 3, 0, 0, true), device("Absent", 9, 0, 0, true)],
+            &[
+                device("RootPort", 3, 0, 0, true),
+                device("Absent", 9, 0, 0, true),
+            ],
             &never,
             fs.path(),
             &t,
         );
         assert_eq!(missing, 0, "both are reported present by the platform");
         assert_eq!(t.field("03:00.0", "id").as_deref(), Some("0x1017"));
-        assert_eq!(t.field("03:00.0", "correctable|BadTLP").as_deref(), Some("0"));
+        assert_eq!(
+            t.field("03:00.0", "correctable|BadTLP").as_deref(),
+            Some("0")
+        );
         assert!(t.field("09:00.0", "id").is_none(), "no sysfs entry, no row");
     }
 
@@ -701,10 +684,18 @@ mod tests {
 
     impl Db {
         fn new() -> Self {
-            Self { device: MockTable::new(), status: MockTable::new(), detach: MockTable::new() }
+            Self {
+                device: MockTable::new(),
+                status: MockTable::new(),
+                detach: MockTable::new(),
+            }
         }
         fn tables(&self) -> Tables<'_> {
-            Tables { device: &self.device, status: &self.status, detach: &self.detach }
+            Tables {
+                device: &self.device,
+                status: &self.status,
+                detach: &self.detach,
+            }
         }
     }
 
@@ -719,10 +710,16 @@ mod tests {
             ..FakePlatform::new()
         };
         let fs = sysfs(&[]);
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
-        let code = run(&mut p, false, fs.path(), &db.tables(), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
+        let code = run(&mut p, fs.path(), &db.tables(), &mut cycles).await;
         assert_eq!(code, 143);
-        assert!(db.status.wrote("status", "status"), "the pass published a verdict");
+        assert!(
+            db.status.wrote("status", "status"),
+            "the pass published a verdict"
+        );
         assert!(db.status.is_empty(), "a stale PASSED outlives the checking");
     }
 
@@ -734,8 +731,11 @@ mod tests {
         let db = Db::new();
         let mut p = FakePlatform::new();
         let fs = sysfs(&[]);
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
-        run(&mut p, false, fs.path(), &db.tables(), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
+        run(&mut p, fs.path(), &db.tables(), &mut cycles).await;
         // The writes, not what is left: the teardown would empty the table
         // whether or not a verdict had been published.
         assert!(db.status.writes().is_empty());
@@ -746,10 +746,16 @@ mod tests {
     async fn a_failing_check_publishes_no_verdict() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { fail: true, ..FakePlatform::new() };
+        let mut p = FakePlatform {
+            fail: true,
+            ..FakePlatform::new()
+        };
         let fs = sysfs(&[]);
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
-        run(&mut p, false, fs.path(), &db.tables(), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
+        run(&mut p, fs.path(), &db.tables(), &mut cycles).await;
         assert!(db.status.writes().is_empty());
     }
 
@@ -770,11 +776,17 @@ mod tests {
             ..FakePlatform::new()
         };
         let fs = sysfs(&[("07:00.0", "0x1021")]);
-        let mut cycles = Cycles::Fixed { remaining: 5, code: 143 };
-        let code = run(&mut p, true, fs.path(), &db.tables(), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 5,
+            code: 143,
+        };
+        let code = run(&mut p, fs.path(), &db.tables(), &mut cycles).await;
         assert_eq!(code, ERR_DB_READ);
         assert!(log.logged(log::Level::Error, "Failed to read the detach table"));
-        assert!(db.status.writes().is_empty(), "no verdict on a check that did not finish");
+        assert!(
+            db.status.writes().is_empty(),
+            "no verdict on a check that did not finish"
+        );
         assert_eq!(p.calls, 0, "and no device was looked at");
     }
 
@@ -791,8 +803,11 @@ mod tests {
             ..FakePlatform::new()
         };
         let fs = sysfs(&[("07:00.0", "0x1021")]);
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
-        let code = run(&mut p, true, fs.path(), &db.tables(), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 143,
+        };
+        let code = run(&mut p, fs.path(), &db.tables(), &mut cycles).await;
         assert_eq!(code, 143, "the daemon ran until it was told to stop");
         assert!(db.status.wrote("status", "status"));
         assert_eq!(db.detach.scans(), 0);
@@ -811,11 +826,14 @@ mod tests {
         };
         let mut read = Latch::new();
         let mut pass = |p: &mut FakePlatform| {
-            one_pass(p, false, fs.path(), &db.tables(), &mut read).unwrap();
+            one_pass(p, fs.path(), &db.tables(), &mut read).unwrap();
         };
 
         pass(&mut p);
-        assert_eq!(db.status.field("status", "status").as_deref(), Some("PASSED"));
+        assert_eq!(
+            db.status.field("status", "status").as_deref(),
+            Some("PASSED")
+        );
 
         p.fail = true;
         pass(&mut p);
@@ -826,16 +844,23 @@ mod tests {
 
         p.fail = false;
         pass(&mut p);
-        assert_eq!(db.status.field("status", "status").as_deref(), Some("PASSED"));
+        assert_eq!(
+            db.status.field("status", "status").as_deref(),
+            Some("PASSED")
+        );
     }
 
     #[test]
     fn teardown_leaves_nothing_behind() {
         let t = MockTable::new();
         t.set("03:00.0", &[("id", "0x1234".to_string())]).unwrap();
-        t.set("status", &[("status", "PASSED".to_string())]).unwrap();
+        t.set("status", &[("status", "PASSED".to_string())])
+            .unwrap();
         clear(&t).unwrap();
-        assert!(t.is_empty(), "a stale PASSED outlives the checking that produced it");
+        assert!(
+            t.is_empty(),
+            "a stale PASSED outlives the checking that produced it"
+        );
     }
 
     /// A cleanup that cannot read the table says so, as Python's does, rather
@@ -845,41 +870,37 @@ mod tests {
     async fn a_cleanup_that_cannot_read_the_table_says_so() {
         let log = pmon_common::logging::capture();
         let db = Db::new();
-        db.device.set("03:00.0", &[("id", "0x1234".to_string())]).unwrap();
+        db.device
+            .set("03:00.0", &[("id", "0x1234".to_string())])
+            .unwrap();
         db.device.fail_reads("connection reset");
         let fs = sysfs(&[]);
-        let mut cycles = Cycles::Fixed { remaining: 0, code: 143 };
-        run(&mut FakePlatform::new(), false, fs.path(), &db.tables(), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 0,
+            code: 143,
+        };
+        run(
+            &mut FakePlatform::new(),
+            fs.path(),
+            &db.tables(),
+            &mut cycles,
+        )
+        .await;
         assert!(log.logged(log::Level::Warn, "Exception during cleanup: "));
         assert!(log.logged(log::Level::Warn, "connection reset"));
     }
 
     // ── the wiring that used to be inside main ───────────────────────────────
 
-    /// A platform that answers both of the questions `start` asks.
+    /// A platform supplying the PCI inventory used by `start`.
     #[derive(Default)]
     struct Shaped {
-        smartswitch: bool,
         devices: Vec<PcieDevice>,
-        /// What the chassis read fails with, if it does.
-        chassis_error: Option<PlatformError>,
     }
 
     impl PlatformApi for Shaped {
         fn get_pcie_devices(&mut self) -> Result<Vec<PcieDevice>, PlatformError> {
             Ok(self.devices.clone())
-        }
-        fn get_chassis_info(
-            &mut self,
-            _cols: ChassisInfoCols,
-        ) -> Result<platform_api::ChassisInfo, PlatformError> {
-            if let Some(e) = self.chassis_error.clone() {
-                return Err(e);
-            }
-            Ok(platform_api::ChassisInfo {
-                is_smartswitch: self.smartswitch,
-                ..Default::default()
-            })
         }
     }
 
@@ -894,18 +915,30 @@ mod tests {
     async fn the_tables_are_opened_and_the_status_is_published() {
         let o = pmon_common::db::MockOpener::new();
         let fs = sysfs(&[("05:00.0", "0xcf6c")]);
-        let mut p = Shaped { devices: vec![device("ASIC", 5, 0, 0, true)], ..Default::default() };
+        let mut p = Shaped {
+            devices: vec![device("ASIC", 5, 0, 0, true)],
+        };
         let code = start(
             &mut p,
             &|d, t| o.open(d, t),
             fs.path(),
-            &mut Cycles::Fixed { remaining: 1, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, 0);
-        assert!(o.table("PCIE_DEVICES").unwrap().writes().iter().any(|(_, f)| f == "status"));
-        assert!(o.table("PCIE_DEVICE").unwrap().wrote("05:00.0", "id"),
-            "the id was read from the sysfs handed in");
+        assert!(o
+            .table("PCIE_DEVICES")
+            .unwrap()
+            .writes()
+            .iter()
+            .any(|(_, f)| f == "status"));
+        assert!(
+            o.table("PCIE_DEVICE").unwrap().wrote("05:00.0", "id"),
+            "the id was read from the sysfs handed in"
+        );
     }
 
     /// A table that will not open gets `PCIEUTIL_CONF_FILE_ERROR`, because that
@@ -922,7 +955,10 @@ mod tests {
             &mut Shaped::default(),
             &|d, t| o.open(d, t),
             fs.path(),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, PCIEUTIL_CONF_FILE_ERROR);
@@ -932,96 +968,24 @@ mod tests {
         ));
     }
 
-    /// Only a SmartSwitch looks in the detach table.  Everywhere else it is
-    /// empty, and the lookup would be a scan per absent device every cycle.
+    /// The detach table applies to every platform without a chassis-role query.
     #[tokio::test]
-    async fn only_a_smartswitch_consults_the_detach_table() {
-        for smartswitch in [false, true] {
-            let o = pmon_common::db::MockOpener::new();
-            let fs = sysfs(&[]);
-            let mut p = Shaped {
-                smartswitch,
-                devices: vec![device("DPU0", 6, 0, 0, false)],
-                ..Default::default()
-            };
-            start(
-                &mut p,
-                &|d, t| o.open(d, t),
-                fs.path(),
-                &mut Cycles::Fixed { remaining: 1, code: 0 },
-            )
-            .await;
-            assert_eq!(
-                o.table("PCIE_DETACH_INFO").unwrap().scans() > 0,
-                smartswitch,
-                "smartswitch={smartswitch}"
-            );
-        }
-    }
-
-    /// A chassis read that fails at start-up is taken as "this is a
-    /// SmartSwitch", and said so.  Taken as "no", a SmartSwitch would report
-    /// every DPU it detaches as a missing device, FAILED, until the daemon next
-    /// restarted.  Taken as "yes" on a switch without DPUs, it costs one scan
-    /// of an empty table per pass.
-    #[tokio::test]
-    async fn a_failed_smartswitch_read_still_consults_the_detach_table() {
-        let log = pmon_common::logging::capture();
+    async fn the_detach_table_is_consulted_without_a_chassis_role_query() {
         let o = pmon_common::db::MockOpener::new();
         let fs = sysfs(&[]);
         let mut p = Shaped {
             devices: vec![device("DPU0", 6, 0, 0, false)],
-            chassis_error: Some(PlatformError::Backend("i2c timeout".into())),
-            ..Default::default()
         };
-        start(&mut p, &|d, t| o.open(d, t), fs.path(), &mut Cycles::Fixed { remaining: 1, code: 0 })
-            .await;
+        start(
+            &mut p,
+            &|d, t| o.open(d, t),
+            fs.path(),
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 0,
+            },
+        )
+        .await;
         assert!(o.table("PCIE_DETACH_INFO").unwrap().scans() > 0);
-        assert!(log.logged(log::Level::Warn, "Failed to read whether this is a SmartSwitch"));
-    }
-
-    /// And a detaching DPU on such a switch is not counted as missing, which
-    /// is the point of failing that way.
-    #[test]
-    fn a_failed_smartswitch_read_still_spares_a_detaching_dpu() {
-        let mut chassis = Shaped {
-            chassis_error: Some(PlatformError::Backend("i2c timeout".into())),
-            ..Default::default()
-        };
-        assert!(is_smartswitch(&mut chassis));
-
-        let db = Db::new();
-        db.detach.set("DPU0", &[
-            ("bus_info", "0000:06:00.0".to_string()),
-            ("dpu_state", "detaching".to_string()),
-        ]).unwrap();
-        let mut p = FakePlatform {
-            devices: vec![device("DPU0", 6, 0, 0, false)],
-            ..FakePlatform::new()
-        };
-        let fs = sysfs(&[]);
-        one_pass(&mut p, is_smartswitch(&mut chassis), fs.path(), &db.tables(), &mut Latch::new())
-            .unwrap();
-        assert_eq!(db.status.field("status", "status").as_deref(), Some("PASSED"));
-    }
-
-    /// A platform that does not answer is not a SmartSwitch, and nothing is
-    /// said about it: `ChassisBase.is_smartswitch` answers False by default,
-    /// and a warning every start on every platform without the method would
-    /// be noise.
-    #[tokio::test]
-    async fn a_platform_that_does_not_say_is_not_a_smartswitch_and_is_not_warned_about() {
-        let log = pmon_common::logging::capture();
-        let o = pmon_common::db::MockOpener::new();
-        let fs = sysfs(&[]);
-        let mut p = Shaped {
-            devices: vec![device("DPU0", 6, 0, 0, false)],
-            chassis_error: Some(PlatformError::NotSupported("is_smartswitch".into())),
-            ..Default::default()
-        };
-        start(&mut p, &|d, t| o.open(d, t), fs.path(), &mut Cycles::Fixed { remaining: 1, code: 0 })
-            .await;
-        assert_eq!(o.table("PCIE_DETACH_INFO").unwrap().scans(), 0);
-        assert!(!log.contains("SmartSwitch"));
     }
 }

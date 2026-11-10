@@ -6,4 +6,4 @@ sonic (1.0.0) stable; urgency=medium
   * One binary package per daemon, from one workspace build, each switchable
     back to its Python counterpart from pmon_daemon_control.json
 
- -- SONiC Team <sonic-dev@lists.sonicfoundation.dev>  Wed, 17 Sep 2026 00:00:00 -0800
+ -- SONiC Team <sonic-dev@lists.sonicfoundation.dev>  Thu, 17 Sep 2026 00:00:00 -0800

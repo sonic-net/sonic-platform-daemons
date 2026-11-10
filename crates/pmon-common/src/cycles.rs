@@ -42,17 +42,44 @@ pub enum Cycles {
     /// after N passes on real hardware.
     #[cfg(any(test, feature = "testing"))]
     Fixed { remaining: usize, code: i32 },
+    #[cfg(any(test, feature = "testing"))]
+    Paced { remaining: usize, code: i32 },
 }
 
 /// The three handlers a pmon daemon installs.
 ///
 /// SIGTERM and SIGINT stop it; SIGHUP is absorbed, because it is what a log
 /// rotation sends and dying on one would blank whatever table the daemon owns.
-pub struct Signals {
+struct SignalSources {
     sigterm: tokio::signal::unix::Signal,
     sigint: tokio::signal::unix::Signal,
     sighup: tokio::signal::unix::Signal,
     log: SignalLog,
+}
+
+pub struct Signals {
+    receiver: tokio::sync::watch::Receiver<Option<i32>>,
+    stop: tokio::sync::watch::Sender<bool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl Drop for Signals {
+    fn drop(&mut self) {
+        let _ = self.stop.send(true);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+impl Signals {
+    async fn next(&mut self, period: Duration) -> Tick {
+        if let Some(code) = *self.receiver.borrow() {
+            return Tick::Exit(code);
+        }
+        tokio::select! {
+            _ = self.receiver.changed() => Tick::Exit(self.receiver.borrow().unwrap_or(1)),
+            _ = tokio::time::sleep(period) => Tick::Cycle,
+        }
+    }
 }
 
 /// How a daemon says it caught a signal: its Python daemon's own
@@ -99,12 +126,69 @@ impl Cycles {
 
     /// The same, announcing the signals as `log` says.
     pub fn signals_logged(log: SignalLog) -> std::io::Result<Self> {
-        use tokio::signal::unix::{signal, SignalKind};
+        Self::signals_with_shutdown(log, None)
+    }
+
+    pub fn signals_with_shutdown(
+        log: SignalLog,
+        shutdown: Option<(
+            std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+            std::sync::Arc<std::sync::atomic::AtomicI32>,
+        )>,
+    ) -> std::io::Result<Self> {
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        let (stop, mut stop_rx) = tokio::sync::watch::channel(false);
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("pmon-signals".into())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                        return;
+                    }
+                };
+                runtime.block_on(async move {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let sources = (|| {
+                        Ok::<_, std::io::Error>(SignalSources {
+                            sigterm: signal(SignalKind::terminate())?,
+                            sigint: signal(SignalKind::interrupt())?,
+                            sighup: signal(SignalKind::hangup())?,
+                            log,
+                        })
+                    })();
+                    let mut sources = match sources {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(e));
+                            return;
+                        }
+                    };
+                    let _ = ready_tx.send(Ok(()));
+                    tokio::select! {
+                        _ = stop_rx.changed() => {},
+                        tick = sources.next(Duration::from_secs(u32::MAX as u64)) => {
+                            if let Tick::Exit(code) = tick {
+                                if let Some((tx, exit)) = shutdown {
+                                    exit.store(code, std::sync::atomic::Ordering::SeqCst);
+                                    let _ = tx.send(true);
+                                }
+                                let _ = sender.send(Some(code));
+                            }
+                        }
+                    }
+                });
+            })?;
+        ready_rx.recv().map_err(std::io::Error::other)??;
         Ok(Cycles::Signals(Box::new(Signals {
-            sigterm: signal(SignalKind::terminate())?,
-            sigint: signal(SignalKind::interrupt())?,
-            sighup: signal(SignalKind::hangup())?,
-            log,
+            receiver,
+            stop,
+            worker: Some(worker),
         })))
     }
 
@@ -127,9 +211,38 @@ impl Cycles {
         tick
     }
 
+    /// Observe shutdown without consuming a polling tick. A daemon can race
+    /// this against a hardware worker without waiting for that worker to return.
+    pub async fn exit_requested(&mut self) -> i32 {
+        match self {
+            Cycles::Signals(signals) => loop {
+                if let Some(code) = *signals.receiver.borrow() {
+                    return code;
+                }
+                if signals.receiver.changed().await.is_err() {
+                    return 1;
+                }
+            },
+            #[cfg(any(test, feature = "testing"))]
+            Cycles::Fixed { remaining: 0, code } | Cycles::Paced { remaining: 0, code } => *code,
+            #[cfg(any(test, feature = "testing"))]
+            _ => std::future::pending().await,
+        }
+    }
+
     async fn wait(&mut self, period: Duration) -> Tick {
         match self {
             Cycles::Signals(s) => s.next(period).await,
+            #[cfg(any(test, feature = "testing"))]
+            Cycles::Paced { remaining, code } => {
+                if *remaining == 0 {
+                    Tick::Exit(*code)
+                } else {
+                    tokio::time::sleep(period).await;
+                    *remaining -= 1;
+                    Tick::Cycle
+                }
+            }
             #[cfg(any(test, feature = "testing"))]
             Cycles::Fixed { remaining, code } => {
                 // Yields, as the real one does: a loop driven by a tick that
@@ -160,7 +273,7 @@ pub fn notify_shutdown<P: PlatformApi + ?Sized>(platform: &mut P) {
     }
 }
 
-impl Signals {
+impl SignalSources {
     /// Say that `name` was caught, in this daemon's words.
     fn caught(&self, name: &str, fatal: bool) {
         match (self.log, fatal) {
@@ -207,6 +320,7 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
     use super::*;
     use platform_api::PlatformError;
     use tokio::signal::unix::SignalKind;
@@ -228,8 +342,120 @@ mod tests {
         }
     }
 
+    fn signal_waiter(code: Option<i32>) -> (Cycles, tokio::sync::watch::Sender<Option<i32>>) {
+        let (sender, receiver) = tokio::sync::watch::channel(code);
+        let (stop, _) = tokio::sync::watch::channel(false);
+        (Cycles::Signals(Box::new(Signals { receiver, stop, worker: None })), sender)
+    }
+
+    #[tokio::test]
+    async fn an_exit_wait_returns_a_signal_already_received() {
+        let (mut cycles, _sender) = signal_waiter(Some(143));
+        assert_eq!(cycles.exit_requested().await, 143);
+    }
+
+    #[tokio::test]
+    async fn an_exit_wait_receives_a_signal_after_it_starts() {
+        let (mut cycles, sender) = signal_waiter(None);
+        let mut waiting = Box::pin(cycles.exit_requested());
+        assert!(std::future::poll_fn(|context| std::task::Poll::Ready(
+            waiting.as_mut().poll(context).is_pending()
+        )).await);
+        sender.send(Some(130)).unwrap();
+        assert_eq!(waiting.await, 130);
+    }
+
+    #[tokio::test]
+    async fn a_closed_signal_channel_ends_an_exit_wait_with_an_error() {
+        let (mut cycles, sender) = signal_waiter(None);
+        let mut waiting = Box::pin(cycles.exit_requested());
+        assert!(std::future::poll_fn(|context| std::task::Poll::Ready(
+            waiting.as_mut().poll(context).is_pending()
+        )).await);
+        drop(sender);
+        assert_eq!(waiting.await, 1);
+    }
+
+    #[tokio::test]
+    async fn exhausted_test_cycles_return_their_configured_exit_code() {
+        for mut cycles in [Cycles::Fixed { remaining: 0, code: 143 },
+                           Cycles::Paced { remaining: 0, code: 130 }] {
+            let expected = match &cycles {
+                Cycles::Fixed { code, .. } | Cycles::Paced { code, .. } => *code,
+                _ => unreachable!(),
+            };
+            assert_eq!(cycles.exit_requested().await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn canceling_an_exit_wait_does_not_consume_a_poll_tick() {
+        for mut cycles in [Cycles::Fixed { remaining: 2, code: 143 },
+                           Cycles::Paced { remaining: 2, code: 143 }] {
+            let mut waiting = Box::pin(cycles.exit_requested());
+            assert!(std::future::poll_fn(|context| std::task::Poll::Ready(
+                waiting.as_mut().poll(context).is_pending()
+            )).await);
+            drop(waiting);
+            let mut platform = Told::default();
+            assert_eq!(cycles.next(Duration::ZERO, &mut platform).await, Tick::Cycle);
+            assert_eq!(platform.notified, 0);
+            match cycles {
+                Cycles::Fixed { remaining, .. } | Cycles::Paced { remaining, .. } => assert_eq!(remaining, 1),
+                _ => unreachable!(),
+            }
+        }
+    }
+
     /// supervisord's `autorestart=unexpected` is configured against these, so
     /// they are not free to change.
+    #[test]
+    fn receives_a_stop_signal_while_the_main_thread_is_blocked() {
+        const CHILD: &str = "PMON_SIGNAL_REGRESSION_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let (shutdown, receiver) = tokio::sync::watch::channel(false);
+            let code = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+            let _signals = Cycles::signals_with_shutdown(
+                SignalLog::Info,
+                Some((std::sync::Arc::new(shutdown), std::sync::Arc::clone(&code))),
+            )
+            .unwrap();
+            let sender = std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(20));
+                assert!(std::process::Command::new("kill")
+                    .args(["-TERM", &std::process::id().to_string()])
+                    .status()
+                    .unwrap()
+                    .success());
+            });
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while !*receiver.borrow() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "signal listener did not wake"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(code.load(std::sync::atomic::Ordering::SeqCst), 143);
+            sender.join().unwrap();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cycles::tests::receives_a_stop_signal_while_the_main_thread_is_blocked",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn the_exit_code_is_the_one_a_shell_reports() {
         assert_eq!(exit_code_for(SignalKind::terminate()), 143);
@@ -246,12 +472,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_fixed_source_yields_its_cycles_then_exits() {
-        let mut c = Cycles::Fixed { remaining: 2, code: 0 };
+        let mut c = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
         let p = &mut Told::default();
         assert_eq!(c.next(Duration::ZERO, p).await, Tick::Cycle);
         assert_eq!(c.next(Duration::ZERO, p).await, Tick::Cycle);
         assert_eq!(c.next(Duration::ZERO, p).await, Tick::Exit(0));
-        assert_eq!(c.next(Duration::ZERO, p).await, Tick::Exit(0), "and stays exited");
+        assert_eq!(
+            c.next(Duration::ZERO, p).await,
+            Tick::Exit(0),
+            "and stays exited"
+        );
     }
 
     /// The platform hears of the stop when the exit is handed back, and not
@@ -259,7 +492,10 @@ mod tests {
     /// a wait the daemon still needs.
     #[tokio::test]
     async fn the_platform_is_told_of_the_stop_before_the_exit_is_returned() {
-        let mut c = Cycles::Fixed { remaining: 1, code: 143 };
+        let mut c = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
         let mut p = Told::default();
         assert_eq!(c.next(Duration::ZERO, &mut p).await, Tick::Cycle);
         assert_eq!(p.notified, 0, "a cycle is not a shutdown");
@@ -271,8 +507,14 @@ mod tests {
     #[tokio::test]
     async fn a_platform_that_fails_to_hear_of_the_stop_is_logged_and_passed() {
         let log = crate::logging::capture();
-        let mut c = Cycles::Fixed { remaining: 0, code: 143 };
-        let mut p = Told { refuse: true, ..Default::default() };
+        let mut c = Cycles::Fixed {
+            remaining: 0,
+            code: 143,
+        };
+        let mut p = Told {
+            refuse: true,
+            ..Default::default()
+        };
         assert_eq!(c.next(Duration::ZERO, &mut p).await, Tick::Exit(143));
         assert!(log.logged(
             log::Level::Warn,
@@ -285,7 +527,10 @@ mod tests {
         tokio::time::pause();
         let mut c = Cycles::signals().expect("handlers install");
         let start = tokio::time::Instant::now();
-        assert_eq!(c.next(Duration::from_secs(60), &mut Told::default()).await, Tick::Cycle);
+        assert_eq!(
+            c.next(Duration::from_secs(60), &mut Told::default()).await,
+            Tick::Cycle
+        );
         // Paused time advances in the timer's own granularity, so the wait
         // lands on or just past the period rather than exactly on it.
         assert!(start.elapsed() >= Duration::from_secs(60));
@@ -323,11 +568,16 @@ mod tests {
     async fn a_sighup_mid_wait_does_not_restart_the_period() {
         tokio::time::pause();
         let log = crate::logging::capture();
-        let mut c = Cycles::signals_logged(SignalLog::Notice).expect("handlers install");
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut c = SignalSources {
+            sigterm: signal(SignalKind::terminate()).unwrap(),
+            sigint: signal(SignalKind::interrupt()).unwrap(),
+            sighup: signal(SignalKind::hangup()).unwrap(),
+            log: SignalLog::Notice,
+        };
         let start = tokio::time::Instant::now();
 
-        let mut p = Told::default();
-        let wait = c.next(Duration::from_secs(60), &mut p);
+        let wait = c.next(Duration::from_secs(60));
         tokio::pin!(wait);
         tokio::select! {
             t = &mut wait => panic!("the wait ended early, with {t:?}"),

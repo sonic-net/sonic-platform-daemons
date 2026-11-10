@@ -73,8 +73,12 @@ def platform(check, ids, smartswitch=False, detach=(), **kwargs):
     H.use_pcie(Pcie(check, **kwargs))
     H.FLAGS['is_smartswitch'] = smartswitch
     table = H.Table(H.Db('STATE_DB'), 'PCIE_DETACH_INFO')
-    for key, bus_info, state in detach:
-        table.set(key, [('bus_info', bus_info), ('dpu_state', state)])
+    for entry in detach:
+        key, bus_info, state = entry[:3]
+        fields = [('bus_info', bus_info), ('dpu_state', state)]
+        if len(entry) > 3:
+            fields.append(('device_state', entry[3]))
+        table.set(key, fields)
 
     class Chassis(ChassisBase):
         def is_smartswitch(self):
@@ -126,7 +130,30 @@ def nothing_to_check():
     return build, [('pass',)]
 
 
-SCENARIOS = [all_present, one_missing, detaching_dpu, no_id_file, aer_unreadable, nothing_to_check]
+def device_state_precedes_legacy_state():
+    def build():
+        return platform([device(8, 0, 0, 'DPU0', passed=False)], {},
+                        detach=[('DPU0', '0000:08:00.0', 'attached', 'detaching')])
+    return build, [('pass',)]
+
+
+def attached_device_state_overrides_legacy_detach():
+    def build():
+        return platform([device(8, 0, 0, 'DPU0', passed=False)], {},
+                        detach=[('DPU0', '0000:08:00.0', 'detaching', 'attached')])
+    return build, [('pass',)]
+
+
+def missing_device_keeps_previous_row():
+    def build():
+        c = platform([device(0, 1, 0, 'PCI A')], {'00:01.0': '0x1f10'})
+        H.Table(H.Db('STATE_DB'), 'PCIE_DEVICE').set('05:00.0', [('id', 'old')])
+        return c
+    return build, [('pass',)]
+
+
+SCENARIOS = [all_present, one_missing, detaching_dpu, no_id_file, aer_unreadable, nothing_to_check, device_state_precedes_legacy_state,
+             attached_device_state_overrides_legacy_detach, missing_device_keeps_previous_row]
 
 
 def names():

@@ -58,12 +58,11 @@ fn rust_half(
         status: &status,
         detach: &detach,
     };
-    let smartswitch = is_smartswitch(&mut platform);
     let mut read = Latch::new();
     for step in &steps {
         let kind: String = step.get_item(0).and_then(|k| k.extract()).unwrap();
         if kind == "pass" {
-            if let Err(e) = one_pass(&mut platform, smartswitch, &sysfs, &tables, &mut read) {
+            if let Err(e) = one_pass(&mut platform, &sysfs, &tables, &mut read) {
                 log::error!("{e}");
             }
         } else {
