@@ -88,8 +88,8 @@ def unreadable():
 
     def readable(c):
         c._eeprom.data = image(GOOD)
-    # Nothing at start-up; the next pass finds the table changed (empty is
-    # not what was published -- nothing was) only if the key sets differ.
+    # Python remembers the empty failed post as a valid key snapshot and never
+    # retries it. Rust keeps it pending and publishes when the EEPROM recovers.
     return build, [('pass',), ('call', readable), ('pass',)]
 
 

@@ -48,7 +48,9 @@ macro_rules! info_logger {
 }
 
 struct SyslogLogger {
-    inner: Mutex<syslog::Logger<LoggerBackend, Formatter3164>>,
+    inner: Mutex<Option<syslog::Logger<LoggerBackend, Formatter3164>>>,
+    formatter: Formatter3164,
+    socket: Option<std::path::PathBuf>,
 }
 
 /// Which syslog severity a record goes out at.
@@ -98,12 +100,27 @@ impl log::Log for SyslogLogger {
             Err(poisoned) => poisoned.into_inner(),
         };
         let msg = record.args().to_string();
-        let _ = match severity {
-            Severity::Notice => w.notice(msg),
-            Severity::Err => w.err(msg),
-            Severity::Warning => w.warning(msg),
-            Severity::Info => w.info(msg),
-        };
+        // A connected Unix socket cannot follow /dev/log across an rsyslogd
+        // restart. Reconnect on failure, then retry this record exactly once.
+        for _ in 0..2 {
+            if w.is_none() {
+                *w = match &self.socket {
+                    Some(path) => syslog::unix_custom(self.formatter.clone(), path).ok(),
+                    None => syslog::unix(self.formatter.clone()).ok(),
+                };
+            }
+            let Some(writer) = w.as_mut() else { return };
+            let result = match severity {
+                Severity::Notice => writer.notice(msg.as_str()),
+                Severity::Err => writer.err(msg.as_str()),
+                Severity::Warning => writer.warning(msg.as_str()),
+                Severity::Info => writer.info(msg.as_str()),
+            };
+            if result.is_ok() {
+                return;
+            }
+            *w = None;
+        }
     }
 
     fn flush(&self) {}
@@ -111,7 +128,7 @@ impl log::Log for SyslogLogger {
 
 /// Send `log` records to syslog, honouring [`NOTICE`].
 ///
-/// A syslog that cannot be reached is reported on stderr and left at that:
+/// A syslog that cannot be reached is reported on stderr and retried on later records:
 /// supervisord captures stderr, and a daemon that refused to start because it
 /// could not log would be worse than one that runs without logging.
 pub fn init(identifier: &str) {
@@ -122,15 +139,18 @@ pub fn init(identifier: &str) {
         pid: std::process::id(),
     };
 
-    match syslog::unix(formatter) {
-        Ok(writer) => {
-            let logger = SyslogLogger {
-                inner: Mutex::new(writer),
-            };
-            let _ = log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(log::LevelFilter::Info));
-        }
-        Err(e) => eprintln!("cannot connect to syslog: {e}"),
-    }
+    let writer = syslog::unix(formatter.clone())
+        .map_err(|e| {
+            eprintln!("cannot connect to syslog: {e}");
+        })
+        .ok();
+    let logger = SyslogLogger {
+        inner: Mutex::new(writer),
+        formatter,
+        socket: None,
+    };
+    let _ = log::set_boxed_logger(Box::new(logger))
+        .map(|()| log::set_max_level(log::LevelFilter::Info));
 }
 
 // Everything from here to `capture` is test scaffolding.  Gated so it cannot
@@ -208,7 +228,9 @@ impl log::Log for Captured {
 }
 
 #[cfg(any(test, feature = "testing"))]
-static CAPTURED: Captured = Captured { lines: Mutex::new(Vec::new()) };
+static CAPTURED: Captured = Captured {
+    lines: Mutex::new(Vec::new()),
+};
 
 #[cfg(any(test, feature = "testing"))]
 /// What one test's thread has logged since it called [`capture`].
@@ -304,6 +326,80 @@ pub fn capture() -> CaptureGuard {
 mod tests {
     use super::*;
 
+    #[test]
+    fn reconnects_after_the_receiver_recreates_its_socket() {
+        // Keep socket lifetimes isolated from other tests that fork child
+        // processes: an inherited receiver can outlive its parent's close.
+        const CHILD: &str = "PMON_SYSLOG_RESTART_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "logging::tests::reconnects_after_the_receiver_recreates_its_socket",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use std::os::unix::net::UnixDatagram;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log");
+        let receiver = UnixDatagram::bind(&path).unwrap();
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let logger = SyslogLogger {
+            inner: Mutex::new(None),
+            formatter: Formatter3164 {
+                facility: syslog::Facility::LOG_USER,
+                hostname: None,
+                process: "test-daemon".into(),
+                pid: 42,
+            },
+            socket: Some(path.clone()),
+        };
+        let send = || {
+            log::Log::log(
+                &logger,
+                &log::Record::builder()
+                    .level(log::Level::Error)
+                    .args(format_args!("test message"))
+                    .build(),
+            )
+        };
+        let mut buf = [0; 1024];
+        send();
+        assert!(receiver.recv(&mut buf).unwrap() > 0);
+        drop(receiver);
+        std::fs::remove_file(&path).unwrap();
+        // A record while the service is down must return, and not disable logging.
+        send();
+        let receiver = UnixDatagram::bind(&path).unwrap();
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        send();
+        let n = receiver.recv(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).contains("test message"));
+        assert!(String::from_utf8_lossy(&buf[..n]).contains("test-daemon[42]"));
+        // Restart again without an intervening failed record: retry that record.
+        drop(receiver);
+        std::fs::remove_file(&path).unwrap();
+        let receiver = UnixDatagram::bind(&path).unwrap();
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        send();
+        assert!(receiver.recv(&mut buf).unwrap() > 0);
+    }
+
     /// The targets have to be something no module path can produce, or a
     /// stray `log::info!` from a module called `notice` would be promoted.
     #[test]
@@ -322,10 +418,22 @@ mod tests {
     /// loganalyzer rules do not match.
     #[test]
     fn the_notice_target_outranks_the_records_own_level() {
-        assert_eq!(severity_of(NOTICE, log::Level::Info), Some(Severity::Notice));
-        assert_eq!(severity_of(NOTICE, log::Level::Error), Some(Severity::Notice));
-        assert_eq!(severity_of("thermalctld", log::Level::Error), Some(Severity::Err));
-        assert_eq!(severity_of("thermalctld", log::Level::Warn), Some(Severity::Warning));
+        assert_eq!(
+            severity_of(NOTICE, log::Level::Info),
+            Some(Severity::Notice)
+        );
+        assert_eq!(
+            severity_of(NOTICE, log::Level::Error),
+            Some(Severity::Notice)
+        );
+        assert_eq!(
+            severity_of("thermalctld", log::Level::Error),
+            Some(Severity::Err)
+        );
+        assert_eq!(
+            severity_of("thermalctld", log::Level::Warn),
+            Some(Severity::Warning)
+        );
     }
 
     /// INFO stays in the process, as a Python daemon's `log_info` does --
@@ -375,7 +483,10 @@ mod tests {
             ready_tx.send(()).unwrap();
             // Still capturing while the first thread logs.
             done_rx.recv().unwrap();
-            (theirs.contains("the other test's line"), theirs.contains("this test's line"))
+            (
+                theirs.contains("the other test's line"),
+                theirs.contains("this test's line"),
+            )
         });
         ready_rx.recv().unwrap();
         log::warn!("this test's line");
@@ -392,6 +503,11 @@ mod tests {
         let thread = std::thread::current().id();
         drop(capture());
         log::error!("after the test was done");
-        assert!(!CAPTURED.lines.lock().unwrap().iter().any(|(t, _)| *t == thread));
+        assert!(!CAPTURED
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(t, _)| *t == thread));
     }
 }

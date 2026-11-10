@@ -20,9 +20,8 @@ pmon-common   = { path = "../pmon-common" }
 # One table, one timer, three signals -- a current-thread runtime is the whole
 # requirement, and the thread count is something this port is measured on.
 tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
-# Held below 4.6 for the same reason thermalctld holds it: from 4.6 the clap
-# family is edition 2024, which the cargo-auditable the slave image wraps
-# rustc in cannot parse out of `cargo metadata`.
+# Retain thermalctld's compatibility cap for release builders using
+# cargo-auditable 0.6.4. Current master uses 0.7.6 and supports edition 2024.
 clap  = { version = ">=4.0, <4.6", features = ["derive"] }
 log   = "0.4"
 

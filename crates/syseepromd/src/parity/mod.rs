@@ -49,14 +49,12 @@ fn rust_half(
         .unwrap_or_else(|e| panic!("[{name}] open: {e}"));
     let table = PyTable::new("STATE_DB", EEPROM_TABLE);
     // What `run` does before its loop, and then in it.
-    let mut published = match publish(&mut platform, &table, POST_FAILED) {
-        Ok(keys) => keys.unwrap_or_default(),
-        Err(e) => panic!("[{name}] publish: {e}"),
-    };
+    let mut published = Publication::start(&mut platform, &table)
+        .unwrap_or_else(|e| panic!("[{name}] publish: {e}"));
     for step in &steps {
         let kind: String = step.get_item(0).and_then(|k| k.extract()).unwrap();
         if kind == "pass" {
-            if let Err(e) = republish_if_changed(&mut platform, &table, &mut published) {
+            if let Err(e) = published.step(&mut platform, &table) {
                 log::error!("{e}");
             }
         } else {
@@ -90,4 +88,18 @@ fn syseepromd_publishes_what_the_python_daemon_publishes() {
 
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
-const KNOWN: &[parity::Known] = &[];
+const KNOWN: &[parity::Known] = &[
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x21: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x22: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x23: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x24: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x25: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x26: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x2a: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x2b: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0xfd: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0xfe: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|Checksum: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|State: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+    parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|TlvHeader: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
+];
