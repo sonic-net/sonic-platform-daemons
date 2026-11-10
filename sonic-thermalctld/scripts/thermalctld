@@ -799,6 +799,14 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
             if sensor_is_ok:
                 if sensor_is_leak:
+                    # A test leak replaced by a physical one (or the reverse) without a clear
+                    # poll is a new episode: drop timing and latch state from the old source.
+                    was_test = dict(self.last_sensor_fvs.get(sensor_name, ())).get('test_leak') == 'Enabled'
+                    if sensor_name in self.leaking_sensors and was_test != sensor_is_test:
+                        del self.leaking_sensors[sensor_name]
+                        self.escalated_sensors.discard(sensor_name)
+                        self.latched_critical_sensors.discard(sensor_name)
+                        self.critical_sensors.discard(sensor_name)
                     if sensor_name not in self.leaking_sensors:
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))

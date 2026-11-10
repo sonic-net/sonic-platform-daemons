@@ -1715,6 +1715,33 @@ class TestLiquidCoolingUpdater(object):
         assert updater.system_table.set.call_count == writes_after_escalation
 
     @mock.patch('thermalctld.try_get')
+    def test_refresh_status_physical_replacing_test_leak_restarts_timer(self, mock_try_get):
+        """A physical MINOR replacing an expired test MINOR on the same sensor, without a
+        clear poll, does not inherit the test's start time or escalation."""
+        mock_chassis = MockChassis()
+        mock_chassis._liquid_cooling = MockLiquidCooling(num_sensors=1)
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR, max_minor=1)
+        lc.leakage_sensors[0].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+        updater._refresh_leak_status()
+        time.sleep(2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+        lc.leakage_sensors[0].is_test_leak = lambda: False
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
+        assert sys_fvs['test_leak'] == 'Disabled'
+
+        time.sleep(2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+    @mock.patch('thermalctld.try_get')
     def test_refresh_status_major_both_triggers(self, mock_try_get):
         """MIN-N count and time-based escalation can both be true at once; the
         system stays MAJOR and the MAJOR event is logged only once."""
