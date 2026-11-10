@@ -10,13 +10,17 @@ use platform_api::PlatformApi;
 
 use crate::bmc::ChassisThermalWatch;
 use crate::db::StateDb;
-use crate::ERR_DB_WRITE;
 use crate::event_log::BmcEventLogger;
 use crate::fan_updater::FanUpdater;
 use crate::polling::{PollingGate, PollingIntervals};
 use crate::temp_updater::TemperatureUpdater;
+use crate::ERR_DB_WRITE;
 
 pub struct Monitor {
+    pub shutdown_sender: Option<Arc<watch::Sender<bool>>>,
+    pub policy_request: Option<Arc<AtomicBool>>,
+    pub policy_stopped: Option<Arc<crate::TmStopped>>,
+    pub policy_interval: Arc<std::sync::atomic::AtomicU64>,
     initial_interval: f64,
     update_interval: f64,
     update_elapsed_threshold: f64,
@@ -79,6 +83,10 @@ impl Monitor {
             );
         }
         Self {
+            shutdown_sender: None,
+            policy_request: None,
+            policy_stopped: None,
+            policy_interval: Arc::new(std::sync::atomic::AtomicU64::new(60.0f64.to_bits())),
             initial_interval,
             update_interval,
             update_elapsed_threshold,
@@ -87,7 +95,20 @@ impl Monitor {
             intervals,
             fan_gate: PollingGate::new(),
             policy_gate: PollingGate::new(),
-            bmc_watch: is_switch_bmc.then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
+            bmc_watch: is_switch_bmc
+                .then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
+        }
+    }
+
+    pub(crate) fn run_policy(
+        &self,
+        platform: &mut dyn PlatformApi,
+    ) -> Result<(), platform_api::PlatformError> {
+        if let Some(request) = &self.policy_request {
+            request.store(true, Ordering::Release);
+            Ok(())
+        } else {
+            platform.tm_run_policy()
         }
     }
 
@@ -183,7 +204,10 @@ impl Monitor {
             // platform.json may throttle the fan update to its own interval.
             // Every Mellanox device sets one shorter than the cycle, so this is
             // due every time today.
-            if self.fan_gate.is_due("fan_drawer", self.intervals.fan, begin) {
+            if self
+                .fan_gate
+                .is_due("fan_drawer", self.intervals.fan, begin)
+            {
                 match self.fan_updater.update(&mut *platform, db, &stopping) {
                     Ok(()) => {}
                     Err(crate::fan_updater::UpdateError::Platform(e)) => {
@@ -198,9 +222,9 @@ impl Monitor {
 
             // Temperature update: needs &mut self (updates min/max_recorded).
             // Each thermal may carry its own interval.
-            if let Err(e) = self
-                .temperature_updater
-                .update(platform, db, &self.intervals, begin, &stopping)
+            if let Err(e) =
+                self.temperature_updater
+                    .update(platform, db, &self.intervals, begin, &stopping)
             {
                 log::warn!("temperature update failed: {e}");
             }
@@ -229,22 +253,35 @@ impl Monitor {
                     // reproduces that.  60 is the base class default, and what
                     // a platform whose thermal_policy.json omits the key gets.
                     None => {
-                        let v = platform.tm_get_interval().ok().flatten().unwrap_or(60.0);
-                        self.policy_gate
-                            .is_due("policy", Some(v), if started_ready { loop_start } else { begin });
+                        let v = if self.policy_request.is_some() {
+                            f64::from_bits(self.policy_interval.load(Ordering::Acquire))
+                        } else {
+                            platform.tm_get_interval().ok().flatten().unwrap_or(60.0)
+                        };
+                        let v = if v.is_finite() && v >= 0.0 && v <= u32::MAX as f64 {
+                            v
+                        } else {
+                            log::warn!("Invalid thermal policy interval {v}; using 60 seconds");
+                            60.0
+                        };
+                        self.policy_gate.is_due(
+                            "policy",
+                            Some(v),
+                            if started_ready { loop_start } else { begin },
+                        );
                         policy_interval = Some(v);
                         // Seeded, then asked: a zero interval is due on the
                         // cycle it was seeded from, and Python runs it there
                         // too -- `stop_event.wait(0)` returns at once.
                         if self.policy_gate.is_due("policy", Some(v), begin) {
-                            if let Err(e) = platform.tm_run_policy() {
+                            if let Err(e) = self.run_policy(platform) {
                                 log::warn!("run_policy failed: {e}");
                             }
                         }
                     }
                     Some(v) => {
                         if self.policy_gate.is_due("policy", Some(v), begin) {
-                            if let Err(e) = platform.tm_run_policy() {
+                            if let Err(e) = self.run_policy(platform) {
                                 log::warn!("run_policy failed: {e}");
                             }
                         }
@@ -256,8 +293,11 @@ impl Monitor {
             // The fallback is not clamped to `update_interval`, though
             // `resolve` may have shrunk that below `initial_interval`; see
             // `pmon_common::cadence` for why that stays as Python has it.
-            wait_time =
-                pmon_common::cadence::next_wait(elapsed, self.update_interval, self.initial_interval);
+            wait_time = pmon_common::cadence::next_wait(
+                elapsed,
+                self.update_interval,
+                self.initial_interval,
+            );
 
             if elapsed > self.update_elapsed_threshold {
                 log::warn!(
@@ -308,7 +348,10 @@ mod tests {
     }
 
     impl PlatformApi for FakePlatform {
-        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
+        fn get_chassis_info(
+            &mut self,
+            _cols: ChassisInfoCols,
+        ) -> Result<ChassisInfo, PlatformError> {
             Ok(ChassisInfo::default())
         }
 
@@ -332,22 +375,38 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
-            self.log.lock().unwrap().push("fans");
+        fn get_fan_drawers(
+            &mut self,
+            _cols: FanDrawerInfoCols,
+        ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+            if _cols != FanDrawerInfoCols::STATUS_LED {
+                self.log.lock().unwrap().push("fans");
+            }
             if self.fail_fans {
                 return Err(PlatformError::Backend("fan read failed".into()));
             }
             if self.one_drawer {
-                return Ok(vec![FanDrawerInfo { name: "drawer1".to_string(), ..Default::default() }]);
+                return Ok(vec![FanDrawerInfo {
+                    name: "drawer1".to_string(),
+                    ..Default::default()
+                }]);
             }
             Ok(Vec::new())
         }
 
-        fn get_fans(&mut self, _cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(
+            &mut self,
+            _cols: FanInfoCols,
+            _absorb: bool,
+        ) -> Result<Vec<FanInfo>, PlatformError> {
             Ok(Vec::new())
         }
 
-        fn set_fan_led(&mut self, _: &platform_api::DeviceKey, _: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+        fn set_fan_led(
+            &mut self,
+            _: &platform_api::DeviceKey,
+            _: platform_api::LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
             Ok(Some(true))
         }
 
@@ -364,11 +423,29 @@ mod tests {
         }
     }
 
-
     struct Rig {
         platform: FakePlatform,
         log: Log,
         rx: watch::Receiver<bool>,
+    }
+
+    #[tokio::test]
+    async fn invalid_vendor_intervals_do_not_abort_monitoring() {
+        tokio::time::pause();
+        for interval in [f64::NAN, f64::INFINITY, -1.0, f64::MAX] {
+            let mut rig = rig(2);
+            rig.platform.policy_interval = interval;
+            let db = MockDb::new(false);
+            let mut monitor =
+                Monitor::with_env(1.0, 10.0, 30.0, PollingIntervals::default(), false);
+            assert_eq!(
+                monitor
+                    .run(&mut rig.platform, &db.db, ready(), rig.rx)
+                    .await,
+                None
+            );
+            assert!(rig.log.lock().unwrap().contains(&"thermals"));
+        }
     }
 
     /// A manager that is already up, which is what every test below but the
@@ -465,7 +542,10 @@ mod tests {
             .run(&mut r.platform, &m.db, ready(), r.rx.clone())
             .await;
         let one = start.elapsed().as_secs_f64();
-        assert!((one - 1.0).abs() < 0.5, "first pass waited {one}s, expected ~1");
+        assert!(
+            (one - 1.0).abs() < 0.5,
+            "first pass waited {one}s, expected ~1"
+        );
 
         let start = tokio::time::Instant::now();
         let mut r = rig(3);
@@ -475,7 +555,10 @@ mod tests {
             .await;
         let three = start.elapsed().as_secs_f64();
         // 1 (initial) + 10 + 10, the cycles themselves taking no time.
-        assert!((three - 21.0).abs() < 0.5, "three passes took {three}s, expected ~21");
+        assert!(
+            (three - 21.0).abs() < 0.5,
+            "three passes took {three}s, expected ~21"
+        );
     }
 
     // ── Failure handling ──────────────────────────────────────────────────
@@ -511,7 +594,11 @@ mod tests {
             .await;
 
         assert_eq!(code, Some(crate::ERR_DB_WRITE));
-        assert_eq!(*r.log.lock().unwrap(), ["fans"], "nothing after the failed pass ran");
+        assert_eq!(
+            *r.log.lock().unwrap(),
+            ["fans"],
+            "nothing after the failed pass ran"
+        );
     }
 
     /// And the control: a monitor told to stop leaves with no code of its own.
@@ -535,7 +622,15 @@ mod tests {
         monitor(0.0)
             .run(&mut r.platform, &m.db, ready(), r.rx.clone())
             .await;
-        assert_eq!(r.log.lock().unwrap().iter().filter(|e| **e == "policy").count(), 2);
+        assert_eq!(
+            r.log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| **e == "policy")
+                .count(),
+            2
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -546,7 +641,15 @@ mod tests {
         monitor(0.0)
             .run(&mut r.platform, &m.db, ready(), r.rx.clone())
             .await;
-        assert_eq!(r.log.lock().unwrap().iter().filter(|e| **e == "thermals").count(), 2);
+        assert_eq!(
+            r.log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| **e == "thermals")
+                .count(),
+            2
+        );
     }
 
     // ── Shutdown ──────────────────────────────────────────────────────────
@@ -595,7 +698,10 @@ mod tests {
             inner: FakePlatform,
         }
         impl PlatformApi for SlowPlatform {
-            fn get_chassis_info(&mut self, cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
+            fn get_chassis_info(
+                &mut self,
+                cols: ChassisInfoCols,
+            ) -> Result<ChassisInfo, PlatformError> {
                 self.inner.get_chassis_info(cols)
             }
             fn get_thermals(
@@ -606,13 +712,24 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(30));
                 self.inner.get_thermals(cols, skip)
             }
-            fn get_fan_drawers(&mut self, cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+            fn get_fan_drawers(
+                &mut self,
+                cols: FanDrawerInfoCols,
+            ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
                 self.inner.get_fan_drawers(cols)
             }
-            fn get_fans(&mut self, cols: FanInfoCols, absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+            fn get_fans(
+                &mut self,
+                cols: FanInfoCols,
+                absorb: bool,
+            ) -> Result<Vec<FanInfo>, PlatformError> {
                 self.inner.get_fans(cols, absorb)
             }
-            fn set_fan_led(&mut self, a: &platform_api::DeviceKey, c: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+            fn set_fan_led(
+                &mut self,
+                a: &platform_api::DeviceKey,
+                c: platform_api::LedColor,
+            ) -> Result<Option<bool>, PlatformError> {
                 self.inner.set_fan_led(a, c)
             }
             fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
@@ -683,7 +800,11 @@ mod tests {
         monitor(0.0)
             .run(&mut r.platform, &m.db, ready(), r.rx.clone())
             .await;
-        assert_eq!(*r.log.lock().unwrap(), ["fans", "thermals"], "no policy on cycle 1");
+        assert_eq!(
+            *r.log.lock().unwrap(),
+            ["fans", "thermals"],
+            "no policy on cycle 1"
+        );
     }
 
     /// The updaters do not wait for the thermal manager.  This is the whole
@@ -726,7 +847,10 @@ mod tests {
             cycles: usize,
         }
         impl PlatformApi for LateManager {
-            fn get_chassis_info(&mut self, cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
+            fn get_chassis_info(
+                &mut self,
+                cols: ChassisInfoCols,
+            ) -> Result<ChassisInfo, PlatformError> {
                 self.inner.get_chassis_info(cols)
             }
             fn get_thermals(
@@ -741,10 +865,17 @@ mod tests {
                 }
                 self.inner.get_thermals(cols, skip)
             }
-            fn get_fan_drawers(&mut self, cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+            fn get_fan_drawers(
+                &mut self,
+                cols: FanDrawerInfoCols,
+            ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
                 self.inner.get_fan_drawers(cols)
             }
-            fn get_fans(&mut self, cols: FanInfoCols, absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+            fn get_fans(
+                &mut self,
+                cols: FanInfoCols,
+                absorb: bool,
+            ) -> Result<Vec<FanInfo>, PlatformError> {
                 self.inner.get_fans(cols, absorb)
             }
             fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
@@ -761,15 +892,22 @@ mod tests {
         r.platform.policy_interval = 0.0;
         let log = r.log.clone();
         let not_yet = Arc::new(AtomicBool::new(false));
-        let mut late =
-            LateManager { inner: r.platform, ready: Arc::clone(&not_yet), cycles: 0 };
+        let mut late = LateManager {
+            inner: r.platform,
+            ready: Arc::clone(&not_yet),
+            cycles: 0,
+        };
         let m = MockDb::new(false);
         monitor(0.0)
             .run(&mut late, &m.db, not_yet, r.rx.clone())
             .await;
 
         let log = log.lock().unwrap();
-        assert_eq!(log.iter().filter(|e| **e == "thermals").count(), 5, "{log:?}");
+        assert_eq!(
+            log.iter().filter(|e| **e == "thermals").count(),
+            5,
+            "{log:?}"
+        );
         assert_eq!(
             log.iter().filter(|e| **e == "policy").count(),
             3,
@@ -789,7 +927,10 @@ mod tests {
     async fn a_platform_with_no_policy_interval_gets_pythons_default() {
         struct Silent(FakePlatform);
         impl PlatformApi for Silent {
-            fn get_chassis_info(&mut self, cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
+            fn get_chassis_info(
+                &mut self,
+                cols: ChassisInfoCols,
+            ) -> Result<ChassisInfo, PlatformError> {
                 self.0.get_chassis_info(cols)
             }
             fn get_thermals(
@@ -799,10 +940,17 @@ mod tests {
             ) -> Result<Vec<ThermalInfo>, PlatformError> {
                 self.0.get_thermals(cols, skip)
             }
-            fn get_fan_drawers(&mut self, cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+            fn get_fan_drawers(
+                &mut self,
+                cols: FanDrawerInfoCols,
+            ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
                 self.0.get_fan_drawers(cols)
             }
-            fn get_fans(&mut self, cols: FanInfoCols, absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+            fn get_fans(
+                &mut self,
+                cols: FanInfoCols,
+                absorb: bool,
+            ) -> Result<Vec<FanInfo>, PlatformError> {
                 self.0.get_fans(cols, absorb)
             }
             fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
@@ -816,7 +964,9 @@ mod tests {
         let log = r.log.clone();
         let mut silent = Silent(r.platform);
         let m = MockDb::new(false);
-        monitor(0.0).run(&mut silent, &m.db, ready(), r.rx.clone()).await;
+        monitor(0.0)
+            .run(&mut silent, &m.db, ready(), r.rx.clone())
+            .await;
 
         // 60 s has not passed in one cycle, so the policy has not run.
         assert_eq!(*log.lock().unwrap(), ["fans", "thermals"]);

@@ -7,13 +7,16 @@
 mod fsio;
 #[cfg(all(test, feature = "parity"))]
 mod parity;
+mod storage;
 
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
 use clap::Parser;
-use platform_api::{PlatformApi, StorageDeviceInfo};
+#[cfg(test)]
+use platform_api::PlatformApi;
+use platform_api::StorageDeviceInfo;
 use platform_provider::PlatformImpl;
 use pmon_common::cycles::{signal_name, Cycles, SignalLog, Tick};
 use pmon_common::db::{self, TableLike};
@@ -21,6 +24,7 @@ use pmon_common::logging;
 use pmon_common::report_once::Latch;
 
 use fsio::{Reconciler, FSIO_RW_JSON_FILE, FSSTATS_SYNC_KEY};
+use storage::{ReadError, StorageSource, StorageWorker};
 
 const SYSLOG_IDENTIFIER: &str = "stormond";
 
@@ -87,7 +91,10 @@ struct Intervals {
 
 impl Default for Intervals {
     fn default() -> Self {
-        Self { poll: DEFAULT_POLL, sync: DEFAULT_SYNC }
+        Self {
+            poll: DEFAULT_POLL,
+            sync: DEFAULT_SYNC,
+        }
     }
 }
 
@@ -153,17 +160,20 @@ impl Intervals {
 ///
 /// A disk no utility class handles gets no row (`publish_static`,
 /// `publish_dynamic`), so it can have no counters either -- and leaving it in
-/// the list both baselines are checked against would sink them both.  The
-/// STATE_DB one requires a row per disk, and the file would carry nulls for
-/// it, which the loader rejects.  Every restart would then start the totals
-/// over from the since-boot reading.
+/// the tracked list would manufacture an unknown baseline for an unsupported
+/// disk. Keep unavailable inventory separate. Each supported disk selects its
+/// own valid STATE_DB or file baseline, independently of other disks.
 ///
 /// Python has exactly that defect: `StorageDevices.devices` keeps a `None` for
 /// such a disk, and `stormond:DaemonStorage._load_fsio_rw_statedb` and
 /// `sync_fsio_rw_json` iterate every key while the publishers skip the `None`
 /// ones.  Not reproduced: the counters are the reason this daemon exists.
 fn tracked_disks(devices: &[StorageDeviceInfo]) -> Vec<String> {
-    devices.iter().filter(|d| d.available).map(|d| d.name.clone()).collect()
+    devices
+        .iter()
+        .filter(|d| d.available)
+        .map(|d| d.name.clone())
+        .collect()
 }
 
 fn formatted_time() -> String {
@@ -176,7 +186,8 @@ fn publish_static(devices: &[StorageDeviceInfo], table: &dyn TableLike) {
         if !d.available {
             pmon_common::notice!(
                 "{} does not have an instantiated object. Static Information cannot be gathered.",
-                d.name);
+                d.name
+            );
             continue;
         }
         // The model or the serial raised: Python's per-device `except` in
@@ -187,10 +198,17 @@ fn publish_static(devices: &[StorageDeviceInfo], table: &dyn TableLike) {
             continue;
         }
         pmon_common::notice!(
-            "Storage Device: {}, Device Model: {}, Serial: {}", d.name, d.model, d.serial);
+            "Storage Device: {}, Device Model: {}, Serial: {}",
+            d.name,
+            d.model,
+            d.serial
+        );
         if let Err(e) = table.set(
             &d.name,
-            &[("device_model", d.model.clone()), ("serial", d.serial.clone())],
+            &[
+                ("device_model", d.model.clone()),
+                ("serial", d.serial.clone()),
+            ],
         ) {
             log::error!("get_static_fields_update_state_db() failed with: {e}");
         }
@@ -198,17 +216,14 @@ fn publish_static(devices: &[StorageDeviceInfo], table: &dyn TableLike) {
 }
 
 /// Everything that moves, including the reconciled lifetime totals.
-fn publish_dynamic(
-    devices: &[StorageDeviceInfo],
-    reconciler: &Reconciler,
-    table: &dyn TableLike,
-) {
+fn publish_dynamic(devices: &[StorageDeviceInfo], reconciler: &Reconciler, table: &dyn TableLike) {
     for d in devices {
         if !d.available {
             pmon_common::notice!(
                 "Storage device '{}' does not have an instantiated object. \
                  Dynamic Information cannot be gathered.",
-                d.name);
+                d.name
+            );
             continue;
         }
         // A reading raised: the per-device `except` in
@@ -221,7 +236,10 @@ fn publish_dynamic(
 
         let (latest_reads, latest_writes) = (d.fs_io_reads, d.fs_io_writes);
         let num = |v: Option<i64>| {
-            v.map_or_else(|| pmon_common::fmt::NOT_AVAILABLE.to_string(), |n| n.to_string())
+            v.map_or_else(
+                || pmon_common::fmt::NOT_AVAILABLE.to_string(),
+                |n| n.to_string(),
+            )
         };
 
         // A counter that could not be read keeps the last known-good values,
@@ -239,9 +257,9 @@ fn publish_dynamic(
         // `try`, and writes nothing for the disk, so last cycle's row stays;
         // republishing the same values here comes to the same thing.  What
         // must not reach the table is a placeholder: these four fields are
-        // what both baselines are read from, and an "N/A" in them would void
-        // the STATE_DB one at the next restart and the file at the next sync
-        // -- for every disk, since a baseline missing one disk is none.
+        // what both baselines are read from. An "N/A" would invalidate this
+        // disk's STATE_DB baseline; file sync must retain its previous counters
+        // while continuing to persist the other healthy disks.
         let [published_reads, published_writes, total_reads, total_writes] =
             match (latest_reads, latest_writes) {
                 (Some(r), Some(w)) if (r, w) != (0, 0) => {
@@ -305,15 +323,26 @@ fn publish_dynamic(
         pmon_common::notice!(
             "Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, \
              FS IO Reads: {}, FS IO Writes: {}",
-            d.name, d.firmware, d.health, d.temperature, total_reads, total_writes);
+            d.name,
+            d.firmware,
+            d.health,
+            d.temperature,
+            total_reads,
+            total_writes
+        );
         // This cycle's readings, not what was published: a failed read still
         // shows 0 here, which is how the log tells it apart.
         pmon_common::notice!(
             "Latest FSIO Reads: {}, Latest FSIO Writes: {}",
-            num(latest_reads), num(latest_writes));
+            num(latest_reads),
+            num(latest_writes)
+        );
         pmon_common::notice!(
             "Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}",
-            d.disk_io_reads, d.disk_io_writes, d.reserved_blocks);
+            d.disk_io_reads,
+            d.disk_io_writes,
+            d.reserved_blocks
+        );
         pmon_common::notice!("Last successful sync time to STATE_DB: {last_sync}");
     }
 }
@@ -347,9 +376,16 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// cut and nothing else -- reporting the write as failed would be untrue, and
 /// the caller would neither record the sync time nor restart its interval.
 fn sync_parent_dir(path: &Path) {
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
-        log::warn!("Unable to sync {} after writing {}: {e}", dir.display(), path.display());
+        log::warn!(
+            "Unable to sync {} after writing {}: {e}",
+            dir.display(),
+            path.display()
+        );
     }
 }
 
@@ -368,16 +404,17 @@ fn sync_to_disk_at(
     // disks in it silently resets them to zero, and the next boot has no way
     // of telling that apart from a genuinely fresh switch.
     if disks.is_empty() {
-        log::warn!("No storage devices to sync; leaving {} alone", path.display());
         return Ok(None);
     }
     pmon_common::notice!(
-        "Syncing total and latest procfs reads and writes from STATE_DB to JSON file");
+        "Syncing total and latest procfs reads and writes from STATE_DB to JSON file"
+    );
     let when = formatted_time();
     // A table that cannot be read writes no file: the baseline already on disk
     // is worth more than one built from nothing.  Python's `sync_fsio_rw_json`
     // reads and dumps inside one `try`, so a failed `hget` skips the dump.
-    let doc = match fsio::sync_document(disks, table, &when) {
+    let previous = std::fs::read_to_string(path).ok();
+    let doc = match fsio::sync_document_with_previous(disks, table, &when, previous.as_deref()) {
         Ok(doc) => doc,
         Err(e) => {
             log::error!("Unable to sync state_db to disk: {e}");
@@ -423,8 +460,8 @@ fn sync_to_disk_at(
 /// taking it again would double the slowest thing this daemon does for no
 /// newer answer.
 #[allow(clippy::too_many_arguments)]
-async fn run(
-    platform: &mut dyn PlatformApi,
+async fn run<S: StorageSource + ?Sized>(
+    platform: &mut S,
     table: &dyn TableLike,
     config: Option<&dyn TableLike>,
     reconciler: &Reconciler,
@@ -434,7 +471,7 @@ async fn run(
     cycles: &mut Cycles,
 ) -> i32 {
     let mut intervals = Intervals::default();
-    let mut since_sync = Duration::ZERO;
+    let mut last_sync = tokio::time::Instant::now();
     let mut read = Latch::new();
 
     let code = loop {
@@ -450,30 +487,33 @@ async fn run(
 
         let devices = match first.take() {
             Some(devices) => Ok(devices),
-            None => platform.get_storage_devices(),
+            None => platform.read_storage(cycles).await,
         };
         match devices {
             Ok(devices) => {
                 pmon_common::recovered!(read, "storage read recovered");
                 publish_dynamic(&devices, reconciler, table);
             }
-            Err(e) => {
+            Err(ReadError::Stopped(code)) => break code,
+            Err(ReadError::Backend(e)) => {
                 // Same `except` on the Python side, so the same level: the
                 // read and the write it guards are one handler in
                 // `stormond:DaemonStorage.get_dynamic_fields_update_state_db`.
                 pmon_common::fail_once_notice!(
-                    read, "get_dynamic_fields_update_state_db() failed with: {e}");
+                    read,
+                    "get_dynamic_fields_update_state_db() failed with: {e}"
+                );
             }
         }
 
-        match cycles.next(intervals.poll, platform).await {
+        match platform.next_cycle(cycles, intervals.poll).await {
             Tick::Exit(code) => break code,
-            Tick::Cycle => since_sync += intervals.poll,
+            Tick::Cycle => {}
         }
 
-        if sync_due(since_sync, intervals.poll, intervals.sync) {
+        if !disks.is_empty() && sync_due(last_sync.elapsed(), intervals.poll, intervals.sync) {
             match sync_to_disk_at(json_path, disks, table) {
-                Ok(Some(_)) => since_sync = Duration::ZERO,
+                Ok(Some(_)) => last_sync = tokio::time::Instant::now(),
                 // Not reset, so a sync that did not happen is tried again at
                 // the next poll, at the price of these two lines each poll
                 // while the file stays unwritable.  Python stamps its sync
@@ -513,11 +553,13 @@ async fn run(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let mut cycles =
+        Cycles::signals_logged(SignalLog::Notice).expect("failed to install the signal handlers");
     let args = Args::parse();
     logging::init(SYSLOG_IDENTIFIER);
     pmon_common::notice!("Starting Storage Monitoring Daemon");
 
-    let mut platform = match platform_provider::open(SYSLOG_IDENTIFIER, args.platform_api) {
+    let platform = match platform_provider::open(SYSLOG_IDENTIFIER, args.platform_api) {
         Ok(p) => p,
         Err(e) => {
             log::error!("Failed to load the storage utility: {e}");
@@ -525,33 +567,28 @@ async fn main() {
         }
     };
 
-    // After the platform is opened, not before as Python's `DaemonBase`
-    // orders it, and the order is load-bearing.  Opening the PyO3 bridge ends
-    // with `signal.signal(SIGTERM/SIGINT, SIG_DFL)` -- a real `sigaction`,
-    // undoing whatever a vendor chassis installed -- and tokio installs its
-    // own `sigaction` once per signal, on first registration.  Registered
-    // first, the handlers would be overwritten and never put back, and every
-    // SIGTERM for the life of the process would kill it before the shutdown
-    // sync runs -- the one a planned reboot depends on.  What the Python
-    // order buys -- a SIGTERM during the import handled rather than fatal --
-    // costs nothing here: nothing has been published, and the file on disk is
-    // still the last sync's.
+    let mut platform = match StorageWorker::new(platform) {
+        Ok(worker) => worker,
+        Err(error) => {
+            log::error!("Failed to start the storage reader: {error}");
+            std::process::exit(STORAGEUTIL_LOAD_ERROR);
+        }
+    };
+
+    // Signal handling was installed before vendor initialization. The bridge
+    // preserves those dispositions when this or another platform handle opens.
     let code = start(
         &mut platform,
         &db::open,
         Path::new(FSIO_RW_JSON_FILE),
         // stormond's own `signal_handler` announces at NOTICE, where the
         // other daemons' `log_info` is dropped.
-        &mut Cycles::signals_logged(SignalLog::Notice)
-            .expect("failed to install the signal handlers"),
+        &mut cycles,
     )
     .await;
 
     pmon_common::notice!("Shutting down Storage Monitoring Daemon");
-    // Whatever the implementation set up, released before the process goes
-    // away.  The PyO3 bridge runs Python's `atexit` handlers here; `main` does
-    // not need to know that is what it holds.
-    platform.finalize();
+    platform.shutdown().await;
     std::process::exit(code);
 }
 
@@ -561,8 +598,8 @@ async fn main() {
 /// exists to carry lifetime counters across a reboot, and both sources of them
 /// -- the JSON file and the table the last run left -- are read here, before
 /// anything is published over the top.
-async fn start(
-    platform: &mut dyn PlatformApi,
+async fn start<S: StorageSource + ?Sized>(
+    platform: &mut S,
     open: db::Opener<'_>,
     json_path: &Path,
     cycles: &mut Cycles,
@@ -607,9 +644,10 @@ async fn start(
     //
     // An empty-but-successful enumeration stays allowed: a platform with no
     // disks has nothing to publish and no baseline to lose.
-    let devices = match platform.get_storage_devices() {
+    let devices = match platform.read_storage(cycles).await {
         Ok(devices) => devices,
-        Err(e) => {
+        Err(ReadError::Stopped(code)) => return code,
+        Err(ReadError::Backend(e)) => {
             log::error!("Failed to load the storage utility: {e}");
             return STORAGEUTIL_LOAD_ERROR;
         }
@@ -619,8 +657,16 @@ async fn start(
     // Both baselines are read before anything is published: the STATE_DB one is
     // about to be overwritten by this cycle's own numbers.
     let json_text = Reconciler::read_json_file(json_path);
-    let reconciler = Reconciler::load(&disks, json_text.as_deref(), table.as_ref());
-    log::info!("Reconciling lifetime counters against {:?}", reconciler.baseline());
+    let discovered: Vec<String> = devices.iter().map(|d| d.name.clone()).collect();
+    if disks.is_empty() {
+        log::warn!("No readable storage devices; periodic sync is disabled");
+    }
+    let reconciler =
+        Reconciler::load_known(&disks, &discovered, json_text.as_deref(), table.as_ref());
+    log::info!(
+        "Reconciling lifetime counters against {:?}",
+        reconciler.baseline()
+    );
 
     publish_static(&devices, table.as_ref());
 
@@ -641,6 +687,141 @@ async fn start(
 mod tests {
     use super::*;
     use pmon_common::db::MockTable;
+
+    fn seed_sync_counters(table: &MockTable) {
+        table
+            .set(
+                "sda",
+                &[
+                    ("latest_fsio_reads", "5".into()),
+                    ("latest_fsio_writes", "6".into()),
+                    ("total_fsio_reads", "7".into()),
+                    ("total_fsio_writes", "8".into()),
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn sigterm_syncs_while_the_storage_worker_is_blocked() {
+        const CHILD: &str = "STORMOND_BLOCKED_READ_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::sigterm_syncs_while_the_storage_worker_is_blocked",
+                ])
+                .env(CHILD, "1")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            while child.try_wait().unwrap().is_none() {
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let output = child.wait_with_output().unwrap();
+                    panic!(
+                        "blocked-read shutdown timed out: {}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        struct Slow {
+            calls: usize,
+            blocked: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+            finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl PlatformApi for Slow {
+            fn get_storage_devices(
+                &mut self,
+            ) -> Result<Vec<StorageDeviceInfo>, platform_api::PlatformError> {
+                self.calls += 1;
+                if self.calls == 2 {
+                    self.blocked.send(()).unwrap();
+                    self.release.recv().unwrap();
+                    self.finished
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                Ok(vec![disk("sda")])
+            }
+        }
+        let (blocked, observed) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut worker = StorageWorker::new(Slow {
+            calls: 0,
+            blocked,
+            release: wait,
+            finished: std::sync::Arc::clone(&finished),
+        })
+        .unwrap();
+        let table = MockTable::new();
+        let config = MockTable::new();
+        config
+            .set(INTERVALS_KEY, &[("daemon_polling_interval", "0".into())])
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fsio.json");
+        let mut cycles = Cycles::signals_logged(SignalLog::Notice).unwrap();
+        let signal = std::thread::spawn(move || {
+            observed.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert!(std::process::Command::new("kill")
+                .args(["-TERM", &std::process::id().to_string()])
+                .status()
+                .unwrap()
+                .success());
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let open = |_: &str, name: &str| -> Result<Box<dyn TableLike>, String> {
+                Ok(Box::new(if name == STORAGE_DEVICE_TABLE {
+                    table.clone()
+                } else {
+                    config.clone()
+                }))
+            };
+            let began = std::time::Instant::now();
+            assert_eq!(start(&mut worker, &open, &path, &mut cycles).await, 143);
+            assert!(
+                !finished.load(std::sync::atomic::Ordering::SeqCst),
+                "the vendor call is still blocked"
+            );
+            let saved: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                saved["sda"]["total_fsio_reads"].as_str(),
+                table.field("sda", "total_fsio_reads").as_deref()
+            );
+            assert!(saved["boot_id"].as_str().is_some());
+            assert!(table
+                .field(FSSTATS_SYNC_KEY, "successful_sync_time")
+                .is_some());
+            worker.shutdown().await;
+            assert!(
+                began.elapsed() < Duration::from_secs(3),
+                "sync/exit must not wait for vendor completion"
+            );
+            release.send(()).unwrap();
+        });
+        signal.join().unwrap();
+    }
 
     fn disk(name: &str) -> StorageDeviceInfo {
         StorageDeviceInfo {
@@ -665,7 +846,10 @@ mod tests {
     fn the_static_row_is_the_model_and_the_serial() {
         let t = MockTable::new();
         publish_static(&[disk("sda")], &t);
-        assert_eq!(t.field("sda", "device_model").as_deref(), Some("SAMSUNG MZ"));
+        assert_eq!(
+            t.field("sda", "device_model").as_deref(),
+            Some("SAMSUNG MZ")
+        );
         assert_eq!(t.field("sda", "serial").as_deref(), Some("S3Z"));
     }
 
@@ -681,8 +865,14 @@ mod tests {
         broken.error = Some("smartctl timed out".to_string());
         publish_static(&[broken.clone(), disk("sdb")], &t);
         publish_dynamic(&[broken, disk("sdb")], &Reconciler::default(), &t);
-        assert!(log.logged(log::Level::Error, "get_static_fields_update_state_db() failed with: smartctl failed"));
-        assert!(log.logged(log::Level::Info, "get_dynamic_fields_update_state_db() failed with: smartctl timed out"));
+        assert!(log.logged(
+            log::Level::Error,
+            "get_static_fields_update_state_db() failed with: smartctl failed"
+        ));
+        assert!(log.logged(
+            log::Level::Info,
+            "get_dynamic_fields_update_state_db() failed with: smartctl timed out"
+        ));
         assert_eq!(t.row("sda"), None);
         assert_eq!(t.field("sdb", "serial").as_deref(), Some("S3Z"));
         assert_eq!(t.field("sdb", "firmware").as_deref(), Some("EDA7602Q"));
@@ -724,8 +914,15 @@ mod tests {
         let t = MockTable::new();
         publish_static(&devices, &t);
         publish_dynamic(&devices, &Reconciler::default(), &t);
-        t.set(fsio::FSSTATS_SYNC_KEY, &[("successful_sync_time", "x".to_string())]).unwrap();
-        assert_eq!(Reconciler::load(&disks, None, &t).baseline(), fsio::Baseline::StateDb);
+        t.set(
+            fsio::FSSTATS_SYNC_KEY,
+            &[("successful_sync_time", "x".to_string())],
+        )
+        .unwrap();
+        assert_eq!(
+            Reconciler::load(&disks, None, &t).baseline(),
+            fsio::Baseline::StateDb
+        );
 
         // And the file it synced, read with STATE_DB gone.
         let doc = fsio::sync_document(&disks, &t, "now").unwrap();
@@ -741,7 +938,9 @@ mod tests {
         std::fs::write(&path, "previous").unwrap();
         let t = MockTable::new();
         t.fail_reads("redis gone");
-        assert!(sync_to_disk_at(&path, &["sda".to_string()], &t).unwrap().is_none());
+        assert!(sync_to_disk_at(&path, &["sda".to_string()], &t)
+            .unwrap()
+            .is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "previous");
     }
 
@@ -762,25 +961,52 @@ mod tests {
     fn a_failed_counter_read_keeps_the_last_known_good_values() {
         let log = pmon_common::logging::capture();
         let t = MockTable::new();
-        t.set("sda", &[
-            ("latest_fsio_reads", "20706101".to_string()),
-            ("latest_fsio_writes", "20706102".to_string()),
-            ("total_fsio_reads", "20938935".to_string()),
-            ("total_fsio_writes", "20938936".to_string()),
-        ]).unwrap();
+        t.set(
+            "sda",
+            &[
+                ("latest_fsio_reads", "20706101".to_string()),
+                ("latest_fsio_writes", "20706102".to_string()),
+                ("total_fsio_reads", "20938935".to_string()),
+                ("total_fsio_writes", "20938936".to_string()),
+            ],
+        )
+        .unwrap();
         let mut d = disk("sda");
         d.fs_io_reads = Some(0);
         d.fs_io_writes = Some(0);
         publish_dynamic(&[d], &Reconciler::default(), &t);
-        assert_eq!(t.field("sda", "latest_fsio_reads").as_deref(), Some("20706101"));
-        assert_eq!(t.field("sda", "latest_fsio_writes").as_deref(), Some("20706102"));
-        assert_eq!(t.field("sda", "total_fsio_reads").as_deref(), Some("20938935"));
-        assert_eq!(t.field("sda", "total_fsio_writes").as_deref(), Some("20938936"));
-        assert_eq!(t.field("sda", "health").as_deref(), Some("98"), "the rest still publishes");
-        assert!(log.logged(log::Level::Warn,
-            "FSIO counters unavailable for sda. Retaining last known-good FSIO values."));
-        assert!(log.logged(log::Level::Info, "Latest FSIO Reads: 0, Latest FSIO Writes: 0"),
-            "the log still shows the failed read");
+        assert_eq!(
+            t.field("sda", "latest_fsio_reads").as_deref(),
+            Some("20706101")
+        );
+        assert_eq!(
+            t.field("sda", "latest_fsio_writes").as_deref(),
+            Some("20706102")
+        );
+        assert_eq!(
+            t.field("sda", "total_fsio_reads").as_deref(),
+            Some("20938935")
+        );
+        assert_eq!(
+            t.field("sda", "total_fsio_writes").as_deref(),
+            Some("20938936")
+        );
+        assert_eq!(
+            t.field("sda", "health").as_deref(),
+            Some("98"),
+            "the rest still publishes"
+        );
+        assert!(log.logged(
+            log::Level::Warn,
+            "FSIO counters unavailable for sda. Retaining last known-good FSIO values."
+        ));
+        assert!(
+            log.logged(
+                log::Level::Info,
+                "Latest FSIO Reads: 0, Latest FSIO Writes: 0"
+            ),
+            "the log still shows the failed read"
+        );
     }
 
     /// With nothing published yet there is no last good value, and Python's
@@ -800,7 +1026,8 @@ mod tests {
     #[test]
     fn one_counter_at_zero_is_reconciled_as_usual() {
         let t = MockTable::new();
-        t.set("sda", &[("total_fsio_reads", "999".to_string())]).unwrap();
+        t.set("sda", &[("total_fsio_reads", "999".to_string())])
+            .unwrap();
         let mut d = disk("sda");
         d.fs_io_reads = Some(0);
         publish_dynamic(&[d], &Reconciler::default(), &t);
@@ -819,9 +1046,14 @@ mod tests {
         d.fs_io_reads = Some(0);
         d.fs_io_writes = Some(0);
         publish_dynamic(&[d], &Reconciler::default(), &t);
-        assert!(t.field("sda", "health").is_none(), "nothing published for the disk");
-        assert!(log.logged(log::Level::Info,
-            "get_dynamic_fields_update_state_db() failed with: redis went away"));
+        assert!(
+            t.field("sda", "health").is_none(),
+            "nothing published for the disk"
+        );
+        assert!(log.logged(
+            log::Level::Info,
+            "get_dynamic_fields_update_state_db() failed with: redis went away"
+        ));
     }
 
     /// A counter that could not be read at all is the same case as both at
@@ -837,11 +1069,18 @@ mod tests {
         publish_dynamic(&[d], &Reconciler::default(), &t);
         assert_eq!(t.field("sda", "latest_fsio_reads").as_deref(), Some("4242"));
         assert_eq!(t.field("sda", "total_fsio_writes").as_deref(), Some("2121"));
-        assert_eq!(t.field("sda", "health").as_deref(), Some("97"), "the rest still publishes");
-        assert!(log.logged(
-            log::Level::Info,
-            "Latest FSIO Reads: N/A, Latest FSIO Writes: 2121"
-        ), "the log still shows the reading that failed");
+        assert_eq!(
+            t.field("sda", "health").as_deref(),
+            Some("97"),
+            "the rest still publishes"
+        );
+        assert!(
+            log.logged(
+                log::Level::Info,
+                "Latest FSIO Reads: N/A, Latest FSIO Writes: 2121"
+            ),
+            "the log still shows the reading that failed"
+        );
     }
 
     /// And the reason it has to: these four fields are what both baselines
@@ -855,9 +1094,16 @@ mod tests {
         let mut d = disk("sda");
         d.fs_io_writes = None;
         publish_dynamic(&[d], &Reconciler::default(), &t);
-        t.set(FSSTATS_SYNC_KEY, &[("successful_sync_time", "x".to_string())]).unwrap();
+        t.set(
+            FSSTATS_SYNC_KEY,
+            &[("successful_sync_time", "x".to_string())],
+        )
+        .unwrap();
 
-        assert_eq!(Reconciler::load(&disks, None, &t).baseline(), fsio::Baseline::StateDb);
+        assert_eq!(
+            Reconciler::load(&disks, None, &t).baseline(),
+            fsio::Baseline::StateDb
+        );
         let doc = fsio::sync_document(&disks, &t, "now").unwrap();
         let r = Reconciler::load(&disks, Some(&doc), &MockTable::new());
         assert_eq!(r.baseline(), fsio::Baseline::Json);
@@ -870,16 +1116,29 @@ mod tests {
     fn the_sync_fires_before_the_period_would_be_overshot() {
         let (poll, sync) = (Duration::from_secs(3600), Duration::from_secs(86400));
         assert!(!sync_due(Duration::from_secs(0), poll, sync));
-        assert!(!sync_due(Duration::from_secs(82799), poll, sync), "one poll short");
-        assert!(sync_due(Duration::from_secs(82800), poll, sync), "the next poll would overshoot");
-        assert!(sync_due(Duration::from_secs(90000), poll, sync), "and after it, always");
+        assert!(
+            !sync_due(Duration::from_secs(82799), poll, sync),
+            "one poll short"
+        );
+        assert!(
+            sync_due(Duration::from_secs(82800), poll, sync),
+            "the next poll would overshoot"
+        );
+        assert!(
+            sync_due(Duration::from_secs(90000), poll, sync),
+            "and after it, always"
+        );
     }
 
     /// A poll longer than the sync period syncs every cycle, which is the only
     /// thing it can do -- and is what an operator asking for that has asked for.
     #[test]
     fn a_poll_longer_than_the_sync_period_syncs_every_cycle() {
-        assert!(sync_due(Duration::ZERO, Duration::from_secs(600), Duration::from_secs(300)));
+        assert!(sync_due(
+            Duration::ZERO,
+            Duration::from_secs(600),
+            Duration::from_secs(300)
+        ));
     }
 
     /// The file is written whole and moved into place, so a daemon killed
@@ -890,23 +1149,63 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("fsio-rw-stats.json");
         let t = MockTable::new();
-        t.set("sda", &[
-            ("latest_fsio_reads", "5".to_string()),
-            ("latest_fsio_writes", "6".to_string()),
-            ("total_fsio_reads", "7".to_string()),
-            ("total_fsio_writes", "8".to_string()),
-        ]).unwrap();
+        t.set(
+            "sda",
+            &[
+                ("latest_fsio_reads", "5".to_string()),
+                ("latest_fsio_writes", "6".to_string()),
+                ("total_fsio_reads", "7".to_string()),
+                ("total_fsio_writes", "8".to_string()),
+            ],
+        )
+        .unwrap();
 
-        let when = sync_to_disk_at(&path, &["sda".to_string()], &t).unwrap().expect("written");
+        let when = sync_to_disk_at(&path, &["sda".to_string()], &t)
+            .unwrap()
+            .expect("written");
         assert_eq!(
             t.field(FSSTATS_SYNC_KEY, "successful_sync_time").as_deref(),
             Some(when.as_str())
         );
-        assert!(!path.with_extension("json.tmp").exists(), "the temporary file is moved, not left");
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "the temporary file is moved, not left"
+        );
 
         let text = std::fs::read_to_string(&path).unwrap();
         let r = Reconciler::load(&["sda".to_string()], Some(&text), &MockTable::new());
-        assert_eq!(r.totals("sda", 1, 1), (8, 9), "the file reads back as a baseline");
+        assert_eq!(
+            r.totals("sda", 10, 10),
+            (12, 12),
+            "same-boot file recovery adds only the unrecorded delta"
+        );
+    }
+
+    #[test]
+    fn missing_or_malformed_counters_leave_the_saved_file_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fsio.json");
+        let table = MockTable::new();
+        seed_sync_counters(&table);
+        assert!(sync_to_disk_at(&path, &["sda".into()], &table)
+            .unwrap()
+            .is_some());
+        let saved = std::fs::read(&path).unwrap();
+        let stamp = table.field(FSSTATS_SYNC_KEY, "successful_sync_time");
+        table.hdel("sda", "latest_fsio_reads").unwrap();
+        assert!(sync_to_disk_at(&path, &["sda".into()], &table)
+            .unwrap()
+            .is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+        table
+            .set("sda", &[("latest_fsio_reads", "not-a-counter".into())])
+            .unwrap();
+        assert!(sync_to_disk_at(&path, &["sda".into()], &table)
+            .unwrap()
+            .is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+        assert_eq!(table.field(FSSTATS_SYNC_KEY, "successful_sync_time"), stamp);
+        assert!(!path.with_extension("json.tmp").exists());
     }
 
     /// The directory sync after the rename is best-effort: one that fails is
@@ -948,6 +1247,7 @@ mod tests {
     #[test]
     fn a_file_that_cannot_be_written_is_not_fatal() {
         let t = MockTable::new();
+        seed_sync_counters(&t);
         let disks = vec!["sda".to_string()];
         let path = Path::new("/nonexistent/dir/f.json");
         assert!(sync_to_disk_at(path, &disks, &t).unwrap().is_none());
@@ -963,14 +1263,23 @@ mod tests {
     fn a_sync_with_no_disks_leaves_the_baseline_alone() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("fsio-rw-stats.json");
-        std::fs::write(&path, r#"{"sda":{"total_fsio_reads":"7"},"successful_sync_time":"then"}"#)
-            .unwrap();
+        std::fs::write(
+            &path,
+            r#"{"sda":{"total_fsio_reads":"7"},"successful_sync_time":"then"}"#,
+        )
+        .unwrap();
 
         let t = MockTable::new();
-        assert!(sync_to_disk_at(&path, &[], &t).unwrap().is_none(), "nothing was written");
+        assert!(
+            sync_to_disk_at(&path, &[], &t).unwrap().is_none(),
+            "nothing was written"
+        );
 
         let after = std::fs::read_to_string(&path).unwrap();
-        assert!(after.contains("\"sda\""), "the existing baseline survived: {after}");
+        assert!(
+            after.contains("\"sda\""),
+            "the existing baseline survived: {after}"
+        );
     }
 
     /// A STATE_DB that will not take the sync time is reported as an error,
@@ -986,13 +1295,19 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("fsio-rw-stats.json");
         let t = MockTable::new();
-        t.set("sda", &[("total_fsio_reads", "7".to_string())]).unwrap();
+        seed_sync_counters(&t);
         t.fail_writes("redis is gone");
 
         let e = sync_to_disk_at(&path, &["sda".to_string()], &t)
             .expect_err("a table that will not take the sync time has to be reported");
-        assert!(e.contains("sync time"), "the error says what could not be recorded: {e}");
-        assert!(path.exists(), "the file was still written -- only the table write failed");
+        assert!(
+            e.contains("sync time"),
+            "the error says what could not be recorded: {e}"
+        );
+        assert!(
+            path.exists(),
+            "the file was still written -- only the table write failed"
+        );
     }
 
     struct FakePlatform {
@@ -1007,7 +1322,9 @@ mod tests {
         ) -> Result<Vec<StorageDeviceInfo>, platform_api::PlatformError> {
             self.calls += 1;
             if self.fail {
-                return Err(platform_api::PlatformError::Backend("smartctl missing".into()));
+                return Err(platform_api::PlatformError::Backend(
+                    "smartctl missing".into(),
+                ));
             }
             Ok(self.devices.clone())
         }
@@ -1021,15 +1338,34 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("f.json");
         let t = MockTable::new();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 143,
+        };
 
-        let code = run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-                       &path, None, &mut cycles).await;
+        let code = run(
+            &mut p,
+            &t,
+            None,
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &path,
+            None,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, 143);
         assert_eq!(p.calls, 3, "published before each wait, including the last");
         assert_eq!(t.field("sda", "total_fsio_reads").as_deref(), Some("4242"));
-        assert!(path.exists(), "the shutdown sync is what a reboot depends on");
+        assert!(
+            path.exists(),
+            "the shutdown sync is what a reboot depends on"
+        );
     }
 
     /// A daemon stopped by a signal says so once it has synced, in
@@ -1038,20 +1374,38 @@ mod tests {
     #[tokio::test]
     async fn a_signal_is_named_after_the_shutdown_sync() {
         tokio::time::pause();
-        let cases =
-            [(143, Some("Exiting with SIGTERM")), (130, Some("Exiting with SIGINT")), (1, None)];
+        let cases = [
+            (143, Some("Exiting with SIGTERM")),
+            (130, Some("Exiting with SIGINT")),
+            (1, None),
+        ];
         for (code, said) in cases {
             let log = pmon_common::logging::capture();
             let d = tempfile::tempdir().unwrap();
             let path = d.path().join("f.json");
             let t = MockTable::new();
-            let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+            let mut p = FakePlatform {
+                devices: vec![disk("sda")],
+                fail: false,
+                calls: 0,
+            };
             let mut cycles = Cycles::Fixed { remaining: 0, code };
 
-            run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()], &path, None,
-                &mut cycles).await;
-            assert!(log.logged(log::Level::Info,
-                "Syncing total and latest procfs reads and writes from STATE_DB to JSON file"));
+            run(
+                &mut p,
+                &t,
+                None,
+                &Reconciler::default(),
+                &["sda".to_string()],
+                &path,
+                None,
+                &mut cycles,
+            )
+            .await;
+            assert!(log.logged(
+                log::Level::Info,
+                "Syncing total and latest procfs reads and writes from STATE_DB to JSON file"
+            ));
             match said {
                 Some(line) => assert!(log.logged(log::Level::Info, line), "{code}"),
                 None => assert!(!log.contains("Exiting with"), "{code}"),
@@ -1066,10 +1420,26 @@ mod tests {
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
-        run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), None, &mut cycles).await;
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
+        run(
+            &mut p,
+            &t,
+            None,
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
         assert!(!t.is_empty(), "STATE_DB is the crash baseline");
     }
 
@@ -1082,10 +1452,26 @@ mod tests {
         publish_dynamic(&[disk("sda")], &Reconciler::default(), &t);
         let before = t.field("sda", "total_fsio_reads");
 
-        let mut p = FakePlatform { devices: vec![], fail: true, calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
-        run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), None, &mut cycles).await;
+        let mut p = FakePlatform {
+            devices: vec![],
+            fail: true,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
+        run(
+            &mut p,
+            &t,
+            None,
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(t.field("sda", "total_fsio_reads"), before);
     }
 
@@ -1103,7 +1489,9 @@ mod tests {
             self.calls += 1;
             // Read after this cycle's reload, so it is the next cycle's value.
             let next = (60 * (self.calls + 1)).to_string();
-            self.config.set(INTERVALS_KEY, &[("daemon_polling_interval", next)]).unwrap();
+            self.config
+                .set(INTERVALS_KEY, &[("daemon_polling_interval", next)])
+                .unwrap();
             Ok(vec![disk("sda")])
         }
     }
@@ -1121,16 +1509,39 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
         let config = MockTable::new();
-        config.set(INTERVALS_KEY, &[("daemon_polling_interval", "60".to_string())]).unwrap();
-        let mut p = Retuning { config: config.clone(), calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        config
+            .set(
+                INTERVALS_KEY,
+                &[("daemon_polling_interval", "60".to_string())],
+            )
+            .unwrap();
+        let mut p = Retuning {
+            config: config.clone(),
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
 
-        run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), None, &mut cycles).await;
+        run(
+            &mut p,
+            &t,
+            Some(&config),
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(p.calls, 3, "three passes");
         for secs in [60, 120, 180] {
             assert!(
-                log.logged(log::Level::Info, &format!("Polling Interval set to {secs} seconds")),
+                log.logged(
+                    log::Level::Info,
+                    &format!("Polling Interval set to {secs} seconds")
+                ),
                 "the pass that found {secs} announced it"
             );
         }
@@ -1139,15 +1550,23 @@ mod tests {
     /// CONFIG_DB set to sync every poll, so every cycle of a test is a sync.
     fn sync_every_cycle() -> MockTable {
         let config = MockTable::new();
-        config.set(INTERVALS_KEY, &[
-            ("daemon_polling_interval", "60".to_string()),
-            ("fsstats_sync_interval", "60".to_string()),
-        ]).unwrap();
+        config
+            .set(
+                INTERVALS_KEY,
+                &[
+                    ("daemon_polling_interval", "60".to_string()),
+                    ("fsstats_sync_interval", "60".to_string()),
+                ],
+            )
+            .unwrap();
         config
     }
 
     fn sync_times(t: &MockTable) -> usize {
-        t.writes().iter().filter(|(k, _)| k == FSSTATS_SYNC_KEY).count()
+        t.writes()
+            .iter()
+            .filter(|(k, _)| k == FSSTATS_SYNC_KEY)
+            .count()
     }
 
     /// A sync that comes due is done inside the loop, not only on the way out.
@@ -1157,10 +1576,26 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
         let config = sync_every_cycle();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
-        let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &d.path().join("f.json"), None, &mut cycles).await;
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 143,
+        };
+        let code = run(
+            &mut p,
+            &t,
+            Some(&config),
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, 143);
         assert_eq!(sync_times(&t), 3, "one per cycle, and one on the way out");
     }
@@ -1174,35 +1609,41 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
         let config = sync_every_cycle();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 143 };
-        let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &d.path().join("no-such-dir").join("f.json"), None, &mut cycles).await;
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 143,
+        };
+        let code = run(
+            &mut p,
+            &t,
+            Some(&config),
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("no-such-dir").join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, 143, "ran to the end");
         assert_eq!(p.calls, 3);
-        assert_eq!(sync_times(&t), 0, "no sync time for a sync that did not happen");
-        assert!(log.logged(log::Level::Warn, "Unable to sync latest and total procfs RW to disk"));
+        assert_eq!(
+            sync_times(&t),
+            0,
+            "no sync time for a sync that did not happen"
+        );
+        assert!(log.logged(
+            log::Level::Warn,
+            "Unable to sync latest and total procfs RW to disk"
+        ));
     }
 
     /// A platform whose third reading also makes the file's directory, so a
     /// sync that failed before then can succeed after.
-    struct MakesTheDirectory {
-        dir: std::path::PathBuf,
-        calls: usize,
-    }
-
-    impl PlatformApi for MakesTheDirectory {
-        fn get_storage_devices(
-            &mut self,
-        ) -> Result<Vec<StorageDeviceInfo>, platform_api::PlatformError> {
-            self.calls += 1;
-            if self.calls == 3 {
-                std::fs::create_dir(&self.dir).unwrap();
-            }
-            Ok(vec![disk("sda")])
-        }
-    }
-
     /// A sync that did not happen is tried again at the next poll, not a
     /// whole period later.  Polling every 60s against a 150s period, the
     /// second poll's sync fails and the third's succeeds; had the failure
@@ -1214,17 +1655,41 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().join("stormond");
         let t = MockTable::new();
+        seed_sync_counters(&t);
         let config = MockTable::new();
-        config.set(INTERVALS_KEY, &[
-            ("daemon_polling_interval", "60".to_string()),
-            ("fsstats_sync_interval", "150".to_string()),
-        ]).unwrap();
-        let mut p = MakesTheDirectory { dir: dir.clone(), calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 143 };
-        let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &dir.join("f.json"), None, &mut cycles).await;
-        assert_eq!(code, 143);
-        assert_eq!(sync_times(&t), 2, "the retry in the loop, and the one on the way out");
+        config
+            .set(
+                INTERVALS_KEY,
+                &[
+                    ("daemon_polling_interval", "60".to_string()),
+                    ("fsstats_sync_interval", "150".to_string()),
+                ],
+            )
+            .unwrap();
+        let last_sync = tokio::time::Instant::now();
+        tokio::time::advance(Duration::from_secs(120)).await;
+        assert!(sync_due(
+            last_sync.elapsed(),
+            Duration::from_secs(60),
+            Duration::from_secs(150)
+        ));
+        assert!(
+            sync_to_disk_at(&dir.join("f.json"), &["sda".to_string()], &t)
+                .unwrap()
+                .is_none()
+        );
+        std::fs::create_dir(&dir).unwrap();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(sync_due(
+            last_sync.elapsed(),
+            Duration::from_secs(60),
+            Duration::from_secs(150)
+        ));
+        assert!(
+            sync_to_disk_at(&dir.join("f.json"), &["sda".to_string()], &t)
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// The sync time is written bare in Python
@@ -1237,16 +1702,38 @@ mod tests {
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
+        seed_sync_counters(&t);
         t.fail_writes("redis is gone");
         let config = sync_every_cycle();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
-        let mut cycles = Cycles::Fixed { remaining: 5, code: 143 };
-        let code = run(&mut p, &t, Some(&config), &Reconciler::default(), &["sda".to_string()],
-                       &d.path().join("f.json"), None, &mut cycles).await;
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 5,
+            code: 143,
+        };
+        let code = run(
+            &mut p,
+            &t,
+            Some(&config),
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
         assert_eq!(code, ERR_DB_WRITE);
         assert_eq!(p.calls, 1, "stopped at the first sync");
-        assert!(log.logged(log::Level::Info, "get_dynamic_fields_update_state_db() failed with"),
-                "the refused device row is a NOTICE");
+        assert!(
+            log.logged(
+                log::Level::Info,
+                "get_dynamic_fields_update_state_db() failed with"
+            ),
+            "the refused device row is a NOTICE"
+        );
         assert!(log.logged(log::Level::Error, "Unable to record the sync time"));
     }
 
@@ -1257,11 +1744,19 @@ mod tests {
     }
 
     fn row(fields: &[(&str, &str)]) -> Result<Option<Vec<(String, String)>>, String> {
-        Ok(Some(fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()))
+        Ok(Some(
+            fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        ))
     }
 
     fn secs(poll: u64, sync: u64) -> Intervals {
-        Intervals { poll: Duration::from_secs(poll), sync: Duration::from_secs(sync) }
+        Intervals {
+            poll: Duration::from_secs(poll),
+            sync: Duration::from_secs(sync),
+        }
     }
 
     #[test]
@@ -1283,7 +1778,10 @@ mod tests {
             "Failed to retrieve CONFIG_DB intervals: \
              invalid literal for int() with base 10: '5 min'"
         ));
-        assert!(log.logged(log::Level::Info, "Intervals in use: polling=300, fsstats_sync=600"));
+        assert!(log.logged(
+            log::Level::Info,
+            "Intervals in use: polling=300, fsstats_sync=600"
+        ));
     }
 
     /// Python parses the poll interval first, so a good one goes through even
@@ -1314,9 +1812,14 @@ mod tests {
     #[test]
     fn a_read_that_fails_keeps_the_intervals_in_use() {
         let log = pmon_common::logging::capture();
-        assert_eq!(secs(300, 600).reload(Err("redis is gone".into())), secs(300, 600));
-        assert!(log.logged(log::Level::Error,
-            "Failed to retrieve CONFIG_DB intervals: redis is gone"));
+        assert_eq!(
+            secs(300, 600).reload(Err("redis is gone".into())),
+            secs(300, 600)
+        );
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to retrieve CONFIG_DB intervals: redis is gone"
+        ));
     }
 
     /// Announced on every read, changed or not, as Python announces them.
@@ -1329,7 +1832,10 @@ mod tests {
         ]));
         assert_eq!(i, secs(300, 600));
         assert!(log.logged(log::Level::Info, "Polling Interval set to 300 seconds"));
-        assert!(log.logged(log::Level::Info, "FSIO JSON file Interval set to 600 seconds"));
+        assert!(log.logged(
+            log::Level::Info,
+            "FSIO JSON file Interval set to 600 seconds"
+        ));
     }
 
     // ── the wiring that used to be inside main ───────────────────────────────
@@ -1350,10 +1856,21 @@ mod tests {
         std::fs::write(&path, r#"{"sda": {"total_fsio_reads": "10"}}"#).unwrap();
 
         let o = pmon_common::db::MockOpener::new();
-        let mut p = FakePlatform { devices: vec![], fail: true, calls: 0 };
-        let code =
-            start(&mut p, &|d, t| o.open(d, t), &path, &mut Cycles::Fixed { remaining: 0, code: 0 })
-                .await;
+        let mut p = FakePlatform {
+            devices: vec![],
+            fail: true,
+            calls: 0,
+        };
+        let code = start(
+            &mut p,
+            &|d, t| o.open(d, t),
+            &path,
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
+        )
+        .await;
 
         assert_eq!(code, STORAGEUTIL_LOAD_ERROR);
         assert!(
@@ -1371,12 +1888,19 @@ mod tests {
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let o = pmon_common::db::MockOpener::new();
-        let mut p = FakePlatform { devices: vec![], fail: false, calls: 0 };
+        let mut p = FakePlatform {
+            devices: vec![],
+            fail: false,
+            calls: 0,
+        };
         let code = start(
             &mut p,
             &|db, t| o.open(db, t),
             &d.path().join("f.json"),
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143);
@@ -1391,26 +1915,42 @@ mod tests {
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let o = pmon_common::db::MockOpener::failing(STORMOND_CONFIG_TABLE);
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
         let code = start(
             &mut p,
             &|db, t| o.open(db, t),
             &d.path().join("f.json"),
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
         assert_eq!(code, 143, "a missing STORMOND_CONFIG is not fatal");
         assert!(
-            log.logged(log::Level::Error, "Failed to establish CONFIG_DB connection: "),
+            log.logged(
+                log::Level::Error,
+                "Failed to establish CONFIG_DB connection: "
+            ),
             "but its reason is said, once, at start-up"
         );
-        assert_eq!(o.asked(), vec![
-            (db::STATE_DB.to_string(), STORAGE_DEVICE_TABLE.to_string()),
-            (CONFIG_DB.to_string(), STORMOND_CONFIG_TABLE.to_string()),
-        ]);
+        assert_eq!(
+            o.asked(),
+            vec![
+                (db::STATE_DB.to_string(), STORAGE_DEVICE_TABLE.to_string()),
+                (CONFIG_DB.to_string(), STORMOND_CONFIG_TABLE.to_string()),
+            ]
+        );
         // The static row goes in before the first cycle: `show platform
         // ssdhealth` must not have to sit through an hour of nothing.
-        assert!(o.table(STORAGE_DEVICE_TABLE).unwrap().wrote("sda", "device_model"));
+        assert!(o
+            .table(STORAGE_DEVICE_TABLE)
+            .unwrap()
+            .wrote("sda", "device_model"));
     }
 
     /// The start-up reading is the first cycle's too: each reading runs
@@ -1421,17 +1961,31 @@ mod tests {
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let o = pmon_common::db::MockOpener::new();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
         start(
             &mut p,
             &|db, t| o.open(db, t),
             &d.path().join("f.json"),
-            &mut Cycles::Fixed { remaining: 1, code: 143 },
+            &mut Cycles::Fixed {
+                remaining: 1,
+                code: 143,
+            },
         )
         .await;
-        assert_eq!(p.calls, 2, "start-up and the second cycle; the first reuses start-up's");
-        assert!(o.table(STORAGE_DEVICE_TABLE).unwrap().wrote("sda", "total_fsio_reads"),
-            "and the first cycle still published from it");
+        assert_eq!(
+            p.calls, 2,
+            "start-up and the second cycle; the first reuses start-up's"
+        );
+        assert!(
+            o.table(STORAGE_DEVICE_TABLE)
+                .unwrap()
+                .wrote("sda", "total_fsio_reads"),
+            "and the first cycle still published from it"
+        );
     }
 
     /// Handed a reading, the loop's first cycle publishes it without asking
@@ -1441,12 +1995,28 @@ mod tests {
         tokio::time::pause();
         let d = tempfile::tempdir().unwrap();
         let t = MockTable::new();
-        let mut p = FakePlatform { devices: vec![disk("sda")], fail: false, calls: 0 };
+        let mut p = FakePlatform {
+            devices: vec![disk("sda")],
+            fail: false,
+            calls: 0,
+        };
         let mut handed = disk("sda");
         handed.fs_io_reads = Some(7);
-        let mut cycles = Cycles::Fixed { remaining: 0, code: 143 };
-        run(&mut p, &t, None, &Reconciler::default(), &["sda".to_string()],
-            &d.path().join("f.json"), Some(vec![handed]), &mut cycles).await;
+        let mut cycles = Cycles::Fixed {
+            remaining: 0,
+            code: 143,
+        };
+        run(
+            &mut p,
+            &t,
+            None,
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            Some(vec![handed]),
+            &mut cycles,
+        )
+        .await;
         assert_eq!(p.calls, 0);
         assert_eq!(t.field("sda", "latest_fsio_reads").as_deref(), Some("7"));
     }
@@ -1458,15 +2028,25 @@ mod tests {
     async fn a_state_db_that_will_not_open_stops_the_daemon() {
         let d = tempfile::tempdir().unwrap();
         let o = pmon_common::db::MockOpener::failing(STORAGE_DEVICE_TABLE);
-        let mut p = FakePlatform { devices: vec![], fail: false, calls: 0 };
+        let mut p = FakePlatform {
+            devices: vec![],
+            fail: false,
+            calls: 0,
+        };
         let code = start(
             &mut p,
             &|db, t| o.open(db, t),
             &d.path().join("f.json"),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, ERR_DB_WRITE);
-        assert_eq!(p.calls, 0, "the disks are not even read without somewhere to put them");
+        assert_eq!(
+            p.calls, 0,
+            "the disks are not even read without somewhere to put them"
+        );
     }
 }

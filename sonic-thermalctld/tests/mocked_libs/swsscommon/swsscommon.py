@@ -43,9 +43,10 @@ class Table:
         pass
 
     def get(self, key):
+        # Mirror real swsscommon Table.get(): (found, [(field, value), ...]).
         if key in self.mock_dict:
-            return self.mock_dict[key]
-        return None
+            return (True, list(self.mock_dict[key].items()))
+        return (False, [])
 
     def get_size(self):
         return (len(self.mock_dict))

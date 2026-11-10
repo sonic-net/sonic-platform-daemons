@@ -32,11 +32,26 @@ def setup(harness, root):
     SD = storage_devices
     SD.StorageDevices = StorageDevices
     SM = H.script('stormond', os.path.join(root, 'sonic-stormond', 'scripts', 'stormond'))
+    # The script module can be cached across parity tests; refresh its imported
+    # class alias as well as the source module so both halves use these disks.
+    SM.StorageDevices = StorageDevices
     SM.FSIO_RW_JSON_FILE = JSON
 
 
 def json_path():
     return JSON
+
+
+def load_new_json_document(document):
+    """The unchanged Python loader must accept the additive boot identity."""
+    del ALIVE[:]
+    H.reset()
+    platform({'sda': Disk()})
+    with open(JSON, 'w') as stream:
+        stream.write(document)
+    daemon = SM.DaemonStorage('stormond')
+    ALIVE.append(daemon)
+    return daemon.fsio_json_file_loaded, daemon.fsio_rw_json['sda']
 
 
 class Disk(object):

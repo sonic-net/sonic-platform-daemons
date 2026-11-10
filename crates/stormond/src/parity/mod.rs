@@ -63,13 +63,14 @@ fn rust_half(
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        .start_paused(true)
         .build()
         .unwrap();
     runtime.block_on(start(
         &mut platform,
         &open,
         &json,
-        &mut Cycles::Fixed {
+        &mut Cycles::Paced {
             remaining: polls,
             code: 0,
         },
@@ -92,7 +93,18 @@ fn stormond_publishes_what_the_python_daemon_publishes() {
                 .and_then(|s| s.extract())
                 .unwrap();
             let python = python_half(py, harness, &sc, name, polls);
+            let python_file = persisted_counters(&sc);
             let rust = rust_half(py, harness, &sc, name, polls);
+            if matches!(
+                name.as_str(),
+                "fresh_start" | "statedb_baseline" | "json_baseline" | "short_intervals"
+            ) {
+                assert_eq!(
+                    python_file,
+                    persisted_counters(&sc),
+                    "[{name}] persisted FSIO counters"
+                );
+            }
             failures.extend(parity::differences(
                 name,
                 &python,
@@ -105,6 +117,60 @@ fn stormond_publishes_what_the_python_daemon_publishes() {
     parity::assert_parity("stormond", &failures, KNOWN);
 }
 
+fn persisted_counters(scenarios: &Bound<'_, PyModule>) -> serde_json::Value {
+    let path: PathBuf = scenarios
+        .call_method0("json_path")
+        .unwrap()
+        .extract()
+        .unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    // New boot identity is intentionally additive metadata. Compare every
+    // persisted disk/counter field, excluding only the sync timestamp and ID.
+    let fields = document.as_object_mut().unwrap();
+    fields.remove("successful_sync_time");
+    fields.remove("boot_id");
+    for row in fields.values_mut() {
+        if let Some(row) = row.as_object_mut() {
+            row.remove("boot_id");
+            row.remove("baseline_valid");
+        }
+    }
+    document
+}
+
+#[test]
+fn new_json_boot_metadata_is_accepted_by_the_unchanged_python_loader() {
+    parity::with_harness(|py, harness| {
+        let scenarios = parity::module(py, "stormond_json_compatibility", SCENARIOS);
+        scenarios.call_method1("setup", (harness, ROOT)).unwrap();
+        let table = pmon_common::db::MockTable::new();
+        for field in fsio::SYNC_FIELDS {
+            table.set("sda", &[(field, "100".into())]).unwrap();
+        }
+        let document = fsio::sync_document(&["sda".into()], &table, "now").unwrap();
+        let (loaded, fields): (bool, std::collections::BTreeMap<String, String>) = scenarios
+            .call_method1("load_new_json_document", (document,))
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert!(
+            loaded,
+            "Python must accept files written by the Rust daemon"
+        );
+        assert!(fields.contains_key("boot_id"));
+        for field in fsio::SYNC_FIELDS {
+            assert_eq!(fields.get(field).map(String::as_str), Some("100"));
+        }
+    });
+}
+
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
-const KNOWN: &[parity::Known] = &[];
+const KNOWN: &[parity::Known] = &[
+    parity::Known {
+        scenario: "disk_getter_raises",
+        contains: "only Rust logged: WARNING sda: no current FSIO counters; retaining its previous baseline while syncing healthy disks",
+        why: "healthy disks persist; Rust explicitly reports the failed disk's retained or unknown baseline instead of writing null counters",
+    },
+];

@@ -17,20 +17,19 @@ platform-api  = { workspace = true }
 # implementation arriving changes nothing here.
 platform-provider = { workspace = true }
 pmon-common   = { path = "../pmon-common" }
-tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
 # The lifetime counters outlive a reboot in a JSON file on the host.
 serde_json = "1"
 chrono = "0.4"
-# Held below 4.6 for the same reason thermalctld holds it: from 4.6 the clap
-# family is edition 2024, which the cargo-auditable the slave image wraps
-# rustc in cannot parse out of `cargo metadata`.
+# Retain thermalctld's compatibility cap for release builders using
+# cargo-auditable 0.6.4. Current master uses 0.7.6 and supports edition 2024.
 clap  = { version = ">=4.0, <4.6", features = ["derive"] }
 log    = "0.4"
 
 [dev-dependencies]
 # `Cycles::Fixed` is the seam that lets a test drive the loop.
 pmon-common = { path = "../pmon-common", features = ["testing"] }
-tokio = { version = "1", features = ["rt", "macros", "time", "signal", "test-util"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "sync", "test-util"] }
 # The JSON baseline is a real file; the tests own one.
 tempfile = "3"
 
