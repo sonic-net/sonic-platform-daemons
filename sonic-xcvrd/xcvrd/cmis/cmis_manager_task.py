@@ -69,27 +69,28 @@ class CmisManagerTask(threading.Thread):
         self.xcvr_table_helper = XcvrTableHelper(self.namespaces)
         # Cache of gearbox line lanes dict, refreshed once per task_worker iteration.
         self._gearbox_lanes_dict = None
-        self.fast_reboot_status = self.initialize_fast_reboot_status()
         # Per-namespace admission: the state machine of a port runs only once the publishing workers have
-        # published its namespace; a namespace ready at their construction is exempt, with today's concurrent
-        # start. None = all admitted.
+        # published its namespace; a namespace ready at their construction is exempt and starts concurrently
+        # with their start-up pass. None = all admitted.
         self.asic_readiness = asic_readiness if asic_readiness is not None \
                               else AsicReadiness.all_ready_registry(namespaces)
         self._deferred_logged = set()       # namespaces for which PORTS_DEFERRED was logged
         self._admitted_snapshot = None      # admitted namespaces sampled before this iteration's gearbox cache
+        self.fast_reboot_status = self.initialize_fast_reboot_status()
         self.warm_restart_status = self.initialize_warm_restart_status()
 
     def initialize_fast_reboot_status(self):
         fast_reboot_status = {}
         for namespace in self.namespaces:
-            fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace))
+            # A namespace not ready yet is sampled at its first use: after its admission and so after its marker
+            fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace)) \
+                if self.asic_readiness.is_ready(namespace) else None
         return fast_reboot_status
 
     def initialize_warm_restart_status(self):
         warm_restart_status = {}
         for namespace in self.namespaces:
-            # A namespace not ready yet is sampled at its first use, after its admission and so after its marker: its
-            # syncd has started by then, and a cold start of it resets the restore count an earlier warm reboot left
+            # A namespace not ready yet is sampled at its first use: after its admission and so after its marker
             warm_restart_status[namespace] = bool(common.is_syncd_warm_restore_complete(namespace)) \
                 if self.asic_readiness.is_ready(namespace) else None
         return warm_restart_status
@@ -109,6 +110,8 @@ class CmisManagerTask(threading.Thread):
     def is_fast_reboot_enabled_for_lport(self, lport):
         asic_id = self.get_asic_id(lport)
         namespace = common.get_namespace_from_asic_id(asic_id) if asic_id >= 0 else ''
+        if self.fast_reboot_status.get(namespace, False) is None:
+            self.fast_reboot_status[namespace] = bool(common.is_fast_reboot_enabled(namespace))
         return self.fast_reboot_status.get(namespace, False)
 
     def is_warm_restart_for_lport(self, lport):
@@ -1360,8 +1363,8 @@ class CmisManagerTask(threading.Thread):
 
     def process_single_lport(self, lport, info):
         if not self.asic_readiness.is_asic_admitted(info.get('asic_id'), self._admitted_snapshot):
-            # Namespace not admitted yet: no DB read, no module access, no state change until its publishing
-            # workers have run their start-up pass over it
+            # Namespace not admitted yet: the port is not processed (no DB read, no module access, no state
+            # transition) until its publishing workers have run their start-up pass over it
             log_first_deferral(self.asic_readiness, self._deferred_logged, info.get('asic_id'), self.name, lport, self.log_notice)
             return
 
@@ -1388,16 +1391,6 @@ class CmisManagerTask(threading.Thread):
             return
 
         if pport not in self.port_obj_dict:
-            return
-
-        # A module behind a blocking error (the status row its error event wrote) is left to the error's end: a
-        # presence or API read behind the error would park the port in a terminal state, and the identical
-        # TRANSCEIVER_INFO row posted when the error ends is no event that could start it again. An initialisation
-        # the error interrupted restarts from INSERTED when the error has ended, its timer not charged as a retry
-        if sfp_status_helper.detect_port_in_error_status(lport, self.xcvr_table_helper.get_status_sw_tbl(self.get_asic_id(lport))):
-            if state != CMIS_STATE_INSERTED:
-                self.log_notice("{}: initialisation interrupted by a blocking error, restarts when it has ended".format(lport))
-                self.force_cmis_reinit(lport, self.port_dict[lport].get('cmis_retries', 0))
             return
 
         host_lane_count = self.get_host_lane_count(lport, lanes)

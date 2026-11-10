@@ -15,7 +15,6 @@ try:
     from .xcvrd_utilities.port_event_helper import PortChangeObserver
     from .xcvrd_utilities.xcvr_table_helper import XcvrTableHelper
     from .xcvrd_utilities import common
-    from .xcvrd_utilities import sfp_status_helper
     from .xcvrd_utilities.asic_readiness import AsicReadiness, log_first_deferral
     from sonic_platform_base.sonic_xcvr.api.public.sff8472 import Sff8472Api
 except ImportError as e:
@@ -109,8 +108,8 @@ class SffManagerTask(threading.Thread):
         # are deferred (no module access) and processed once the namespace is admitted. None = all admitted.
         self.asic_readiness = asic_readiness if asic_readiness is not None \
                               else AsicReadiness.all_ready_registry(namespaces)
-        # Logical ports skipped because their namespace was not admitted or their module is behind a blocking
-        # error; their port_dict_prev snapshot is not advanced while they are in this set.
+        # Logical ports skipped because their namespace was not admitted; they are left out of the port_dict_prev
+        # snapshot while they are in this set.
         self.deferred_ports = set()
         self._deferred_logged = set()       # namespaces for which PORTS_DEFERRED was logged
 
@@ -360,10 +359,9 @@ class SffManagerTask(threading.Thread):
                                                   self.on_port_update_event,
                                                   self.PORT_TBL_MAP)
 
-        # Ports of a namespace the publishing workers have not published yet (not admitted), and ports
-        # whose module is behind a blocking error, are deferred: their module is not touched and their
-        # port_dict_prev snapshot is not advanced, so the change observed meanwhile is acted on once the
-        # namespace is admitted or the error has ended.
+        # Ports of a namespace the publishing workers have not published yet (not admitted) are deferred:
+        # their module is not touched and they are left out of the port_dict_prev snapshot, so they are
+        # processed as new ports once the namespace is admitted.
         while not self.task_stopping_event.is_set():
             # Internally, handle_port_update_event will block for up to
             # SELECT_TIMEOUT_MSECS until a message is received(in select
@@ -387,7 +385,7 @@ class SffManagerTask(threading.Thread):
                     break
                 data = self.port_dict[lport]
                 if not self.asic_readiness.is_asic_admitted(data.get('asic_id')):
-                    # Namespace not admitted yet: no module access; the snapshot below keeps the previous entry
+                    # Namespace not admitted yet: no module access; the snapshot below leaves the port out
                     log_first_deferral(self.asic_readiness, self._deferred_logged, data.get('asic_id'), self.name, lport, self.log_notice)
                     self.deferred_ports.add(lport)
                     continue
@@ -407,12 +405,6 @@ class SffManagerTask(threading.Thread):
 
                 if xcvr_type is None:
                     # TRANSCEIVER_INFO table's XCVR_TYPE is not ready, meaning xcvr is not present
-                    continue
-
-                if sfp_status_helper.detect_port_in_error_status(lport, self.xcvr_table_helper.get_status_sw_tbl(data.get('asic_id'))):
-                    # Behind a blocking error: no module access (a presence read behind the error would drop the
-                    # cached type for good); revisited every iteration and processed once the error has ended
-                    self.deferred_ports.add(lport)
                     continue
 
                 # double-check the HW presence before moving forward
@@ -560,12 +552,7 @@ class SffManagerTask(threading.Thread):
             # Take a snapshot for port_dict, this will be used to calculate diff
             # later in the while loop to determine if there's really a value
             # change on the fields related to the events we care about.
-            # Deferred ports keep their previous snapshot so that the change observed while their
-            # namespace was pending is still detected when they are eventually processed.
-            new_prev = copy.deepcopy(self.port_dict)
+            # Deferred ports are left out, so that they are processed as new ports later.
+            self.port_dict_prev = copy.deepcopy(self.port_dict)
             for lport in self.deferred_ports:
-                if lport in self.port_dict_prev:
-                    new_prev[lport] = self.port_dict_prev[lport]
-                else:
-                    new_prev.pop(lport, None)
-            self.port_dict_prev = new_prev
+                self.port_dict_prev.pop(lport, None)

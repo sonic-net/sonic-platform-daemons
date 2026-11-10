@@ -17,7 +17,6 @@ platform_chassis = None
 
 class CpoStateUpdateTask(SfpStateUpdateTask):
     SYSLOG_IDENTIFIER = "CpoStateUpdateTask"
-    PUBLISHER_NAME = "CpoStateUpdateTask"
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event,
                  asic_readiness=None):

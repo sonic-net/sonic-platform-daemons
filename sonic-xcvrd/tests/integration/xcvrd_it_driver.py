@@ -1,4 +1,4 @@
-"""Driver for the SIGTERM test: run the real xcvrd daemon in this process against the emulated namespaces, logging to stdout.
+"""Driver for the SIGTERM tests: run the real xcvrd daemon in this process against the emulated namespaces, logging to stdout.
 
 usage: python3 xcvrd_it_driver.py <database_global.json>
 """

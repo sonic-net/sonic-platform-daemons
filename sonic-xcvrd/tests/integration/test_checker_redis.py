@@ -21,7 +21,6 @@ from xcvrd.xcvrd_utilities.asic_readiness import AsicReadiness
 
 from . import harness as h
 
-pytestmark = pytest.mark.integration
 
 
 class CountingSelect(swsscommon.Select):
@@ -160,7 +159,7 @@ def flush_all(clean_dbs):
 
 @pytest.mark.parametrize('order', [h.NAMESPACES, list(reversed(h.NAMESPACES))])
 def test_checker_marker_semantics_on_binding(clean_dbs, order):
-    # (1) markers present before the subscription (snapshot replay): both namespaces queued in the first sweep
+    # markers present before the subscription (snapshot replay): both namespaces queued in the first sweep
     h.populate_appl_db('asic0', ['PortConfigDone'])
     h.populate_appl_db('asic1', ['PortInitDone'])
     daemon = make_daemon(order)
@@ -171,7 +170,7 @@ def test_checker_marker_semantics_on_binding(clean_dbs, order):
     ready = daemon.log.find('ASIC_READY')
     assert len(ready) == 2 and any('PortConfigDone' in l for l in ready) and any('PortInitDone' in l for l in ready)
 
-    # (2) no markers, then a live SET: the first queue item arrives well within the 1 s select timeout
+    # no markers, then a live SET: the first queue item arrives well within the 1 s select timeout
     flush_all(clean_dbs)
     h.populate_appl_db('asic0', []); h.populate_appl_db('asic1', [])
     daemon = make_daemon(order)
@@ -185,12 +184,12 @@ def test_checker_marker_semantics_on_binding(clean_dbs, order):
         item, live_latency = first_queued(daemon, 3, since=t_write)      # measured from before the write
         assert item == 'asic1' and live_latency < 1.0, (item, live_latency)
         assert ('asic1', 'PortConfigDone', 'SET') in records
-        # (5) sustained non-marker traffic on the pending namespace keeps it pending
+        # sustained non-marker traffic on the pending namespace keeps it pending
         for i in range(100):
             swsscommon.Table(h.connector('APPL_DB', 'asic0'), 'PORT_TABLE').set('Ethernet0', swsscommon.FieldValuePairs([('flap_count', str(i))]))
         assert queued(daemon, 1.5) == []
         assert ('asic0', 'Ethernet0', 'SET') in records and not any(r[0] == 'asic0' and r[1] in ('PortConfigDone', 'PortInitDone') for r in records)
-        # (4b) a DEL of a marker key while the namespace is pending must not count. On the real binding a
+        # a DEL of a marker key while the namespace is pending must not count. On the real binding a
         # DEL event is only produced for a key that existed, so the SET is made unobservable: HSET and DEL in
         # one MULTI/EXEC transaction. The subscriber's read-back of the HSET event misses the key (skipped as
         # outdated) and only the DEL tuple is popped, which the recording table shows.
@@ -205,7 +204,7 @@ def test_checker_marker_semantics_on_binding(clean_dbs, order):
         assert item == 'asic0', item
         assert ('asic0', 'PortInitDone', 'SET') in records
 
-    # (3) duplicate markers and (4) snapshot SET then live DEL: one queue entry, readiness kept
+    # duplicate markers, and a snapshot SET then a live DEL: one queue entry, readiness kept
     flush_all(clean_dbs)
     h.populate_appl_db('asic0', ['PortConfigDone', 'PortInitDone'])
     h.populate_appl_db('asic1', [])
@@ -218,7 +217,7 @@ def test_checker_marker_semantics_on_binding(clean_dbs, order):
         assert queued(daemon, 1.5) == []                   # unsubscribed: nothing more from asic0
         assert daemon.asic_readiness.ready_namespaces() == frozenset()               # the checker never touches the registry
 
-    # (6) heartbeat: exactly two ASIC_STILL_WAITING over exactly 700 simulated seconds while asic1 is pending,
+    # heartbeat: exactly two ASIC_STILL_WAITING over exactly 700 simulated seconds while asic1 is pending,
     # under continuous non-marker traffic (the checker's clock advances 100 s per reading, then stops)
     flush_all(clean_dbs)
     h.populate_appl_db('asic0', ['PortConfigDone']); h.populate_appl_db('asic1', [])

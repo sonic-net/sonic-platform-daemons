@@ -1,8 +1,8 @@
-"""Unit tests for XCVRD multi-ASIC startup independence: the publisher's outcomes, the readiness
-registry, the publishing workers' per-namespace start-up pass, the per-namespace gates of the other
+"""Unit tests for XCVRD multi-ASIC startup independence: the readiness registry, the publishing
+workers' per-namespace start-up pass, the per-namespace gates of the other
 workers, the readiness checker and the daemon's init() / run() lifecycle.
 
-Module-level mocking mirrors tests/test_xcvrd.py lines 38-43 so that this file runs alone
+Module-level mocking mirrors tests/test_xcvrd.py so that this file runs alone
 and inside the whole suite: swsscommon.Table, ProducerStateTable, SubscriberStateTable and
 SonicDBConfig are replaced by MagicMocks at import time; swsscommon.Select is deliberately
 left real and patched per test where a checker test needs it.
@@ -38,7 +38,6 @@ os.environ["XCVRD_UNIT_TESTING"] = "1"
 from xcvrd.xcvrd import SfpStateUpdateTask
 from xcvrd.dom.dom_mgr import DomInfoUpdateTask
 from xcvrd.xcvrd_utilities import common
-from xcvrd.xcvrd_utilities import media_settings_parser
 from xcvrd.xcvrd_utilities import port_event_helper
 from xcvrd.xcvrd_utilities.port_event_helper import PortChangeEvent, PortMapping
 from xcvrd.xcvrd_utilities.xcvr_table_helper import (NPU_SI_SETTINGS_NOTIFIED_VALUE, NPU_SI_SETTINGS_SYNC_STATUS_KEY, XcvrTableHelper)
@@ -57,21 +56,36 @@ from xcvrd.xcvrd_utilities.sfp_status_helper import SFP_STATUS_INSERTED, SFP_STA
 from xcvrd.cmis.cmis_manager_task import CmisManagerTask
 from xcvrd.cpo.cpo_manager_task import CpoManagerTask
 from xcvrd.cpo.cpo_dom_mgr import CpoDomInfoUpdateTask
-from xcvrd.dom.dom_mgr import DomThermalInfoUpdateTask
 from xcvrd.sff_mgr import SffManagerTask
-from xcvrd.xcvrd_utilities.common import CMIS_STATE_INSERTED, CMIS_STATE_REMOVED
+from xcvrd.xcvrd_utilities.common import CMIS_STATE_INSERTED
 import collections
 import gc
 import weakref
 
 from xcvrd.xcvrd import (
     ASIC_CHECKER_FAILED, ASIC_CHECKER_JOIN_TIMEOUT_SECS, ASIC_CHECKER_MAX_SELECT_ERRORS, EVENT_ON_ALL_SFP,
-    PORT_CONFIG_LOAD_ERROR, RETRY_PERIOD_FOR_SYSTEM_READY_MSECS, SFP_EEPROM_NOT_READY, SFP_INSERT_EVENT_POLL_PERIOD_MSECS,
+    RETRY_PERIOD_FOR_SYSTEM_READY_MSECS, SFP_EEPROM_NOT_READY, SFP_INSERT_EVENT_POLL_PERIOD_MSECS,
     SFP_SYSTEM_ERROR, STATE_MACHINE_UPDATE_PERIOD_MSECS, SYSTEM_NOT_READY)
 
 REAL_SELECT = swsscommon.Select          # real class: only Table/ProducerStateTable/SubscriberStateTable/SonicDBConfig are mocked above
 
 DEFAULT_NAMESPACE = ['']
+
+
+@pytest.fixture(autouse=True)
+def platform_globals_restored():
+    """DaemonXcvrd.init() assigns the platform objects to module globals and deinit() deletes one: every test of this
+    file leaves them as it found them, for the tests and the test files that run after it."""
+    slots = [(xcvrd_module, 'platform_chassis'), (xcvrd_module, 'platform_sfputil'), (common, 'platform_chassis'),
+             (common, 'platform_sfputil'), (sys.modules[CpoStateUpdateTask.__module__], 'platform_chassis')]
+    missing = object()
+    saved = [getattr(module, name, missing) for module, name in slots]
+    yield
+    for (module, name), value in zip(slots, saved):
+        if value is not missing:
+            setattr(module, name, value)
+        elif hasattr(module, name):
+            delattr(module, name)
 
 
 # ---------------------------------------------------------------------------
@@ -90,13 +104,11 @@ class PublisherEnv:
     """Everything notify_media_setting() touches, under test control.
 
     cfg_rows: {lport: (found, [(field, value), ...])} served by the CONFIG_DB PORT table mock.
-    update_required: the fixed answer of is_npu_si_settings_update_required(); None for the real check
-    against this env's STATE_DB PORT_TABLE.
+    is_npu_si_settings_update_required() is the real check, against this env's STATE_DB PORT_TABLE.
     """
 
-    def __init__(self, cfg_rows=None, update_required=True):
-        self.cfg_rows = cfg_rows if cfg_rows is not None else {
-            'Ethernet0': (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0')])}
+    def __init__(self, cfg_rows):
+        self.cfg_rows = cfg_rows
         self.cfg_port_tbl = MagicMock()
         self.cfg_port_tbl.get = MagicMock(side_effect=lambda port: self.cfg_rows.get(port, (False, None)))
         self.app_port_tbl = Table("APPL_DB", 'PORT_TABLE')
@@ -107,13 +119,10 @@ class PublisherEnv:
         self.helper.get_state_port_tbl = MagicMock(return_value=self.state_port_tbl)
         self.helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
         self.helper.get_info_tables = MagicMock(side_effect=lambda asic: [self.helper.get_intf_tbl(asic)])
-        if update_required is None:
-            self.helper.get_state_db_port_table_val_by_key = \
-                lambda lport, pm, key: XcvrTableHelper.get_state_db_port_table_val_by_key(self.helper, lport, pm, key)
-            self.helper.is_npu_si_settings_update_required = \
-                MagicMock(side_effect=lambda lport, pm: XcvrTableHelper.is_npu_si_settings_update_required(self.helper, lport, pm))
-        else:
-            self.helper.is_npu_si_settings_update_required = MagicMock(return_value=update_required)
+        self.helper.get_state_db_port_table_val_by_key = \
+            lambda lport, pm, key: XcvrTableHelper.get_state_db_port_table_val_by_key(self.helper, lport, pm, key)
+        self.helper.is_npu_si_settings_update_required = \
+            MagicMock(side_effect=lambda lport, pm: XcvrTableHelper.is_npu_si_settings_update_required(self.helper, lport, pm))
 
     def writes(self):
         return self.app_port_tbl.get_size()
@@ -127,162 +136,18 @@ MATCHING_SETTINGS = {'main': {'lane0': '0x1', 'lane1': '0x2', 'lane2': '0x3', 'l
                               'lane4': '0x5', 'lane5': '0x6', 'lane6': '0x7', 'lane7': '0x8'}}
 
 
-def publisher_patches(media=MATCHING_SETTINGS, custom=None, key=MEDIA_KEY, g_dict=None):
+def publisher_patches():
     """Context manager patching the publisher's collaborators for one call."""
     return patch.multiple(
         'xcvrd.xcvrd_utilities.media_settings_parser',
-        g_dict={'GLOBAL_MEDIA_SETTINGS': {}} if g_dict is None else g_dict,
-        get_media_settings_key=MagicMock(return_value=key),
-        get_media_settings_value=MagicMock(return_value=media),
-        get_custom_media_settings_value=MagicMock(return_value={} if custom is None else custom),
+        g_dict={'GLOBAL_MEDIA_SETTINGS': {}},
+        get_media_settings_key=MagicMock(return_value=MEDIA_KEY),
+        get_media_settings_value=MagicMock(return_value=MATCHING_SETTINGS),
+        get_custom_media_settings_value=MagicMock(return_value={}),
     )
 
 
-# ---------------------------------------------------------------------------
-# Publisher outcomes
-# ---------------------------------------------------------------------------
-
-class TestPublisherOutcomes:
-
-    def _call(self, env, lport='Ethernet0', port_mapping=None, transceiver_dict=None, presence=True):
-        port_mapping = port_mapping if port_mapping is not None else mapping([(lport, 1, 0)])
-        transceiver_dict = {1: XCVR_INFO} if transceiver_dict is None else transceiver_dict
-        with patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=presence)):
-            media_settings_parser.notify_media_setting(lport, transceiver_dict, env.helper, port_mapping)
-
-    def test_notify_media_setting_outcomes_and_validation(self):
-        env = PublisherEnv()
-        log = recorder()
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.helper_logger', log):
-            # no media_settings.json loaded in this lifetime: nothing written, nothing looked up
-            with publisher_patches(g_dict={}):
-                self._call(env)
-            assert env.writes() == 0 and env.helper.is_npu_si_settings_update_required.call_count == 0
-
-            with publisher_patches():
-                # no table helper
-                pm = mapping([('Ethernet0', 1, 0)])
-                with patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True)):
-                    media_settings_parser.notify_media_setting('Ethernet0', {1: XCVR_INFO}, None, pm)
-                assert log.lines('xcvr_table_helper not initialized') == ['Notify media setting: xcvr_table_helper not initialized for lport Ethernet0']
-
-                # any non-default status suppresses, before the CONFIG_DB row is read
-                notified = PublisherEnv(update_required=False)
-                self._call(notified)
-                assert log.lines('already notified') == ['Notify media setting: Media settings already notified for lport Ethernet0']
-                assert notified.helper.get_cfg_port_tbl.call_count == 0 and notified.writes() == 0
-
-                # mapping knows the ASIC but has no physical port: rejected after the CONFIG_DB row is read
-                odd_mapping = MagicMock()
-                odd_mapping.get_asic_id_for_logical_port = MagicMock(return_value=0)
-                odd_mapping.logical_port_name_to_physical_port_list = MagicMock(return_value=None)
-                self._call(env, port_mapping=odd_mapping)
-                assert log.lines('No physical ports found') == ["Error: No physical ports found for logical port 'Ethernet0'"]
-                assert env.helper.get_cfg_port_tbl.call_count == 1
-
-                # nothing present at the publisher's own presence check
-                self._call(env, presence=False)
-                assert log.lines('presence not detected') == ['Media 1 presence not detected during notify']
-                assert env.writes() == 0
-
-                # present, but not in transceiver_dict
-                self._call(env, transceiver_dict={})
-                assert log.lines('eeprom not populated') == ['Media 1 eeprom not populated in transceiver dict']
-                assert env.writes() == 0
-
-            # no media settings for the key
-            with publisher_patches(media={}, custom={}):
-                self._call(env)
-            assert len(log.lines('Error in obtaining media setting')) == 1
-            # custom settings matched but serialise to nothing
-            with publisher_patches(media={}, custom={'CUSTOM:X': {'lane0': 1}}), \
-                    patch.object(media_settings_parser.CustomMediaSettingsParser, 'to_db_value', MagicMock(return_value=None)):
-                self._call(env)
-            assert len(log.lines('Error in obtaining media setting')) == 2
-            # none of the paths above wrote APPL_DB or touched the sync status
-            assert env.writes() == 0 and env.state_port_tbl.get_size() == 0
-
-            # published: one APPL_DB write and the status flipped to notified
-            with publisher_patches():
-                self._call(env)
-            assert env.writes() == 1
-            found, status = env.state_port_tbl.get('Ethernet0')
-            assert found and dict(status)[NPU_SI_SETTINGS_SYNC_STATUS_KEY] == NPU_SI_SETTINGS_NOTIFIED_VALUE
-
-    # media_per_member lists the successive return values of get_media_settings_value(); members that
-    # are absent or lack EEPROM data never reach that lookup. A member's write stands whatever happens
-    # to the other member, and the sync status flips with it.
-    @pytest.mark.parametrize("presence, in_dict, media_per_member, writes", [
-        # absent + published
-        ([False, True], [False, True], [MATCHING_SETTINGS, MATCHING_SETTINGS], 1),
-        # absent + no data
-        ([False, True], [False, False], [MATCHING_SETTINGS, MATCHING_SETTINGS], 0),
-        # published + no data
-        ([True, True], [True, False], [MATCHING_SETTINGS, MATCHING_SETTINGS], 1),
-        # published + no match (write happened; the early return is kept)
-        ([True, True], [True, True], [MATCHING_SETTINGS, {}], 1),
-        # no data + no match (only the second member reaches the settings lookup)
-        ([True, True], [False, True], [{}, {}], 0),
-        # absent + absent
-        ([False, False], [True, True], [MATCHING_SETTINGS, MATCHING_SETTINGS], 0),
-    ])
-    def test_notify_media_setting_ganged_outcomes(self, presence, in_dict, media_per_member, writes):
-        env = PublisherEnv()
-        ganged = MagicMock()
-        ganged.get_asic_id_for_logical_port = MagicMock(return_value=0)
-        ganged.logical_port_name_to_physical_port_list = MagicMock(return_value=[1, 2])
-        transceiver_dict = {pport: XCVR_INFO for pport, present in zip((1, 2), in_dict) if present}
-        presence_by_port = dict(zip((1, 2), presence))
-        with publisher_patches(), \
-                patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(side_effect=lambda p: presence_by_port[p])):
-            media_settings_parser.get_media_settings_value.side_effect = list(media_per_member)
-            media_settings_parser.notify_media_setting('Ethernet0', transceiver_dict, env.helper, ganged)
-        assert env.writes() == writes
-        assert env.state_port_tbl.get('Ethernet0')[0] == (writes == 1)
-
-
-class TestPortMappingHelpers:
-
-    def test_get_port_mapping_reads_every_namespace(self):
-        table = MagicMock()
-        table.getKeys = MagicMock(return_value=[])
-        connect = MagicMock()
-        with patch('xcvrd.xcvrd_utilities.port_event_helper.swsscommon.Table', MagicMock(return_value=table)), \
-                patch('xcvrd.xcvrd_utilities.port_event_helper.daemon_base.db_connect', connect):
-            port_mapping = port_event_helper.get_port_mapping(['asic0', 'asic1'])
-        assert [c.kwargs['namespace'] for c in connect.call_args_list] == ['asic0', 'asic1']
-        assert port_mapping.logical_port_list == []
-
 class TestWorkerHardening:
-
-    @patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock())
-    @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))
-    @patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False))
-    @patch('xcvrd.xcvrd_utilities.port_event_helper.PortChangeObserver', MagicMock())
-    @patch('xcvrd.xcvrd_utilities.port_event_helper.subscribe_port_config_change', MagicMock(return_value=(None, None)))
-    @patch('xcvrd.xcvrd_utilities.port_event_helper.handle_port_config_change', MagicMock())
-    def test_dom_task_skips_port_without_object(self):
-        # The port WITHOUT a device object comes first in iteration order, so the guard must be taken
-        # before the pass reaches the port that ends the test; without the guard Ethernet0 is visited.
-        port_mapping = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 0)])
-        stop_event = threading.Event()
-        task = DomInfoUpdateTask(DEFAULT_NAMESPACE, port_mapping, {2: MagicMock()}, stop_event, True, 0)
-        task.check_port_update = MagicMock()
-        task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
-        task.dom_db_utils = MagicMock()
-        task.status_db_utils = MagicMock()
-        task.vdm_db_utils = MagicMock()
-        task.vdm_utils = MagicMock()
-        task.vdm_utils.is_transceiver_vdm_supported = MagicMock(return_value=False)
-        visited = []
-
-        def firmware(lport, *args, **kwargs):
-            visited.append(lport)
-            task.task_stopping_event.set()          # one pass is enough
-
-        task.post_port_sfp_firmware_info_to_db = MagicMock(side_effect=firmware)
-        task.task_worker()
-        assert visited == ['Ethernet8']            # Ethernet0 (no device object) was skipped, no exception
 
     @patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock())
     def test_sfp_task_raise_exception_interrupts_through_thread_ident(self):
@@ -295,11 +160,11 @@ class TestWorkerHardening:
             while not release.is_set():
                 time.sleep(0.05)
 
-        task.task_worker = block
+        task.run = block                            # the thread's own run() has set nothing when the stop arrives
         try:
             task.start()
             assert started.wait(5)
-            task.raise_exception()                  # interrupts the running body through Thread.ident
+            task.raise_exception()                  # takes the thread from Thread.ident
             threading.Thread.join(task, timeout=5)  # the class override has no timeout parameter
             assert not task.is_alive()
         finally:
@@ -384,16 +249,21 @@ def make_sfp_task(namespaces, port_mapping, obj_dict, reg=None, warm=None, cls=S
     task.dom_db_utils = MagicMock()
     task.vdm_db_utils = MagicMock()
     for getter in ('get_state_port_tbl', 'get_intf_tbl', 'get_status_sw_tbl'):
-        setattr(task.xcvr_table_helper, getter, MagicMock(return_value=Table("STATE_DB", getter)))
+        setattr(task.xcvr_table_helper, getter, MagicMock(side_effect=tables_by_asic(getter).__getitem__))
     task.xcvr_table_helper.get_info_tables = MagicMock(side_effect=lambda asic: [task.xcvr_table_helper.get_intf_tbl(asic)])
     return task
 
 
 def config_db_read(task, configured=None):
     """Patch of the worker's CONFIG_DB port-mapping read, which the admission pass makes for the admitted namespace:
-    it serves `configured`, by default the worker's own mapping (CONFIG_DB unchanged since the daemon's snapshot)."""
-    return patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping',
-                 MagicMock(side_effect=lambda namespaces: configured if configured is not None else task.port_mapping))
+    like the real read it serves the ports of the requested namespaces only, out of `configured`, by default out of
+    the worker's own mapping (CONFIG_DB unchanged since the daemon's snapshot)."""
+    def read(namespaces):
+        source = configured if configured is not None else task.port_mapping
+        return mapping([(lport, source.get_logical_to_physical(lport)[0], source.get_asic_id_for_logical_port(lport))
+                        for lport in source.logical_port_list
+                        if task.asic_readiness.namespace_for_asic(source.get_asic_id_for_logical_port(lport)) in namespaces])
+    return patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(side_effect=read))
 
 
 def run_worker_iteration(task, events, error_dict=None, db_writes=False, configured=None, events_first=False):
@@ -462,8 +332,20 @@ def rows(table):
     return {key: dict(table.get(key)[1]) for key in table.mock_dict}
 
 
+def tables_by_asic(name):
+    """One Table mock per ASIC index, as each namespace has its own database: a read or a write through another
+    namespace's index misses the row."""
+    return collections.defaultdict(lambda: Table("STATE_DB", name))
+
+
+def status_tbl(task, lport):
+    """The status table of lport's namespace in the stand-in of a CMIS manager."""
+    return task.status_tables[ASIC_OF[lport]]
+
+
 TWO_NS = ['asic0', 'asic1']
 TWO_NS_PORTS = [('Ethernet0', 1, 0), ('Ethernet8', 2, 1)]     # one port per namespace
+ASIC_OF = {lport: asic_id for lport, _, asic_id in TWO_NS_PORTS}
 
 
 # ---------------------------------------------------------------------------
@@ -535,32 +417,24 @@ class TestAsicReadiness:
             single = AsicReadiness.all_ready_registry([''])
         assert single.all_ready() and single.is_asic_ready(0) and single.namespace_for_asic(0) == ''
 
-    def test_asic_readiness_registry_concurrent_readers(self):
-        namespaces = ['asic{}'.format(i) for i in range(50)]
-        reg = registry([], namespaces)
-        known = frozenset(namespaces)
-        errors, stop = [], threading.Event()
+    def test_asic_readiness_admitted_set_and_publisher_declaration_exclude_each_other(self):
+        # the gated workers read the admitted set while run() is still declaring the publishing workers, and the read
+        # iterates the declarations: each of the two waits while the registry's lock is held
+        reg = registry(['asic0'], TWO_NS)
+        for call in (lambda: reg.register_publisher('SfpStateUpdateTask', {'asic0'}), reg.admitted_namespaces):
+            started, done = threading.Event(), threading.Event()
 
-        def reader():
-            try:
-                while not stop.is_set():
-                    snapshot = reg.ready_namespaces()
-                    if not snapshot <= known:
-                        errors.append(snapshot)
-                    reg.all_ready()
-            except Exception as e:                      # a reader failure must fail the test, not vanish
-                errors.append(e)
-
-        threads = [threading.Thread(target=reader) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for ns in namespaces:
-            reg.mark_ready(ns)
-            time.sleep(0.002)
-        stop.set()
-        for t in threads:
-            t.join(5)
-        assert not errors and reg.all_ready() and not any(t.is_alive() for t in threads)
+            def target():
+                started.set()
+                call()
+                done.set()
+            thread = threading.Thread(target=target)
+            with reg._lock:
+                thread.start()
+                assert started.wait(5) and not done.wait(0.2)
+            assert done.wait(5)
+            thread.join(5)
+        assert reg.admitted_namespaces() == {'asic0'}
 
 
 class TestRegistryWiring:
@@ -626,7 +500,7 @@ class TestPublishingWorkers:
         assert task._pending_namespaces == {'asic1'}
         assert log.lines('PORTS_DEFERRED') == ['[asic1] PORTS_DEFERRED (SfpStateUpdateTask): namespace not ready, start-up pass deferred (1 ports)']
         assert log.lines('Posted all port DOM/SFP info')[0].endswith('s (1 ports, 0 to retry)')
-        # every namespace ready: the pass functions get the old calls (logical_ports=None) and visit both ports
+        # every namespace ready: the pass functions are called with logical_ports=None and visit both ports
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock()}, registry(TWO_NS, TWO_NS))
         for name in ('_post_port_sfp_info_and_dom_thr_to_db_once', '_init_port_sfp_status_sw_tbl'):
             setattr(task, name, MagicMock(wraps=getattr(task, name)))
@@ -638,8 +512,8 @@ class TestPublishingWorkers:
         assert task._post_port_sfp_info_and_dom_thr_to_db_once.call_args.kwargs['logical_ports'] is None
         assert task._init_port_sfp_status_sw_tbl.call_args.kwargs['logical_ports'] is None
         assert [c.args[0] for c in read.call_args_list] == [1, 2]
-        assert sorted(rows(task.xcvr_table_helper.get_intf_tbl(0))) == ['Ethernet0', 'Ethernet8']
-        assert sorted(rows(task.xcvr_table_helper.get_status_sw_tbl(0))) == ['Ethernet0', 'Ethernet8']
+        for getter in (task.xcvr_table_helper.get_intf_tbl, task.xcvr_table_helper.get_status_sw_tbl):
+            assert [sorted(rows(getter(asic))) for asic in (0, 1)] == [['Ethernet0'], ['Ethernet8']]   # each in its namespace
         assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet0', 'Ethernet8']
         assert task._pending_namespaces == set() and log.lines('PORTS_DEFERRED') == []
 
@@ -676,11 +550,10 @@ class TestPublishingWorkers:
             run_worker_iteration(task, {}, db_writes=True)                      # an answered poll, then the admission pass
         assert log.lines('[asic1] SfpStateUpdateTask: Posted all port DOM/SFP info to DB')[0].endswith('s (1 ports, 0 to retry)')
         assert sorted(rows(intf)) == ['Ethernet0']                               # the stale row is gone
-        assert rows(status) == {'Ethernet0': {'status': SFP_STATUS_INSERTED, 'error': 'N/A'},
-                                'Ethernet8': {'status': SFP_STATUS_REMOVED, 'error': 'N/A'}}
+        assert rows(status) == {'Ethernet8': {'status': SFP_STATUS_REMOVED, 'error': 'N/A'}}
         assert not state_port.get('Ethernet8')[0]                                # the sync status is not touched, as by the daemon's cleanup
         assert [c.args[0] for c in read.call_args_list] == [1]                   # the absent module is not read ...
-        assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet0', 'Ethernet8']   # ... and offered as today (declined for lack of EEPROM data)
+        assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet0', 'Ethernet8']   # ... and still offered to the publisher (declined: the module is absent)
         assert task._pending_namespaces == set()
 
     def test_sfp_task_admission_pass_runs_once_at_next_iteration(self):
@@ -710,33 +583,9 @@ class TestPublishingWorkers:
                 assert len(notices) == 1 and notices[0].endswith('s (1 ports, 0 to retry)')
                 assert task._pending_namespaces == set()
 
-    def test_sfp_task_late_asic_recovery_is_admitted(self):
-        # the admission pass reads the live platform state: a module that appeared while its namespace was pending,
-        # with no platform event, gets its rows, its thresholds and one publication
-        reg = registry(['asic0'], TWO_NS)
-        pm = mapping(TWO_NS_PORTS)
-        task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock()}, reg)
-        intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
-        present = {1: True, 2: False}
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher, \
-                platform_reads(presence=lambda pport: present[pport]):
-            worker_init(task, pm)
-            run_worker_iteration(task, {}, db_writes=True)
-            assert sorted(rows(intf)) == ['Ethernet0'] and sorted(rows(status)) == ['Ethernet0']
-            assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet0']
-            present[2] = True
-            reg.mark_ready('asic1')
-            run_worker_iteration(task, {}, db_writes=True)
-        assert rows(intf)['Ethernet8']['manufacturer'] == 'Molex'
-        assert rows(status)['Ethernet8'] == {'status': SFP_STATUS_INSERTED, 'error': 'N/A'}
-        for thresholds in (task.dom_db_utils.post_port_dom_thresholds_to_db, task.vdm_db_utils.post_port_vdm_thresholds_to_db):
-            assert [c.args[0] for c in thresholds.call_args_list].count('Ethernet8') == 1
-        assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet0', 'Ethernet8']
-
     def test_sfp_task_admission_pass_uses_live_mapping(self):
         reg = registry(['asic0'], TWO_NS)
         task = make_sfp_task(TWO_NS, mapping(TWO_NS_PORTS), {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         for name in ('_post_port_sfp_info_and_dom_thr_to_db_once', '_init_port_sfp_status_sw_tbl'):
             setattr(task, name, MagicMock(wraps=getattr(task, name)))
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher, \
@@ -767,7 +616,6 @@ class TestPublishingWorkers:
         intf, status, state_port = (task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1),
                                     task.xcvr_table_helper.get_state_port_tbl(1))
         task.on_remove_logical_port = MagicMock(wraps=task.on_remove_logical_port)
-        task._pending_namespaces = {'asic1'}
         task.retry_eeprom_set = {'Ethernet8'}
         task.last_retry_eeprom_time = time.time()                                   # no EEPROM retry before the admission
         configured = mapping([('Ethernet0', 1, 0), ('Ethernet12', 3, 1)])          # CONFIG_DB at the admission
@@ -802,8 +650,8 @@ class TestPublishingWorkers:
         assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet12', 'Ethernet8']
 
     def test_sfp_task_admission_reads_config_db_once_per_admitted_namespace(self):
-        # one namespace, ready before the worker exists: the loop never reads CONFIG_DB (the single-ASIC path is the old
-        # one); two namespaces: no read while the namespace is pending, one at its admission, none afterwards
+        # one namespace, ready before the worker exists: the loop never reads CONFIG_DB; two namespaces: no read while
+        # the namespace is pending, one at its admission, none afterwards
         task = make_sfp_task([''], mapping([('Ethernet0', 1, 0)]), {1: MagicMock()})
         with platform_reads(), patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()):
             worker_init(task, task.port_mapping)
@@ -821,7 +669,6 @@ class TestPublishingWorkers:
     def test_sfp_task_event_paths_defer_publication_without_bookkeeping(self):
         reg = registry(['asic0'], TWO_NS)
         task = make_sfp_task(TWO_NS, mapping(TWO_NS_PORTS), {1: MagicMock(), 2: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
         log = recorder()
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher, \
@@ -833,6 +680,8 @@ class TestPublishingWorkers:
             assert rows(status)['Ethernet8'] == {'status': SFP_STATUS_INSERTED, 'error': 'N/A'}
             assert publisher.call_count == 0 and task._pending_namespaces == {'asic1'}
             assert log.lines('MEDIA_SETTINGS_DEFERRED') == ['[asic1] MEDIA_SETTINGS_DEFERRED (SfpStateUpdateTask): namespace pending, first pending port Ethernet8']
+            run_worker_iteration(task, {2: SFP_STATUS_INSERTED}, db_writes=True)   # a second deferral in the namespace: no second notice
+            assert publisher.call_count == 0 and len(log.lines('MEDIA_SETTINGS_DEFERRED')) == 1
             reg.mark_ready('asic1')
             run_worker_iteration(task, {}, db_writes=True)
         assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet8'] and task._pending_namespaces == set()
@@ -857,19 +706,17 @@ class TestPublishingWorkers:
                     assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet8']
                 else:
                     assert publisher.call_count == 0
-                    sfp._pending_namespaces, cpo._pending_namespaces = {'asic1'}, {'asic1'}
                     reg.mark_ready('asic1')
                     run_worker_iteration(sfp, {})
                     run_worker_iteration(cpo, {})
                     assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet8']
 
-    def test_two_publishing_workers_admission_pass_as_at_base(self):
+    def test_two_publishing_workers_both_run_the_admission_pass(self):
         # both publishing workers run the admitted namespace's start-up pass, as both run the start-up pass at init(),
         # each over the ports of its own device dictionary: the CPO port is posted and published by the CPO worker
         reg = registry(['asic0'], TWO_NS)
         pm = mapping(TWO_NS_PORTS)
-        env = PublisherEnv(cfg_rows={'Ethernet8': (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0')])},
-                           update_required=None)
+        env = PublisherEnv(cfg_rows={'Ethernet8': (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0')])})
         env.helper.get_intf_tbl = MagicMock(return_value=Table("STATE_DB", 'TRANSCEIVER_INFO'))
         env.helper.get_status_sw_tbl = MagicMock(return_value=Table("STATE_DB", 'TRANSCEIVER_STATUS_SW'))
         env.app_port_tbl.set = MagicMock(wraps=env.app_port_tbl.set)
@@ -877,7 +724,6 @@ class TestPublishingWorkers:
         cpo = make_sfp_task(TWO_NS, pm, {2: MagicMock()}, reg, cls=CpoStateUpdateTask)
         for task in (sfp, cpo):
             task.xcvr_table_helper = env.helper
-            task._pending_namespaces = {'asic1'}
         reg.mark_ready('asic1')
         log = recorder()
         # the CPO worker's own info post (OE and ELSFP reads) is replaced by one that reads the module's info
@@ -926,7 +772,6 @@ class TestPublishingWorkers:
         # poll away; the insert-soak period is shorter and still wins; after the admission the state's timeout is back
         reg = registry(['asic0'], TWO_NS)
         task = make_sfp_task(TWO_NS, mapping(TWO_NS_PORTS), {1: MagicMock(), 2: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         insertion = {1: SFP_STATUS_INSERTED}
         polls = []
         script = [                                                      # per poll: (what happens during it, the events it returns)
@@ -950,7 +795,8 @@ class TestPublishingWorkers:
                 patch_publishers('post_port_info_to_db', MagicMock(return_value=None)), \
                 patch('xcvrd.xcvrd_utilities.common.update_port_transceiver_status_table_sw', MagicMock()), \
                 patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True)), \
-                patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()):
+                patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()), \
+                config_db_read(task):
             stopping = threading.Event()
             stopping.is_set = MagicMock(side_effect=[False] * len(script) + [True])
             task.task_worker(stopping, threading.Event())
@@ -965,7 +811,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         task.retry_eeprom_set = {'Ethernet0', 'Ethernet12'}            # another namespace's entry, and one the pass reads
         eeprom = {1: None, 2: None, 3: CMIS_XCVR_INFO}
         reg.mark_ready('asic1')
@@ -994,7 +839,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf = task.xcvr_table_helper.get_intf_tbl(1)
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
         high_temp = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_HIGH_TEMP)
@@ -1022,7 +866,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
         power = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_POWER_BUDGET_EXCEEDED)
@@ -1055,7 +898,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING | SfpBase.SFP_ERROR_BIT_I2C_STUCK)
         power = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_POWER_BUDGET_EXCEEDED)
@@ -1098,7 +940,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
         high_temp = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_HIGH_TEMP)
@@ -1123,69 +964,73 @@ class TestPublishingWorkers:
         assert task._pending_namespaces == set() and task.retry_eeprom_set == {'Ethernet8'}
         assert log.lines('Posted all port DOM/SFP info')[0].endswith('s (2 ports, 1 to retry)')
 
-    def test_sfp_task_error_cache_is_per_worker(self):
-        # each publishing worker caches the platform errors it consumed itself, as today: an error the other worker
-        # recorded is unknown to this worker's passes (every platform without CPO ports runs one worker; each worker
-        # consumes the events of the ports in its own device dictionary)
-        reg = registry(['asic0'], TWO_NS)
-        pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1)])
-        sfp = make_sfp_task(TWO_NS, pm, {1: MagicMock()}, reg)
-        other = make_sfp_task(TWO_NS, pm, {2: MagicMock()}, reg, cls=CpoStateUpdateTask)
-        other.xcvr_table_helper = sfp.xcvr_table_helper                                    # one STATE_DB
-        blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()), platform_reads():
-            run_worker_iteration(other, {2: blocking}, db_writes=True)
-        assert other.sfp_error_dict == {2: (blocking, {})} and sfp.sfp_error_dict == {}
-        assert other._recorded_error('Ethernet8', other.port_mapping) == (True, True) and sfp._recorded_error('Ethernet8', sfp.port_mapping) == (False, False)
+    def test_sfp_task_init_pass_keeps_info_row_of_absent_port(self):
+        # the start-up pass in init() only writes the status of an absent port: its info row is the daemon's
+        # stale-row cleanup's to remove; the removal by the status pass belongs to the admission
+        pm = mapping(TWO_NS_PORTS)
+        task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock()}, registry(TWO_NS, TWO_NS))
+        intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
+        intf.set('Ethernet8', [('manufacturer', 'Molex')])                     # the row of the module's earlier presence
+        with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()), \
+                platform_reads(presence=lambda pport: pport != 2):
+            worker_init(task, pm)
+        assert rows(status)['Ethernet8']['status'] == SFP_STATUS_REMOVED
+        assert rows(intf)['Ethernet8'] == {'manufacturer': 'Molex'}
 
     def test_sfp_task_admission_removes_stale_info_of_absent_port(self):
-        # a module that went away while its namespace was pending had no removal event handled: the admission pass
-        # removes its TRANSCEIVER_INFO row as the daemon's start removes a stale one and writes REMOVED (thresholds,
-        # NPU sync status and cache entry stand as today) and publishes nothing; a port behind a recorded blocking
-        # error is not probed (on some platforms presence is an EEPROM read): its rows stand and it is retried; the
-        # present port is posted as usual
+        # the daemon's stale-row cleanup skipped the pending namespace: for an absent module the admission pass
+        # removes the TRANSCEIVER_INFO row as that cleanup removes a stale one and writes REMOVED (thresholds,
+        # NPU sync status and cache entry stand) and publishes nothing; a port behind a recorded blocking
+        # error is not probed (on some platforms presence is an EEPROM read): its TRANSCEIVER_INFO row is removed too,
+        # its error row and its other rows stand and it is retried; a port whose recorded error does not block reads
+        # is probed like any other and, absent, handled as the absent one; the present port is posted as usual
         reg = registry(['asic0'], TWO_NS)
-        pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1), ('Ethernet16', 4, 1)])
+        pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1), ('Ethernet16', 4, 1), ('Ethernet20', 5, 1)])
         env = PublisherEnv(cfg_rows={lport: (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('subport', '0')])
-                                     for lport in ('Ethernet8', 'Ethernet12', 'Ethernet16')}, update_required=None)
+                                     for lport in ('Ethernet8', 'Ethernet12', 'Ethernet16')})
         intf, status, dom_thr = (Table("STATE_DB", name) for name in ('TRANSCEIVER_INFO', 'TRANSCEIVER_STATUS_SW', 'TRANSCEIVER_DOM_THRESHOLD'))
         env.helper.get_intf_tbl = MagicMock(return_value=intf)
         env.helper.get_status_sw_tbl = MagicMock(return_value=status)
         env.helper.get_dom_threshold_tbl = MagicMock(return_value=dom_thr)
-        task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock(), 4: MagicMock()}, reg)
+        task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock(), 4: MagicMock(), 5: MagicMock()}, reg)
         task.xcvr_table_helper = env.helper
-        task._pending_namespaces = {'asic1'}
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
-        for lport in ('Ethernet8', 'Ethernet16'):
+        high_temp = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_HIGH_TEMP)
+        for lport in ('Ethernet8', 'Ethernet16', 'Ethernet20'):
             intf.set(lport, [('manufacturer', 'Molex')])                       # rows of the modules' earlier presence
             dom_thr.set(lport, [('temphighalarm', '75.0')])
             env.state_port_tbl.set(lport, [(NPU_SI_SETTINGS_SYNC_STATUS_KEY, NPU_SI_SETTINGS_NOTIFIED_VALUE)])
         task.sfp_error_dict[4] = (blocking, {})                                  # Ethernet16 reported a blocking error; its presence reads False
         status.set('Ethernet16', [('status', blocking), ('error', SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING)])
-        present = {2: False, 3: True, 4: False}
+        task.sfp_error_dict[5] = (high_temp, {})                                 # Ethernet20 reported an error that does not block reads, then went away
+        status.set('Ethernet20', [('status', high_temp), ('error', SfpBase.SFP_ERROR_DESCRIPTION_HIGH_TEMP)])
+        present = {2: False, 3: True, 4: False, 5: False}
         reg.mark_ready('asic1')
         log = recorder()
         with publisher_patches(), platform_reads(presence=lambda pport: present[pport]) as (presence, read), \
                 patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db', wraps=common.del_port_sfp_dom_info_from_db) as deleter, \
                 patch('xcvrd.xcvrd.helper_logger', log):
             admit(task)
-        assert [c.args[0] for c in deleter.call_args_list] == ['Ethernet8'] and deleter.call_args.args[2] == [intf]
-        assert sorted(rows(intf)) == ['Ethernet12', 'Ethernet16'] and sorted(rows(dom_thr)) == ['Ethernet16', 'Ethernet8']
+        assert [c.args[0] for c in deleter.call_args_list] == ['Ethernet8', 'Ethernet16', 'Ethernet20']
+        assert all(c.args[2] == [intf] for c in deleter.call_args_list)
+        assert sorted(rows(intf)) == ['Ethernet12'] and sorted(rows(dom_thr)) == ['Ethernet16', 'Ethernet20', 'Ethernet8']
         assert rows(status) == {'Ethernet8': {'status': SFP_STATUS_REMOVED, 'error': 'N/A'},
                                 'Ethernet12': {'status': SFP_STATUS_INSERTED, 'error': 'N/A'},
-                                'Ethernet16': {'status': blocking, 'error': SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING}}
+                                'Ethernet16': {'status': blocking, 'error': SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING},
+                                'Ethernet20': {'status': SFP_STATUS_REMOVED, 'error': 'N/A'}}
         assert [c.args[0] for c in read.call_args_list] == [3]
-        assert 4 not in [c.args[0] for c in presence.call_args_list]           # no presence read behind the blocking error
+        probed = [c.args[0] for c in presence.call_args_list]
+        assert 4 not in probed and 5 in probed                                 # no presence read behind the blocking error only
         assert env.writes() == 1 and env.app_port_tbl.get('Ethernet12')[0]      # the present port published, the others not
-        for lport in ('Ethernet8', 'Ethernet16'):                               # the sync status stands, as today
+        for lport in ('Ethernet8', 'Ethernet16', 'Ethernet20'):                 # the sync status stands
             assert dict(env.state_port_tbl.get(lport)[1]) == {NPU_SI_SETTINGS_SYNC_STATUS_KEY: NPU_SI_SETTINGS_NOTIFIED_VALUE}
-        assert task.sfp_error_dict == {4: (blocking, {})}
+        assert task.sfp_error_dict == {4: (blocking, {}), 5: (high_temp, {})}
         assert task._pending_namespaces == set() and task.retry_eeprom_set == {'Ethernet16'}
-        assert log.lines('Posted all port DOM/SFP info')[0].endswith('s (3 ports, 1 to retry)')
+        assert log.lines('Posted all port DOM/SFP info')[0].endswith('s (4 ports, 1 to retry)')
 
     def test_sfp_task_admission_cleans_before_it_publishes(self):
         # the admission pass writes the status rows and cleans the absent ports before it reads and publishes, as the
-        # daemon's start cleans before the workers publish; the start-up pass keeps today's order
+        # daemon's start cleans before the workers publish; the start-up pass in init() publishes first
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
@@ -1207,7 +1052,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
         intf.set('Ethernet8', [('manufacturer', 'Molex')])                        # posted by the event path while pending
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
@@ -1225,17 +1069,17 @@ class TestPublishingWorkers:
         assert rows(intf)['Ethernet8'] == {'manufacturer': 'Molex'} and 'Ethernet12' in rows(intf)
         assert rows(status) == {'Ethernet8': {'status': blocking, 'error': SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING},
                                 'Ethernet12': {'status': SFP_STATUS_INSERTED, 'error': 'N/A'}}
-        assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet8', 'Ethernet12']   # the absent read is offered as today, declined
+        assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet8', 'Ethernet12']   # the absent read is offered to the publisher, declined
         assert task.sfp_error_dict == {2: (blocking, {})} and task.retry_eeprom_set == set()
 
     def test_sfp_task_admission_leaves_blocked_port_to_its_events(self):
         # a port with a recorded blocking error whose presence reads absent at admission (on NVIDIA's firmware-control
-        # path presence is an EEPROM read): no presence read, no deletion, error row and cache entry intact, the next
-        # event decides; the namespace's absent port without an error is still cleaned, its present port posted
+        # path presence is an EEPROM read): no presence read, its TRANSCEIVER_INFO row removed, error row and cache
+        # entry intact, the next event decides; the namespace's absent port without an error is cleaned as well, its
+        # present port posted
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1), ('Ethernet16', 4, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock(), 4: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         intf, status = task.xcvr_table_helper.get_intf_tbl(1), task.xcvr_table_helper.get_status_sw_tbl(1)
         i2c_stuck = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING | SfpBase.SFP_ERROR_BIT_I2C_STUCK)
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()), platform_reads():
@@ -1251,12 +1095,12 @@ class TestPublishingWorkers:
                 patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db', wraps=common.del_port_sfp_dom_info_from_db) as deleter:
             admit(task)
         assert 4 not in [c.args[0] for c in presence.call_args_list] and [c.args[0] for c in read.call_args_list] == [3]
-        assert [c.args[0] for c in deleter.call_args_list] == ['Ethernet8']
-        assert sorted(rows(intf)) == ['Ethernet12', 'Ethernet16']
+        assert [c.args[0] for c in deleter.call_args_list] == ['Ethernet8', 'Ethernet16']
+        assert sorted(rows(intf)) == ['Ethernet12']
         assert rows(status) == {'Ethernet8': {'status': SFP_STATUS_REMOVED, 'error': 'N/A'},
                                 'Ethernet12': {'status': SFP_STATUS_INSERTED, 'error': 'N/A'}, 'Ethernet16': error_row}
         assert task.sfp_error_dict == {4: (i2c_stuck, {})}
-        # the blocked port is not offered to the publisher; the absent one is, as today (declined for lack of EEPROM data)
+        # the blocked port is not offered to the publisher; the absent one is (declined: the module is absent)
         assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet8', 'Ethernet12']
         assert task._pending_namespaces == set() and task.retry_eeprom_set == {'Ethernet16'}   # retried like an unreadable one
         # the error clears with a re-plug: the insertion event reads, posts and publishes the port (the retry entry
@@ -1267,35 +1111,14 @@ class TestPublishingWorkers:
                 platform_reads(presence=lambda pport: present[pport]):
             run_worker_iteration(task, {4: SFP_STATUS_INSERTED}, db_writes=True)
         assert task.sfp_error_dict == {} and rows(status)['Ethernet16'] == {'status': SFP_STATUS_INSERTED, 'error': 'N/A'}
+        assert sorted(rows(intf)) == ['Ethernet12', 'Ethernet16']                 # posted again: a new row
         assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet16'] and task.retry_eeprom_set == {'Ethernet16'}
-
-
-    def test_sfp_task_init_pass_leaves_blocked_port_to_its_events(self):
-        # the guard applies to the start-up pass as to the admission pass: behind a recorded blocking error neither
-        # pass reads the port, presence included, and the error row stands (a worker's own cache is empty at its
-        # start-up pass; the entry stands in for one recorded before the pass)
-        reg = registry(TWO_NS, TWO_NS)
-        pm = mapping(TWO_NS_PORTS)
-        sfp = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock()}, reg)
-        status = sfp.xcvr_table_helper.get_status_sw_tbl(1)
-        blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
-        error_row = {'status': blocking, 'error': SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING}
-        sfp.sfp_error_dict[2] = (blocking, {})
-        status.set('Ethernet8', list(error_row.items()))
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher, \
-                platform_reads(presence=lambda pport: pport != 2) as (presence, read):     # behind the error presence reads absent
-            worker_init(sfp, pm)
-        assert [c.args[0] for c in presence.call_args_list] == [1, 1] and [c.args[0] for c in read.call_args_list] == [1]
-        assert rows(status) == {'Ethernet0': {'status': SFP_STATUS_INSERTED, 'error': 'N/A'}, 'Ethernet8': error_row}
-        assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet0']
-        assert sfp.sfp_error_dict == {2: (blocking, {})} and sfp.retry_eeprom_set == {'Ethernet8'}
 
     def test_sfp_task_error_cache_keyed_by_port_index(self):
         # a platform may key its module errors as int and its removal/insertion events as str: the cache is
         # kept by port index, so the later events clear the error and the recovered port is read and published
         reg = registry(['asic0'], TWO_NS)
         task = make_sfp_task(TWO_NS, mapping(TWO_NS_PORTS), {1: MagicMock(), 2: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         blocking = str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING)
         log = recorder()
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher, \
@@ -1346,7 +1169,6 @@ class TestPublishingWorkers:
         reg = registry(['asic0'], TWO_NS)
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
         task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock(), 3: MagicMock()}, reg)
-        task._pending_namespaces = {'asic1'}
         task.sfp_error_dict[2] = ('not-an-event', {})
         assert task._recorded_error('Ethernet8', task.port_mapping) == (False, False)
         status = task.xcvr_table_helper.get_status_sw_tbl(1)
@@ -1367,7 +1189,6 @@ class TestPublishingWorkers:
         ports = [('Ethernet{}'.format(4 * i), 100 + i, 1) for i in range(200)]
         reg = registry([], ['asic1'])
         task = make_sfp_task(['asic1'], mapping(ports), {p: MagicMock() for _, p, _ in ports}, reg)
-        task._pending_namespaces = {'asic1'}
         reg.mark_ready('asic1')
         calls = []
 
@@ -1469,17 +1290,19 @@ class TestPublishingWorkers:
             assert 'asic1' in reg.admitted_namespaces() and task._pass_deadline == {}
             assert len(log.lines('start-up pass deferred')) == 1 and len(log.lines('Posted all port DOM/SFP info')) == 1
 
-    def test_sfp_task_admission_stop_during_deferral_leaves_namespace_pending(self):
-        reg, task = self._soaking_fixture()
+    def test_sfp_task_admission_starts_nothing_after_a_stop_request(self):
+        # a stop request seen before a namespace's turn: nothing is started for it. CONFIG_DB is not read, no module is
+        # read and the namespace stays pending, as it does when the stop arrives during a deferral
+        reg = registry(['asic0'], TWO_NS)
+        task = make_sfp_task(TWO_NS, mapping(TWO_NS_PORTS), {1: MagicMock(), 2: MagicMock()}, reg)
+        reg.mark_ready('asic1')
+        task.task_stopping_event.set()
         with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()), \
-                platform_reads() as (_, read):
-            admit(task)
-            task.task_stopping_event.set()
-            reads = config_db_read(task)
-            with reads as config_reads:
-                task._admit_pending_namespaces()
-        assert read.call_count == 0 and config_reads.call_count == 0
-        assert task._pending_namespaces == {'asic1'} and 'asic1' not in reg.admitted_namespaces()
+                platform_reads() as (presence, read), config_db_read(task) as config_reads:
+            task._admit_pending_namespaces()
+        assert config_reads.call_count == 0 and presence.call_count == 0 and read.call_count == 0
+        assert task._pending_namespaces == {'asic1'} and task._reconciled == set()
+        assert 'asic1' not in reg.admitted_namespaces()
 
     def test_sfp_task_admission_reconciles_config_db_once(self):
         # the CONFIG_DB reconcile runs at the first attempt only: a deferred attempt does not read again, and a row
@@ -1517,7 +1340,7 @@ class TestPublishingWorkers:
     def test_sfp_task_admission_arms_the_retry_clock(self):
         # the pass's unreadable port enters an empty retry set: the retry that follows the admission in the same
         # iteration waits for the ordinary interval instead of reading the port again at once; a set that already had
-        # an entry keeps its clock (the entry is due, as today)
+        # an entry keeps its clock (the entry is retried at its own time)
         for preset in (set(), {'Ethernet0'}):
             reg = registry(['asic0'], TWO_NS)
             pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1), ('Ethernet12', 3, 1)])
@@ -1599,7 +1422,7 @@ class TestPublishingWorkers:
 
     def test_sfp_task_boot_policy_sampled_per_namespace(self):
         pm = mapping(TWO_NS_PORTS)
-        # (a) the constructor samples the namespaces that are ready then; a namespace not ready is sampled once, when
+        # the constructor samples the namespaces that are ready then; a namespace not ready is sampled once, when
         # its start-up pass runs at its admission (the event paths before it defer their publication), and that
         # sample decides
         for warm_later in (True, False):
@@ -1615,7 +1438,6 @@ class TestPublishingWorkers:
                 flags['asic1'] = warm_later                                    # the namespace's databases are populated later
                 task.dom_db_utils, task.vdm_db_utils = MagicMock(), MagicMock()
                 task.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=Table("STATE_DB", 'TRANSCEIVER_STATUS_SW'))   # read by the admission pass
-                task._pending_namespaces = {'asic1'}
                 with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting') as publisher, \
                         patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True)), \
                         patch_publishers('post_port_info_to_db', MagicMock(return_value=None)):
@@ -1628,7 +1450,7 @@ class TestPublishingWorkers:
                     assert publisher.call_count == (0 if warm_later else 1) and task._pending_namespaces == set()
                 assert [c.args[0] for c in warm.call_args_list] == ['asic0', 'asic1']         # one sample per namespace
                 assert task.warm_fast_reboot_status == {'asic0': False, 'asic1': warm_later}
-        # (a2) the sample does not wait for a readable module: it is taken when the namespace's pass runs, at its
+        # the sample does not wait for a readable module: it is taken when the namespace's pass runs, at its
         # admission; a namespace that turned ready between the constructor and init() is pending for init() (the
         # constructor's snapshot decides, not sampled there) and sampled at its admission like any other
         for at_init in (False, True):
@@ -1652,20 +1474,6 @@ class TestPublishingWorkers:
                     admit(task)
                     assert publisher.call_count == 0 and task.retry_eeprom_set == ({'Ethernet0', 'Ethernet8'} if at_init else {'Ethernet8'})
                 assert [c.args[0] for c in warm.call_args_list] == ['asic0', 'asic1'] and task.warm_fast_reboot_status['asic1'] is True
-        # (b) profiles skipped by init() (fast flag seen there) while the worker later samples a cold policy
-        cold = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 2: MagicMock()}, registry(TWO_NS, TWO_NS))
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.g_dict', {}), \
-                patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', wraps=media_settings_parser.notify_media_setting) as publisher:
-            cold._publish_media_settings('Ethernet0', {1: XCVR_INFO}, pm)
-        assert publisher.call_count == 1 and cold.xcvr_table_helper.get_app_port_tbl.call_count == 0     # reached, nothing to publish
-        # (c) two workers sampling on opposite sides of a flag clear keep their own values
-        before = make_sfp_task(TWO_NS, pm, {1: MagicMock()}, registry(TWO_NS, TWO_NS), warm={'asic0': True})
-        after = make_sfp_task(TWO_NS, pm, {2: MagicMock()}, registry(TWO_NS, TWO_NS), warm={}, cls=CpoStateUpdateTask)
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher:
-            before._publish_media_settings('Ethernet0', {1: XCVR_INFO}, pm)
-            assert publisher.call_count == 0                                                   # warm: suppressed
-            after._publish_media_settings('Ethernet0', {1: XCVR_INFO}, pm)
-            assert publisher.call_count == 1
 
     def test_sfp_task_all_publication_paths_use_helper(self):
         pm = mapping([('Ethernet0', 1, 0)])
@@ -1694,20 +1502,6 @@ class TestPublishingWorkers:
                 patch_publishers('post_port_info_to_db', MagicMock(return_value=None)):
             worker_init(task, pm)
         assert publisher.call_count == 3 and task._pending_namespaces == set() and log.lines('_DEFERRED') == []
-
-    def test_sfp_task_no_asic_outcome(self):
-        reg = registry(['asic0'], TWO_NS)
-        pm = mapping([('Ethernet0', 1, 0), ('Ethernet40', 9, 5)])          # ASIC 5 is not a managed namespace
-        task = make_sfp_task(TWO_NS, pm, {1: MagicMock(), 9: MagicMock()}, reg)
-        log = recorder()
-        with patch('xcvrd.xcvrd_utilities.media_settings_parser.notify_media_setting', MagicMock()) as publisher, \
-                patch('xcvrd.xcvrd.helper_logger', log), \
-                patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic5')) as legacy:
-            task._publish_media_settings('Ethernet999', {}, pm)
-            assert publisher.call_count == 0 and len(log.lines('no ASIC index')) == 1
-            task._publish_media_settings('Ethernet40', {9: XCVR_INFO}, pm)
-            assert [c.args[0] for c in publisher.call_args_list] == ['Ethernet40'] and legacy.call_args.args[0] == 5
-            assert task._pending_namespaces == {'asic1'}                        # the constructor's set, untouched
 
     def test_cpo_state_task_forwards_readiness(self):
         reg = registry(['asic0'], TWO_NS)
@@ -1739,8 +1533,8 @@ def make_cmis_task(namespaces, port_mapping, obj_dict, reg=None, cls=CmisManager
             patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False)):
         kwargs = {'asic_readiness': reg} if reg is not None else {}
         task = cls(namespaces, port_mapping, obj_dict, threading.Event(), **kwargs)
-    task.status_table = Table("STATE_DB", "TRANSCEIVER_STATUS_SW")
-    task.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=task.status_table)
+    task.status_tables = tables_by_asic("TRANSCEIVER_STATUS_SW")
+    task.xcvr_table_helper.get_status_sw_tbl = MagicMock(side_effect=task.status_tables.__getitem__)
     task.xcvr_table_helper.get_gearbox_line_lanes_dict = MagicMock(return_value={})
     return task
 
@@ -1753,7 +1547,7 @@ def cmis_iteration(task, ports):
 
 
 def cmis_state(task, lport):
-    found, state = task.status_table.hget(lport, 'cmis_state')
+    found, state = status_tbl(task, lport).hget(lport, 'cmis_state')
     return state if found else None
 
 
@@ -1784,15 +1578,6 @@ class TestCmisGate:
             assert sorted(c.args[0] for c in state_read.call_args_list) == ['Ethernet0', 'Ethernet8']
         assert sfps[2].get_presence.call_count == 1                        # processed with the metadata accumulated while pending
         assert task.port_dict['Ethernet8']['speed'] == '400000' and task.port_dict['Ethernet8']['host_tx_ready'] == 'true'
-
-    def test_cmis_task_observer_metadata_allowed_while_pending(self):
-        reg = registry(['asic0'], TWO_NS)
-        task, sfps = self._two_port_task(reg)
-        assert cmis_state(task, 'Ethernet8') == CMIS_STATE_INSERTED
-        task.on_port_update_event(PortChangeEvent('Ethernet8', 2, 1, PortChangeEvent.PORT_DEL, {}, 'STATE_DB', 'TRANSCEIVER_INFO'))
-        assert cmis_state(task, 'Ethernet8') == CMIS_STATE_REMOVED
-        task.process_single_lport('Ethernet8', task.port_dict['Ethernet8'])
-        assert sfps[2].method_calls == [] and cmis_state(task, 'Ethernet8') == CMIS_STATE_REMOVED
 
     def test_cmis_task_run_does_not_wait_for_port_config_done(self):
         assert not hasattr(CmisManagerTask, 'wait_for_port_config_done')
@@ -1840,22 +1625,24 @@ class TestCmisGate:
         cmis_iteration(task, 2)
         assert sfps[2].get_presence.call_count == 1
 
-    def test_cmis_task_samples_the_warm_restart_of_a_late_namespace_at_its_first_use(self):
-        # a namespace ready at construction is sampled there; a pending one at the first use for one of its ports. The
-        # gate holds those ports until the admission, so that use follows the namespace's marker: its syncd has started
-        # by then, and a cold start of it resets the restore count an earlier warm reboot left
+    def test_cmis_task_samples_the_boot_flags_of_a_late_namespace_at_its_first_use(self):
+        # a namespace ready at construction is sampled there; a pending one at the first call for one of its ports
         reg = registry(['asic0'], TWO_NS)
-        with patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=True)) as sample, \
+        with patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=True)) as warm, \
+                patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=True)) as fast, \
                 patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(side_effect=lambda asic: TWO_NS[asic])):
-            task, _ = self._two_port_task(reg)
-            cmis_iteration(task, 2)                             # the pending namespace's port stops at the gate
-            assert [c.args for c in sample.call_args_list] == [('asic0',)]
+            task, _ = self._two_port_task(reg)                  # the factory answers the fast-reboot flag False while it constructs
+            assert [c.args for c in warm.call_args_list] == [('asic0',)] and fast.call_count == 0
             assert task.warm_restart_status == {'asic0': True, 'asic1': None}
-            sample.return_value = False                         # the late namespace's syncd has started cold meanwhile
+            assert task.fast_reboot_status == {'asic0': False, 'asic1': None}
+            warm.return_value = False                           # the late namespace's syncd has started cold meanwhile
             assert task.is_warm_restart_for_lport('Ethernet0') is True and task.is_warm_restart_for_lport('Ethernet8') is False
-            sample.return_value = True
-            assert task.is_warm_restart_for_lport('Ethernet8') is False             # sampled once
-            assert [c.args for c in sample.call_args_list] == [('asic0',), ('asic1',)]
+            assert task.is_fast_reboot_enabled_for_lport('Ethernet0') is False and task.is_fast_reboot_enabled_for_lport('Ethernet8') is True
+            warm.return_value, fast.return_value = True, False
+            assert task.is_warm_restart_for_lport('Ethernet8') is False             # each sampled once
+            assert task.is_fast_reboot_enabled_for_lport('Ethernet8') is True
+            assert [c.args for c in warm.call_args_list] == [('asic0',), ('asic1',)]
+            assert [c.args for c in fast.call_args_list] == [('asic1',)]
 
     def test_cmis_task_admission_during_iteration_waits_for_the_next_cache(self):
         reg = registry(['asic0'], TWO_NS)
@@ -1869,45 +1656,6 @@ class TestCmisGate:
         cmis_iteration(task, 2)
         assert sfps[2].get_presence.call_count == 1                                   # processed in the next iteration
 
-    def test_cmis_task_leaves_a_port_behind_a_blocking_error(self):
-        reg = registry(TWO_NS, TWO_NS)
-        task, sfps = self._two_port_task(reg)
-
-        def status_row(lport, error):                                             # the row the port's last event wrote
-            task.status_table.set(lport, [('cmis_state', CMIS_STATE_INSERTED), ('status', '1'), ('error', error)])
-        status_row('Ethernet0', SfpBase.SFP_ERROR_DESCRIPTION_HIGH_TEMP)          # a non-blocking error gates nothing
-        status_row('Ethernet8', BLOCKING_ERROR)
-        cmis_iteration(task, 2)
-        cmis_iteration(task, 2)                                                  # revisited each iteration, still behind the error
-        assert sfps[1].get_presence.call_count == 1 and sfps[2].method_calls == []
-        assert cmis_state(task, 'Ethernet8') == CMIS_STATE_INSERTED              # no state taken behind the error
-        status_row('Ethernet8', 'N/A')                                           # the error ended (the clearing insertion's row)
-        cmis_iteration(task, 2)
-        assert sfps[2].get_presence.call_count == 1
-
-    def test_cmis_task_restarts_an_interrupted_initialisation_after_a_blocking_error(self):
-        reg = registry(TWO_NS, TWO_NS)
-        task, sfps = self._two_port_task(reg)
-        table = task.status_table
-
-        def merging_set(key, fvs, _set=table.set):                               # the real table keeps the other fields
-            found, row = table.get(key)
-            merged = dict(row) if found else {}
-            merged.update(dict(fvs))
-            _set(key, list(merged.items()))
-        table.set = merging_set
-        task.port_dict['Ethernet8']['cmis_retries'] = 1
-        task.port_dict['Ethernet8']['cmis_expired'] = object()                     # a timer the error outlives
-        table.set('Ethernet8', [('cmis_state', common.CMIS_STATE_DP_INIT), ('status', '1'), ('error', BLOCKING_ERROR)])
-        cmis_iteration(task, 2)
-        assert cmis_state(task, 'Ethernet8') == CMIS_STATE_INSERTED and sfps[2].method_calls == []
-        assert task.port_dict['Ethernet8']['cmis_retries'] == 1 and task.port_dict['Ethernet8']['cmis_expired'] is None
-        cmis_iteration(task, 2)                                                  # still behind the error: nothing more
-        assert cmis_state(task, 'Ethernet8') == CMIS_STATE_INSERTED and sfps[2].method_calls == []
-        table.set('Ethernet8', [('status', '1'), ('error', 'N/A')])              # the error ended: the initialisation restarts
-        cmis_iteration(task, 2)
-        assert sfps[2].get_presence.call_count == 1
-
     def test_cpo_manager_task_forwards_readiness(self):
         reg = registry(['asic0'], TWO_NS)
         task = make_cmis_task(TWO_NS, mapping(TWO_NS_PORTS), {2: MagicMock()}, reg, cls=CpoManagerTask)
@@ -1915,7 +1663,6 @@ class TestCmisGate:
 
 
 SFF_ATTRS = {'type': 'QSFP28', 'subport': '0', 'lanes': '1,2,3,4', 'host_tx_ready': 'true', 'admin_status': 'up'}
-BLOCKING_ERROR = '|'.join([SfpBase.SFP_ERROR_DESCRIPTION_BLOCKING, SfpBase.SFP_ERROR_DESCRIPTION_I2C_STUCK])   # an error event's row
 
 
 def make_sff_task(namespaces, reg, sfps):
@@ -1924,8 +1671,6 @@ def make_sff_task(namespaces, reg, sfps):
     chassis.get_sfp = MagicMock(side_effect=lambda pport: sfps[pport])
     with pin_multi_asic(namespaces), patch('xcvrd.sff_mgr.XcvrTableHelper', MagicMock()):
         task = SffManagerTask(namespaces, threading.Event(), chassis, MagicMock(), asic_readiness=reg)
-    task.status_table = Table("STATE_DB", "TRANSCEIVER_STATUS_SW")               # the rows the ports' events write
-    task.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=task.status_table)
     return task, chassis
 
 
@@ -1979,6 +1724,19 @@ class TestSffGate:
         # iteration 4: nothing deferred, no event -> idle
         sff_iteration(task, has_event=False, visited_ports=0)
         assert api.tx_disable_channel.call_count == 1
+
+    def test_sff_task_revisits_the_deferred_port_alone(self):
+        # a deferred port is revisited without an observer event once its namespace is admitted, and alone: the
+        # processed port of the other namespace is not read again
+        reg = registry(['asic0'], TWO_NS)
+        task, chassis = make_sff_task(TWO_NS, reg, {1: sff_sfp(sff_api()), 2: sff_sfp(sff_api())})
+        task.on_port_update_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, dict(SFF_ATTRS)))
+        task.on_port_update_event(PortChangeEvent('Ethernet8', 2, 1, PortChangeEvent.PORT_SET, dict(SFF_ATTRS)))
+        sff_iteration(task, has_event=True, visited_ports=2)
+        assert [c.args[0] for c in chassis.get_sfp.call_args_list] == [1] and task.deferred_ports == {'Ethernet8'}
+        reg.mark_ready('asic1')
+        sff_iteration(task, has_event=False, visited_ports=1)
+        assert [c.args[0] for c in chassis.get_sfp.call_args_list] == [1, 2] and task.deferred_ports == set()
 
     def test_sff_task_waits_for_the_publishing_workers_pass(self):
         reg = registry(['asic0'], TWO_NS)
@@ -2048,22 +1806,6 @@ class TestSffGate:
         sff_iteration(task, has_event=False, visited_ports=0)                    # no timed re-processing
         assert chassis.get_sfp.call_count == 4
 
-    def test_sff_task_ready_namespace_unchanged(self):
-        reg = registry(TWO_NS, TWO_NS)
-        api = sff_api()
-        task, chassis = make_sff_task(TWO_NS, reg, {2: sff_sfp(api)})
-        task.get_host_tx_status = MagicMock(return_value='true')
-        task.get_admin_status = MagicMock(return_value='up')
-        task.on_port_update_event(PortChangeEvent('Ethernet8', 2, 1, PortChangeEvent.PORT_SET, {'type': 'QSFP28', 'subport': '0', 'lanes': '1,2,3,4'}))
-        sff_iteration(task, has_event=True, visited_ports=1)                     # insertion: TX enabled
-        assert api.tx_disable_channel.call_count == 1 and task.deferred_ports == set()
-        task.on_port_update_event(PortChangeEvent('Ethernet8', 2, 1, PortChangeEvent.PORT_SET, {'host_tx_ready': 'false'}))
-        api.get_tx_disable = MagicMock(return_value=[False, False, False, False])
-        sff_iteration(task, has_event=True, visited_ports=1)                     # host_tx_ready change: TX disabled
-        assert api.tx_disable_channel.call_count == 2
-        sff_iteration(task, has_event=True, visited_ports=1)                     # no change
-        assert api.tx_disable_channel.call_count == 2 and task.port_dict == task.port_dict_prev
-
     def test_sff_task_logs_first_deferral_once_per_namespace(self):
         reg = registry([], TWO_NS)
         task, chassis = make_sff_task(TWO_NS, reg, {1: sff_sfp(sff_api()), 2: sff_sfp(sff_api())})
@@ -2078,37 +1820,6 @@ class TestSffGate:
         assert [line.split(': ', 1)[1] for line in task.helper_logger.lines('PORTS_DEFERRED')] == [
             '[asic0] PORTS_DEFERRED (SffManagerTask): namespace pending, first deferred port Ethernet0',
             '[asic1] PORTS_DEFERRED (SffManagerTask): namespace pending, first deferred port Ethernet8']
-
-
-    def test_sff_task_defers_a_port_behind_a_blocking_error(self):
-        reg = registry(TWO_NS, TWO_NS)
-        api = sff_api()
-        task, chassis = make_sff_task(TWO_NS, reg, {2: sff_sfp(api)})
-        task.status_table.set('Ethernet8', [('status', '1'), ('error', BLOCKING_ERROR)])
-        task.on_port_update_event(PortChangeEvent('Ethernet8', 2, 1, PortChangeEvent.PORT_SET, dict(SFF_ATTRS)))
-        sff_iteration(task, has_event=True, visited_ports=1)
-        assert chassis.get_sfp.call_count == 0 and task.deferred_ports == {'Ethernet8'} and 'Ethernet8' not in task.port_dict_prev
-        sff_iteration(task, has_event=False, visited_ports=1)                     # revisited without an event, still behind the error
-        assert chassis.get_sfp.call_count == 0 and task.deferred_ports == {'Ethernet8'}
-        task.status_table.set('Ethernet8', [('status', '1'), ('error', 'N/A')])   # the error ended (the clearing insertion's row, no observer event)
-        sff_iteration(task, has_event=False, visited_ports=1)
-        assert chassis.get_sfp.call_count == 1 and api.tx_disable_channel.call_count == 1
-        assert task.deferred_ports == set() and 'Ethernet8' in task.port_dict_prev
-
-    def test_sff_task_blocking_error_on_a_processed_port_changes_nothing(self):
-        reg = registry(TWO_NS, TWO_NS)
-        api = sff_api()
-        task, chassis = make_sff_task(TWO_NS, reg, {2: sff_sfp(api)})
-        task.on_port_update_event(PortChangeEvent('Ethernet8', 2, 1, PortChangeEvent.PORT_SET, dict(SFF_ATTRS)))
-        sff_iteration(task, has_event=True, visited_ports=1)
-        assert chassis.get_sfp.call_count == 1 and api.tx_disable_channel.call_count == 1
-        task.status_table.set('Ethernet8', [('status', '1'), ('error', BLOCKING_ERROR)])
-        sff_iteration(task, has_event=True, visited_ports=1)                      # an unrelated event during the error: no module read
-        assert chassis.get_sfp.call_count == 1 and task.deferred_ports == {'Ethernet8'}
-        assert task.port_dict_prev['Ethernet8']['type'] == 'QSFP28'               # the snapshot keeps the type the module was processed with
-        task.status_table.set('Ethernet8', [('status', '1'), ('error', 'N/A')])
-        sff_iteration(task, has_event=False, visited_ports=1)
-        assert chassis.get_sfp.call_count == 2 and api.tx_disable_channel.call_count == 1 and task.deferred_ports == set()
 
 
 DOM_PATCHES = [
@@ -2265,57 +1976,6 @@ class TestDomGate:
             dom_pass(task, stop_on_lport='Ethernet0')
         assert task.helper_logger.lines('PORTS_DEFERRED') == ['[asic1] PORTS_DEFERRED (DomInfoUpdateTask): namespace pending, first deferred port Ethernet8']
 
-    def test_thermal_task_covers_all_asics_ungated(self):
-        def thermal_pass(port_mapping):
-            with pin_multi_asic(TWO_NS), patch('xcvrd.dom.dom_mgr.XcvrTableHelper', MagicMock()):
-                task = DomThermalInfoUpdateTask(TWO_NS, port_mapping, {1: MagicMock(), 2: MagicMock()}, threading.Event(), 0)
-            task.is_port_dom_monitoring_disabled = MagicMock(return_value=False)
-            task.dom_db_utils = MagicMock()
-            polled = []
-
-            def temperature(lport):
-                polled.append(lport)
-                if lport == 'Ethernet0':
-                    task.task_stopping_event.set()
-
-            task.dom_db_utils.post_port_dom_temperature_info_to_db = MagicMock(side_effect=temperature)
-            with patch('xcvrd.xcvrd_utilities.sfp_status_helper.detect_port_in_error_status', MagicMock(return_value=False)), \
-                    patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True)):
-                task.task_worker()
-            return polled
-
-        assert thermal_pass(mapping([('Ethernet8', 2, 1), ('Ethernet0', 1, 0)])) == ['Ethernet8', 'Ethernet0']   # the ports of both namespaces
-        assert thermal_pass(mapping([('Ethernet0', 1, 0)])) == ['Ethernet0']                                    # negative control
-
-
-class TestRunWiring:
-
-    @patch('xcvrd.xcvrd.platform_chassis', MagicMock(), create=True)     # deinit() of another test may have deleted the global
-    @patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock())
-    @patch('xcvrd.xcvrd.DaemonXcvrd.init')
-    def test_run_passes_registry_to_workers(self, mock_init):
-        mock_init.return_value = PortMapping()
-        names = ['SffManagerTask', 'CmisManagerTask', 'CpoManagerTask', 'DomInfoUpdateTask',
-                 'CpoDomInfoUpdateTask', 'DomThermalInfoUpdateTask', 'SfpStateUpdateTask']
-        with contextlib.ExitStack() as stack:
-            mocks = {name: stack.enter_context(patch('xcvrd.xcvrd.' + name)) for name in names}
-            cpo_state = stack.enter_context(patch('xcvrd.cpo.cpo_state_task.CpoStateUpdateTask'))
-            daemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
-            daemon.enable_sff_mgr = True
-            daemon.dom_temperature_poll_interval = 10
-            daemon.sfp_obj_dict = {1: MagicMock()}
-            daemon.cpo_obj_dict = {2: MagicMock()}
-            daemon.stop_event.wait = MagicMock()
-            daemon.asic_readiness = reg = registry([''], [''])             # init() is mocked out
-            daemon.readiness_thread = MagicMock(**{'is_alive.return_value': False})
-            daemon.run()
-        assert isinstance(reg, AsicReadiness)
-        for name in ('SffManagerTask', 'CmisManagerTask', 'CpoManagerTask', 'DomInfoUpdateTask', 'CpoDomInfoUpdateTask', 'SfpStateUpdateTask'):
-            assert mocks[name].call_args.kwargs.get('asic_readiness') is reg, name
-        assert cpo_state.call_args.kwargs.get('asic_readiness') is reg
-        assert 'asic_readiness' not in mocks['DomThermalInfoUpdateTask'].call_args.kwargs      # thermal is not gated
-
-
 # ---------------------------------------------------------------------------
 # Readiness checker, init() and run() lifecycle
 # ---------------------------------------------------------------------------
@@ -2338,15 +1998,12 @@ class FakeSubscriberTable:
         self.pop_count += 1
         return self.entries.popleft() if self.entries else ('', '', ())
 
-    def hasCachedData(self):
-        return len(self.entries) > 1
 
-
-def marker_rows(n, marker=None, trailing=0, prefix='Ethernet'):
-    rows = [('{}{}'.format(prefix, 4 * i), SET, ()) for i in range(n)]
+def marker_rows(n, marker=None, trailing=0):
+    rows = [('Ethernet{}'.format(4 * i), SET, ()) for i in range(n)]
     if marker:
         rows.append((marker, SET, ()))
-    rows += [('{}{}'.format(prefix, 4 * (n + i)), SET, ()) for i in range(trailing)]
+    rows += [('Ethernet{}'.format(4 * (n + i)), SET, ()) for i in range(trailing)]
     return rows
 
 
@@ -2356,21 +2013,19 @@ class FakeSelect:
     script: iterable of (state, selectable) results or zero-argument callables returning one (hooks).
     When the script is exhausted, `on_exhausted='stop'` sets daemon.stop_event and returns TIMEOUT
     (synchronous checker runs always terminate); 'timeout' keeps returning TIMEOUT. `budget` caps the
-    number of select() calls (sets stop_event afterwards). `rearm=True` makes a registered table with
-    queued entries return OBJECT immediately, like the real Select with cached data. Tables are tracked
-    by id / weakref only, so the fixture never keeps a table alive.
+    number of select() calls (sets stop_event afterwards). Tables are tracked by id / weakref only, so the
+    fixture never keeps a table alive.
     """
     OBJECT, TIMEOUT, ERROR = SEL_OBJECT, SEL_TIMEOUT, SEL_ERROR
 
-    def __init__(self, script=(), budget=None, on_exhausted='stop', rearm=False, traffic=None):
+    def __init__(self, script=(), budget=None, on_exhausted='stop'):
         self.script = collections.deque(script)
-        self.budget, self.on_exhausted, self.rearm = budget, on_exhausted, rearm
-        self.traffic = traffic                             # callable run at the start of every select(): writes by other daemons
+        self.budget, self.on_exhausted = budget, on_exhausted
         self.daemon = None
         self.call_count = 0
-        self.object_results = 0
         self.registered = {}                       # id(table) -> weakref
         self.added, self.removed = [], []           # ids, in order
+        self.timeouts = set()                       # every timeout select() was called with
 
     def addSelectable(self, tbl):
         if id(tbl) in self.registered:
@@ -2390,23 +2045,14 @@ class FakeSelect:
 
     def select(self, timeout_ms):
         self.call_count += 1
-        if self.traffic is not None:
-            self.traffic()
+        self.timeouts.add(timeout_ms)
         if self.budget is not None and self.call_count > self.budget:
             self._stop()
             return (SEL_TIMEOUT, None)
-        if self.rearm:
-            for ref in list(self.registered.values()):
-                tbl = ref()
-                if tbl is not None and tbl.entries:
-                    self.object_results += 1
-                    return (SEL_OBJECT, tbl)
         while self.script:
             item = self.script.popleft()
             result = item() if callable(item) else item
             if result is not None:
-                if result[0] == SEL_OBJECT:
-                    self.object_results += 1
                 return result
         if self.on_exhausted == 'stop':
             self._stop()
@@ -2432,36 +2078,40 @@ def patch_checker_env(daemon, tables_by_ns, select):
     select_cls.OBJECT, select_cls.TIMEOUT, select_cls.ERROR = SEL_OBJECT, SEL_TIMEOUT, SEL_ERROR
     pending_tables = collections.deque(tables_by_ns[ns] for ns in daemon.namespaces)
     del tables_by_ns                                       # the generator frame must not keep the tables alive
-    env = {'table_calls': 0, 'db_calls': 0, 'connectors': [], 'on_connect': None}
+    env = {'table_calls': 0, 'subscriptions': [], 'connectors': [], 'on_connect': None}
 
     def connect(db_name, namespace=None):                  # plain functions: a MagicMock would record (and keep alive) its arguments
-        env['db_calls'] += 1
         if env['on_connect']:
             env['on_connect'](namespace)
         conn = MagicMock(name='conn-{}'.format(namespace))
+        conn.opened = (db_name, namespace)
         env['connectors'].append(weakref.ref(conn))
         return conn
 
     def make_table(db, name):
         env['table_calls'] += 1
+        env['subscriptions'].append(db.opened + (name,))
         return pending_tables.popleft()
 
     with patch('xcvrd.xcvrd.swsscommon.Select', select_cls), \
             patch('xcvrd.xcvrd.swsscommon.SubscriberStateTable', new=make_table), \
             patch('xcvrd.xcvrd.daemon_base.db_connect', new=connect):
         yield env
+        # every run: each subscription is APPL_DB PORT_TABLE of its own namespace, and the Select is polled with the
+        # bounded timeout
+        expected = [('APPL_DB', ns, swsscommon.APP_PORT_TABLE_NAME) for ns in daemon.namespaces]
+        assert env['subscriptions'] == expected[:len(env['subscriptions'])]
+        assert select.timeouts <= {port_event_helper.SELECT_TIMEOUT_MSECS}
 
 
 def drain(daemon):
     return daemon._drain_ready_queue()
 
 
-def stub_checker(daemon, items=(), delays=(), scan_done=True):
-    """Replace the checker by a stub that queues `items` (with optional per-item delays) then sets initial_scan_done."""
+def stub_checker(daemon, items=(), scan_done=True):
+    """Replace the checker by a stub that queues `items` then sets initial_scan_done."""
     def checker():
-        for i, item in enumerate(items):
-            if i < len(delays):
-                time.sleep(delays[i])
+        for item in items:
             daemon.ready_asic_queue.put(item)
         if scan_done:
             daemon.initial_scan_done.set()
@@ -2483,15 +2133,13 @@ def registration_event(daemon):
 class FakeWorker:
     """A worker thread stand-in for run() lifecycle tests."""
 
-    def __init__(self, name, alive=True, join_error=None):
+    def __init__(self, name, alive=True):
         self.name = name
         self.task_stopping_event = threading.Event()
-        self._alive, self.join_error = alive, join_error
-        self.started = False
+        self._alive = alive
         self.events = []
 
     def start(self):
-        self.started = True
         self.events.append('start')
 
     def is_alive(self):
@@ -2502,12 +2150,10 @@ class FakeWorker:
 
     def join(self):
         self.events.append('join')
-        if self.join_error:
-            raise self.join_error
 
 
 @contextlib.contextmanager
-def init_env(namespaces, port_mapping=None, sfp=None, cpo=None):
+def init_env(namespaces, port_mapping=None, sfp=None):
     """Everything init() touches apart from the checker: platform, DB helper, settings, builders."""
     with pin_multi_asic(namespaces), \
             patch('xcvrd.xcvrd.multi_asic.get_front_end_namespaces', MagicMock(return_value=list(namespaces))), \
@@ -2515,7 +2161,7 @@ def init_env(namespaces, port_mapping=None, sfp=None, cpo=None):
             patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock()), \
             patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=port_mapping if port_mapping is not None else PortMapping())) as get_mapping, \
             patch('xcvrd.xcvrd.common.get_pluggable_obj_dict', MagicMock(return_value=sfp if sfp is not None else {})) as get_sfp, \
-            patch('xcvrd.xcvrd.common.get_cpo_obj_dict', MagicMock(return_value=cpo if cpo is not None else {})) as get_cpo, \
+            patch('xcvrd.xcvrd.common.get_cpo_obj_dict', MagicMock(return_value={})) as get_cpo, \
             patch('xcvrd.xcvrd.common.is_fast_reboot_enabled', MagicMock(return_value=False)), \
             patch('xcvrd.xcvrd.media_settings_parser.load_media_settings', MagicMock()), \
             patch('xcvrd.xcvrd.optics_si_parser.load_optics_si_settings', MagicMock()):
@@ -2523,22 +2169,21 @@ def init_env(namespaces, port_mapping=None, sfp=None, cpo=None):
 
 
 def bounded_init(daemon, deadline):
-    """Run daemon.init() in a thread with an independent deadline. Returns (('returned', value) | ('timeout', None), elapsed).
-    On timeout the daemon is asked to stop so that the thread does not outlive the test."""
+    """Run daemon.init() in a thread with an independent deadline. Returns ('returned', value) or ('timeout', None).
+    On timeout the daemon is asked to stop so that the thread does not outlive the test; an init() that ignores the
+    stop as well is left behind as a daemon thread, so the test fails without holding up the run."""
     box = {}
 
     def target():
         box['value'] = daemon.init()
-    thread = threading.Thread(target=target)
-    t0 = time.monotonic()
+    thread = threading.Thread(target=target, daemon=True)
     thread.start()
     thread.join(deadline)
-    elapsed = time.monotonic() - t0
     if thread.is_alive():
         daemon.stop_event.set()
         thread.join(5)
-        return ('timeout', None), elapsed
-    return ('returned', box.get('value')), elapsed
+        return ('timeout', None)
+    return ('returned', box.get('value'))
 
 
 def init_daemon(namespaces):
@@ -2598,7 +2243,7 @@ class TestChecker:
             assert daemon.initial_scan_done.is_set()
 
     def test_checker_initial_scan_registers_all_ready(self):
-        # (a) both markers in the snapshot: both queued BEFORE initial_scan_done is set
+        # both markers in the snapshot: both queued BEFORE initial_scan_done is set
         daemon = make_daemon(TWO_NS)
         tables = {'asic0': FakeSubscriberTable(marker_rows(2, 'PortConfigDone')), 'asic1': FakeSubscriberTable(marker_rows(2, 'PortInitDone'))}
         scan_done_at_put = []
@@ -2609,15 +2254,21 @@ class TestChecker:
             daemon._asic_readiness_checker()
         assert drain(daemon) == ['asic0', 'asic1'] and daemon.initial_scan_done.is_set()
         assert scan_done_at_put == [False, False]                   # the sweep completes before the event is set
-        # (b) no markers: initial_scan_done is not set when the first select() is entered, set after its TIMEOUT
+        # an idle poll does not set the event: it is still clear when the sweep that follows queues the first namespace
         daemon = make_daemon(TWO_NS)
         tables = {'asic0': FakeSubscriberTable(marker_rows(2)), 'asic1': FakeSubscriberTable(marker_rows(2))}
-        scan_done_at_select = []
-        select = FakeSelect([lambda: (scan_done_at_select.append(daemon.initial_scan_done.is_set()), (SEL_TIMEOUT, None))[1]])
+        scan_done_at_put = []
+        real_put = daemon.ready_asic_queue.put
+        daemon.ready_asic_queue.put = lambda item: (scan_done_at_put.append(daemon.initial_scan_done.is_set()), real_put(item))[1]
+
+        def marker_after_idle_poll():
+            tables['asic0'].push('PortConfigDone')
+            return (SEL_OBJECT, tables['asic0'])
+        select = FakeSelect([(SEL_TIMEOUT, None), marker_after_idle_poll])
         with patch_checker_env(daemon, tables, select):
             daemon._asic_readiness_checker()
-        assert drain(daemon) == [] and daemon.initial_scan_done.is_set() and scan_done_at_select == [False]
-        # (c) B's marker arrives after B's table was drained in the first sweep: found in the second sweep
+        assert drain(daemon) == ['asic0'] and scan_done_at_put == [False] and daemon.initial_scan_done.is_set()
+        # B's marker arrives after B's table was drained in the first sweep: found in the second sweep
         daemon = make_daemon(TWO_NS)
         tables = {'asic0': FakeSubscriberTable(marker_rows(2, 'PortConfigDone')), 'asic1': FakeSubscriberTable(marker_rows(2))}
         scan_state = []
@@ -2630,25 +2281,6 @@ class TestChecker:
         with patch_checker_env(daemon, tables, select):
             daemon._asic_readiness_checker()
         assert drain(daemon) == ['asic0', 'asic1'] and scan_state == [True]
-
-    def test_checker_staggered_readiness(self):
-        def run(remove_selectable_works):
-            daemon = make_daemon(TWO_NS)
-            tables = {'asic0': FakeSubscriberTable(marker_rows(2, 'PortConfigDone')), 'asic1': FakeSubscriberTable(marker_rows(2))}
-            # A's PORT_TABLE keeps being written (flap_count, NPU SI fields ...) on every tick, like a healthy namespace
-            select = FakeSelect([(SEL_TIMEOUT, None)] * 3, budget=6, on_exhausted='timeout',
-                                rearm=True, traffic=lambda: tables['asic0'].push('Ethernet0', SET))    # re-arm delivers A's marker
-            if not remove_selectable_works:
-                select.removeSelectable = lambda tbl: None          # mutation control: A stays registered in the Select
-            with patch_checker_env(daemon, tables, select):
-                daemon._asic_readiness_checker()
-            return select.call_count, select.object_results, drain(daemon)
-
-        calls, objects, queued = run(remove_selectable_works=True)
-        assert queued == ['asic0'] and calls == 7                  # budget of 6 ticks + the one that sets stop_event
-        assert objects == 1                                         # A woke the Select once (its marker); its later traffic is not seen
-        calls_bad, objects_bad, _ = run(remove_selectable_works=False)
-        assert calls_bad == 7 and objects_bad == 6                 # negative control: A's traffic re-arms the Select on every tick (spin)
 
     @pytest.mark.parametrize("rows, expect_ready, expect_key", [
         ([('PortInitDone', DEL, ())], False, None),
@@ -2829,54 +2461,74 @@ class TestInit:
         assert cmis.asic_readiness.is_asic_ready(0) and cmis.asic_readiness.is_asic_ready(1)
 
     def test_init_initial_scan_wait_is_cancellable(self):
+        # the stop arrives while init() waits for the first sweep, which never ends: init() returns when that 1 s
+        # poll expires, before any build (the independent deadline catches a wait that ignores the stop)
         daemon = init_daemon(TWO_NS)
         stub_checker(daemon, ['asic0'], scan_done=False)
-        threading.Timer(0.5, daemon.stop_event.set).start()
+        real_wait, polls = daemon.initial_scan_done.wait, []
+
+        def wait(*args, **kwargs):
+            polls.append((args, kwargs))
+            daemon.stop_event.set()
+            return real_wait(*args, **kwargs)
+        daemon.initial_scan_done.wait = wait
         with init_env(TWO_NS) as env:
-            result, elapsed = bounded_init(daemon, 5.0)             # independent deadline: a missing cancellation check fails here
-            assert result == ('returned', None) and elapsed < 3.0    # stop at 0.5 s, then at most one 1 s poll, with slack for a loaded host
+            result = bounded_init(daemon, 10.0)
+        assert result == ('returned', None) and polls == [((), {'timeout': 1})]
+        assert daemon.asic_readiness.ready_namespaces() == {'asic0'}        # the first namespace was taken: the stop came in the sweep wait
         assert env['get_mapping'].call_count == 0 and env['get_sfp'].call_count == 0
 
     def test_init_blocks_until_first_ready(self):
+        # neither wait gives up when its 1 s poll expires: the marker is queued only once a poll of the queue has come
+        # back empty, the first sweep ends only once a poll of its event has expired, and init() still returns the
+        # mapping
         daemon = init_daemon(TWO_NS)
-        stub_checker(daemon, ['asic0'], delays=(0.5,))
+        polls = {'queue': 0, 'sweep': 0}
+        real_get, real_wait = daemon.ready_asic_queue.get, daemon.initial_scan_done.wait
+
+        def get(*args, **kwargs):
+            polls['queue'] += 1
+            return real_get(*args, **kwargs)
+
+        def wait(*args, **kwargs):
+            polls['sweep'] += 1
+            return real_wait(*args, **kwargs)
+        daemon.ready_asic_queue.get, daemon.initial_scan_done.wait = get, wait
+
+        def checker():
+            deadline = time.monotonic() + 10
+            while polls['queue'] < 2 and time.monotonic() < deadline:    # the second poll: the first came back empty
+                time.sleep(0.01)
+            daemon.ready_asic_queue.put('asic0')
+            while polls['sweep'] < 2 and time.monotonic() < deadline:    # the second poll: the first expired
+                time.sleep(0.01)
+            daemon.initial_scan_done.set()
+        daemon._asic_readiness_checker = checker
         with init_env(TWO_NS):
-            result, elapsed = bounded_init(daemon, 5.0)
-            assert result[0] == 'returned' and result[1] is not None and elapsed >= 0.5
+            result = bounded_init(daemon, 15.0)
+        assert result[0] == 'returned' and result[1] is not None
+        assert polls['queue'] >= 2 and polls['sweep'] >= 2
 
     def test_init_stops_promptly_when_stop_event_set(self):
+        # the stop arrives while init() waits for the first namespace, which never comes: init() returns when that
+        # 1 s poll expires (the independent deadline catches a wait that ignores the stop)
         daemon = init_daemon(TWO_NS)
         stub_checker(daemon, [], scan_done=False)
-        threading.Timer(0.3, daemon.stop_event.set).start()
-        with init_env(TWO_NS):
-            result, elapsed = bounded_init(daemon, 5.0)
-            # stop at 0.3 s, then at most one 1 s poll; the bound leaves slack for a loaded host, the 5 s deadline
-            # catches a wait that ignores the stop
-            assert result == ('returned', None) and elapsed < 3.0
+        real_get, polls = daemon.ready_asic_queue.get, []
 
-    def test_init_checkpoints_between_phases(self):
-        for phase in ('builders', 'stale'):
-            daemon = init_daemon(TWO_NS)
-            stub_checker(daemon, ['asic0'])
-            with init_env(TWO_NS) as env:
-                if phase == 'builders':
-                    env['get_sfp'].side_effect = lambda pm: (daemon.stop_event.set(), {})[1]
-                else:
-                    daemon.remove_stale_transceiver_info = MagicMock(side_effect=lambda pm: daemon.stop_event.set())
-                assert daemon.init() is None
-                if phase == 'builders':
-                    assert daemon.remove_stale_transceiver_info.call_count == 0
-            # a run() on this daemon starts no worker, joins the checker and still runs deinit() (as today)
-            daemon.init = MagicMock(return_value=None)
-            daemon.deinit = MagicMock()
-            with patch('xcvrd.xcvrd.SfpStateUpdateTask') as sfp_cls, patch('xcvrd.xcvrd.DomInfoUpdateTask') as dom_cls:
-                daemon.run()
-            assert sfp_cls.call_count == 0 and dom_cls.call_count == 0
-            assert daemon.deinit.call_count == 1 and not daemon.readiness_thread.is_alive()
+        def get(*args, **kwargs):
+            polls.append((args, kwargs))
+            daemon.stop_event.set()
+            return real_get(*args, **kwargs)
+        daemon.ready_asic_queue.get = get
+        with init_env(TWO_NS) as env:
+            result = bounded_init(daemon, 10.0)
+        assert result == ('returned', None) and polls == [((), {'timeout': 1})]
+        assert daemon.asic_readiness.ready_namespaces() == set() and env['get_mapping'].call_count == 0
 
     def test_init_stale_cleanup_skips_pending_namespace(self):
         # the stale-row cleanup of init() covers the ready namespaces: a pending namespace's modules are not read and
-        # its rows are left, as they are left today while the daemon waits, to the admission pass
+        # its rows are left to the admission pass
         daemon = make_daemon(TWO_NS)
         daemon.asic_readiness = registry(['asic0'], TWO_NS)
         pm = mapping(TWO_NS_PORTS)
@@ -2893,7 +2545,15 @@ class TestInit:
 
     def test_init_checker_failed_exits(self):
         daemon = init_daemon(TWO_NS)
-        stub_checker(daemon, [ASIC_CHECKER_FAILED])
+        exiting = threading.Event()
+        real_exit = daemon._exit_checker_failed
+        daemon._exit_checker_failed = lambda: (exiting.set(), real_exit())[1]
+
+        def checker():                                              # ends a moment after the exit path was entered,
+            daemon.ready_asic_queue.put(ASIC_CHECKER_FAILED)        # so the exit has to join it
+            exiting.wait(5)
+            time.sleep(0.2)
+        daemon._asic_readiness_checker = checker
         daemon.deinit = MagicMock()
         with init_env(TWO_NS), pytest.raises(SystemExit) as exc:
             daemon.run()
@@ -2939,13 +2599,28 @@ class TestInit:
         assert env['get_mapping'].call_count == 1 and daemon.initialize_port_init_control_fields_in_port_table.call_count == 1
         assert daemon.remove_stale_transceiver_info.call_count == 0
 
-    def test_init_empty_namespaces_exit(self):
+    def test_init_without_front_end_namespace_idles_until_stopped(self):
+        # a system without a front-end namespace has no marker to wait for: the daemon stays in its first wait, and a
+        # stop request ends it cleanly, with no checker failure
         daemon = init_daemon([])
-        daemon.deinit = MagicMock()
-        with init_env([]), pytest.raises(SystemExit) as exc:
-            daemon.run()
-        assert exc.value.code == PORT_CONFIG_LOAD_ERROR
-        assert daemon.log.lines('no front-end namespaces') and daemon.readiness_thread is None
+        real_get, polls = daemon.ready_asic_queue.get, []
+
+        def get(*args, **kwargs):
+            polls.append(kwargs)
+            if len(polls) == 2:                                     # one idle poll, then the stop request
+                daemon.stop_event.set()
+            return real_get(*args, **kwargs)
+        daemon.ready_asic_queue.get = get
+        safety_net = threading.Timer(10.0, daemon.stop_event.set)   # a daemon that left the wait must fail the test, not hang it
+        safety_net.start()
+        try:
+            with init_env([]), patch('xcvrd.xcvrd.common.del_port_sfp_dom_info_from_db') as delete_rows:
+                daemon.run()                                        # no SystemExit, no exception
+        finally:
+            safety_net.cancel()
+        assert len(polls) == 2 and delete_rows.call_count == 0
+        assert not daemon.readiness_thread.is_alive() and daemon.log.lines('ASIC_CHECKER_FAILED') == []
+        assert daemon.log.lines('ASIC_DISCOVERED') == ['ASIC_DISCOVERED: 0 namespace(s): []']
 
     def test_init_obj_dict_built_summary(self):
         daemon = init_daemon(TWO_NS)
@@ -2988,7 +2663,7 @@ class TestInit:
 
 
 @contextlib.contextmanager
-def run_env(daemon, workers):
+def run_env(workers):
     """Patch the worker classes so that run() constructs the given FakeWorkers (in the order run() starts them); yields the deinit mock."""
     names = ['SffManagerTask', 'CmisManagerTask', 'CpoManagerTask', 'DomInfoUpdateTask', 'CpoDomInfoUpdateTask',
              'DomThermalInfoUpdateTask', 'SfpStateUpdateTask']
@@ -3009,7 +2684,7 @@ class TestRun:
         daemon.asic_readiness = registry(ready, namespaces)
         daemon.init = MagicMock(return_value=PortMapping())        # default worker set: DomInfoUpdateTask + SfpStateUpdateTask
         daemon.readiness_thread = MagicMock(**{'is_alive.return_value': False})   # init() is mocked out
-        daemon.sfp_obj_dict = {1: MagicMock()}                     # SfpStateUpdateTask is created for pluggable ports only
+        daemon.sfp_obj_dict = {1: MagicMock()}                     # both are created for pluggable ports only
         daemon.skip_cmis_mgr = True                                # ... and so is CmisManagerTask, unless skipped
         return daemon
 
@@ -3037,12 +2712,32 @@ class TestRun:
             daemon.stop_event.set()
         feeder_thread = threading.Thread(target=feeder)
         feeder_thread.start()
-        with run_env(daemon, workers):
+        with run_env(workers):
             daemon.run()                                            # no SystemExit
         feeder_thread.join(5)
         assert staged == {'loop': True, 'asic1': True, 'all': True}
         assert daemon.log.lines('ASIC_ALL_READY') == ['ASIC_ALL_READY: 3 namespace(s) ready']
         assert [m[0] for m in marks] == ['asic1', 'asic2'] and all(count == i + 1 for i, (_, count) in enumerate(marks))   # log precedes mark
+        assert all(w.task_stopping_event.is_set() and 'join' in w.events for w in workers)
+
+    def test_run_stop_with_a_namespace_still_pending(self):
+        # the stop request arrives while run() waits for a pending namespace: nothing is registered and the daemon
+        # stops as usual
+        daemon = self._daemon(TWO_NS, ['asic0'])
+        workers = [FakeWorker('dom'), FakeWorker('sfp')]
+
+        def stopper():
+            deadline = time.monotonic() + 5
+            while not daemon.log.lines('Start daemon main loop') and time.monotonic() < deadline:
+                time.sleep(0.01)
+            daemon.stop_event.set()
+        stopper_thread = threading.Thread(target=stopper)
+        stopper_thread.start()
+        with run_env(workers) as deinit:
+            daemon.run()                                            # no exception, no SystemExit
+        stopper_thread.join(5)
+        assert daemon.asic_readiness.ready_namespaces() == {'asic0'} and daemon.log.lines('ASIC_ACTIVE') == []
+        assert daemon.log.lines('ASIC_ALL_READY') == [] and deinit.call_count == 1
         assert all(w.task_stopping_event.is_set() and 'join' in w.events for w in workers)
 
     def test_run_passes_registry_to_every_worker_kind(self):
@@ -3057,7 +2752,7 @@ class TestRun:
         with contextlib.ExitStack() as stack:
             mocks = {n: stack.enter_context(patch('xcvrd.xcvrd.' + n)) for n in names}
             cpo_state = stack.enter_context(patch('xcvrd.cpo.cpo_state_task.CpoStateUpdateTask'))
-            deinit = stack.enter_context(patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock()))
+            stack.enter_context(patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock()))
             daemon.run()
         for n in names:
             assert mocks[n].call_count == 1, n
@@ -3067,68 +2762,72 @@ class TestRun:
         assert cpo_state.call_args.kwargs['asic_readiness'] is daemon.asic_readiness
         assert mocks['SfpStateUpdateTask'].call_args.kwargs == {'asic_readiness': daemon.asic_readiness} == cpo_state.call_args.kwargs
 
-
-    def test_run_gives_each_publishing_worker_its_own_error_cache(self):
-        # the daemon's own wiring, with the real worker classes: the two publishing workers of a chassis with CPO ports
-        # hold distinct error caches, so an error one of them consumes is unknown to the other, as today
-        daemon = self._daemon(TWO_NS, TWO_NS)
-        pm = mapping([('Ethernet0', 1, 0), ('Ethernet8', 2, 1)])
-        daemon.init = MagicMock(return_value=pm)
-        daemon.sfp_obj_dict = {1: MagicMock()}
-        daemon.cpo_obj_dict = {2: MagicMock()}
-        daemon.stop_event.wait = MagicMock()
-        started = []
-        with contextlib.ExitStack() as stack:
-            for n in ('SffManagerTask', 'CmisManagerTask', 'CpoManagerTask', 'DomInfoUpdateTask', 'CpoDomInfoUpdateTask', 'DomThermalInfoUpdateTask'):
-                stack.enter_context(patch('xcvrd.xcvrd.' + n))
-            stack.enter_context(pin_multi_asic(TWO_NS))
-            stack.enter_context(patch('xcvrd.xcvrd.XcvrTableHelper', MagicMock()))
-            stack.enter_context(patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=False)))
-            stack.enter_context(patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=False)))
-            stack.enter_context(patch.object(threading.Thread, 'start', lambda self: started.append(self)))
-            stack.enter_context(patch.object(threading.Thread, 'is_alive', lambda self: True))
-            stack.enter_context(patch.object(threading.Thread, 'join', lambda self, timeout=None: None))
-            stack.enter_context(patch.object(SfpStateUpdateTask, 'raise_exception', lambda self: None))   # never started: no thread to interrupt
-            stack.enter_context(patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock()))
-            daemon.run()
-        sfp = next(w for w in started if type(w).__name__ == 'SfpStateUpdateTask')
-        cpo = next(w for w in started if type(w).__name__ == 'CpoStateUpdateTask')
-        assert sfp.sfp_error_dict is not cpo.sfp_error_dict
-        cpo.sfp_error_dict[2] = (str(int(SFP_STATUS_INSERTED) | SfpBase.SFP_ERROR_BIT_BLOCKING), {})
-        assert sfp.sfp_error_dict == {} and sfp._recorded_error('Ethernet8', sfp.port_mapping) == (False, False) and cpo._recorded_error('Ethernet8', cpo.port_mapping) == (True, True)
-
     def test_run_checker_failed_after_start_exits_nonzero(self):
         daemon = self._daemon(TWO_NS, ['asic0'])
         workers = [FakeWorker('dom'), FakeWorker('sfp')]
-        daemon.stop_event.wait = MagicMock()                         # must never be called: asserted below (a raising spy would be swallowed by run()'s guard)
         flags_at_join = []
         for w in workers:
             w.join = (lambda w=w: lambda: flags_at_join.append(all(x.task_stopping_event.is_set() for x in workers)) or w.events.append('join'))()
         threading.Timer(0.2, lambda: daemon.ready_asic_queue.put(ASIC_CHECKER_FAILED)).start()
-        with run_env(daemon, workers) as deinit, pytest.raises(SystemExit) as exc:
+        with run_env(workers) as deinit, pytest.raises(SystemExit) as exc:
             daemon.run()
         assert exc.value.code == SFP_SYSTEM_ERROR and daemon.stop_event.is_set()
-        assert daemon.stop_event.wait.call_count == 0              # the steady-state wait was never entered with the sentinel queued
         assert flags_at_join and all(flags_at_join)                # every stop flag set before the first join
         assert deinit.call_count == 1
 
     def test_run_preserves_sfp_error_exit(self):
         daemon = self._daemon([''], [''])
         daemon.stop_event.wait = MagicMock(side_effect=lambda: daemon.sfp_error_event.set())
-        with run_env(daemon, [FakeWorker('dom'), FakeWorker('sfp')]), pytest.raises(SystemExit) as exc:
+        with run_env([FakeWorker('dom'), FakeWorker('sfp')]), pytest.raises(SystemExit) as exc:
             daemon.run()
         assert exc.value.code == SFP_SYSTEM_ERROR
 
-    def test_run_stop_during_init_joins_checker_and_deinits(self):
-        daemon = init_daemon(TWO_NS)
-        stub_checker(daemon, [], scan_done=False)                  # nothing ever becomes ready
-        daemon.deinit = MagicMock()
-        threading.Timer(0.3, daemon.stop_event.set).start()
-        with init_env(TWO_NS), patch('xcvrd.xcvrd.SfpStateUpdateTask') as sfp_cls, patch('xcvrd.xcvrd.DomInfoUpdateTask') as dom_cls:
-            daemon.run()                                            # intentional stop: no SystemExit
+    @pytest.mark.parametrize("namespaces, ports, stop_at", [
+        (TWO_NS, TWO_NS_PORTS, 'marker wait'),
+        ([''], [('Ethernet0', 1, 0)], 'marker wait'),
+        (TWO_NS, TWO_NS_PORTS, 'builders'),
+        (TWO_NS, TWO_NS_PORTS, 'stale cleanup'),
+    ])
+    def test_run_stop_during_init_runs_the_real_deinit(self, namespaces, ports, stop_at):
+        # the real deinit() after a stop inside init(): before init() chose the table helper (the marker wait, the
+        # device dictionaries) run() hands deinit() the CPO helper, whose tables include the common ones; after that
+        # point deinit() uses the helper init() chose. Every configured port is cleaned and nothing is raised
+        daemon = init_daemon(namespaces)
+        pluggable = {1: MagicMock()}                                # with pluggable ports, a daemon that went on after the
+        daemon.sfp_obj_dict, daemon.skip_cmis_mgr = pluggable, True # stop would start the DOM and the state worker
+        init_returned, checker_alive_at_deinit = threading.Event(), []
+        real_init, real_deinit = daemon.init, daemon.deinit
+        daemon.init = lambda: (real_init(), init_returned.set())[0]
+        daemon.deinit = lambda: (checker_alive_at_deinit.append(daemon.readiness_thread.is_alive()), real_deinit())[1]
+        if stop_at == 'marker wait':
+            def checker():                                          # nothing ever becomes ready; the checker ends a moment
+                init_returned.wait(5)                               # after init() has returned, so run() has to join it
+                time.sleep(0.2)                                     # before deinit()
+            daemon._asic_readiness_checker = checker
+            real_get = daemon.ready_asic_queue.get
+            daemon.ready_asic_queue.get = lambda *a, **k: (daemon.stop_event.set(), real_get(*a, **k))[1]   # the stop arrives in the wait
+        else:
+            stub_checker(daemon, [namespaces[0]])
+        if stop_at == 'stale cleanup':
+            daemon.remove_stale_transceiver_info = MagicMock(side_effect=lambda pm: daemon.stop_event.set())
+        with init_env(namespaces, port_mapping=mapping(ports), sfp=pluggable) as env, \
+                patch('xcvrd.xcvrd.CpoXcvrTableHelper') as cpo_helper_cls, \
+                patch('xcvrd.xcvrd.common.is_syncd_warm_restore_complete', MagicMock(return_value=False)), \
+                patch('xcvrd.xcvrd.common.get_namespace_from_asic_id', MagicMock(side_effect=lambda asic: namespaces[asic])), \
+                patch('xcvrd.xcvrd.common.del_port_sfp_dom_info_from_db') as delete_rows, \
+                patch('xcvrd.xcvrd.SfpStateUpdateTask') as sfp_cls, patch('xcvrd.xcvrd.DomInfoUpdateTask') as dom_cls:
+            if stop_at == 'builders':
+                env['get_sfp'].side_effect = lambda pm: (daemon.stop_event.set(), pluggable)[1]
+            daemon.run()                                            # intentional stop: no SystemExit, no exception
         assert sfp_cls.call_count == 0 and dom_cls.call_count == 0
-        assert daemon.readiness_thread is not None and not daemon.readiness_thread.is_alive()
-        assert daemon.deinit.call_count == 1
+        assert checker_alive_at_deinit == [False]                   # the checker was joined before deinit() ran
+        if stop_at == 'stale cleanup':
+            assert cpo_helper_cls.call_count == 0                   # the helper init() chose is kept
+        else:
+            assert [c.args for c in cpo_helper_cls.call_args_list] == [(list(namespaces),)]
+            assert daemon.xcvr_table_helper is cpo_helper_cls.return_value
+        # one deletion per configured port: its DOM, VDM and status rows
+        assert [c.args[0] for c in delete_rows.call_args_list] == [lport for lport, _, _ in ports]
 
     def test_run_joins_checker_thread(self):
         daemon = self._daemon([''], [''])
@@ -3141,7 +2840,7 @@ class TestRun:
         cooperative.join = MagicMock(wraps=cooperative.join)
         cooperative.start()
         daemon.readiness_thread = cooperative
-        with run_env(daemon, [FakeWorker('dom'), FakeWorker('sfp')]):
+        with run_env([FakeWorker('dom'), FakeWorker('sfp')]):
             daemon.run()
         assert cooperative.join.call_args_list == [((ASIC_CHECKER_JOIN_TIMEOUT_SECS,),)]      # a real join with the configured timeout
         assert not cooperative.is_alive() and daemon.log.lines('did not stop') == []
@@ -3155,7 +2854,7 @@ class TestRun:
         safety_net = threading.Timer(3.0, release.set)             # a missing join timeout must fail the test, not hang it
         safety_net.start()
         try:
-            with run_env(daemon, [FakeWorker('dom'), FakeWorker('sfp')]) as deinit, patch('xcvrd.xcvrd.ASIC_CHECKER_JOIN_TIMEOUT_SECS', 0.2):
+            with run_env([FakeWorker('dom'), FakeWorker('sfp')]) as deinit, patch('xcvrd.xcvrd.ASIC_CHECKER_JOIN_TIMEOUT_SECS', 0.2):
                 daemon.run()                                        # a checker that does not stop is logged, not fatal
             assert stubborn.join.call_args_list == [((0.2,),)]
             assert daemon.log.lines('readiness checker did not stop') and deinit.call_count == 1
@@ -3164,29 +2863,20 @@ class TestRun:
             release.set()
             stubborn.join(5)
 
-    def test_run_dead_thread_sigkill_path_unchanged(self):
-        daemon = self._daemon([''], [''])
-        daemon.stop_event.wait = MagicMock()
-        dead = FakeWorker('dom', alive=False, join_error=NotImplementedError('died'))
-        live = FakeWorker('sfp')
-        with run_env(daemon, [dead, live]) as deinit, patch('xcvrd.xcvrd.os.kill') as kill:
-            daemon.run()
-        assert kill.call_count == 1 and 'join' in live.events and deinit.call_count == 1
-
     def test_run_cleanup_broadcasts_stop_before_dead_thread_join(self):
         daemon = self._daemon([''], [''])
         daemon.stop_event.wait = MagicMock()
         live = FakeWorker('sfp')
         dead = FakeWorker('dom', alive=False)
         dead.join = lambda: dead.events.append(('join', dead.task_stopping_event.is_set(), live.task_stopping_event.is_set()))
-        with run_env(daemon, [dead, live]) as deinit, patch('xcvrd.xcvrd.os.kill') as kill:
+        with run_env([dead, live]), patch('xcvrd.xcvrd.os.kill') as kill:
             daemon.run()
         assert ('join', True, True) in dead.events and kill.call_count == 0 and 'join' in live.events
 
 
 class TestSingleAsic:
 
-    def test_single_asic_flow_unchanged(self):
+    def test_single_asic_flow(self):
         daemon = init_daemon([''])
         stub_checker(daemon, [''])
         pm = mapping([('Ethernet0', 1, 0), ('Ethernet4', 2, 0)])
@@ -3201,7 +2891,7 @@ class TestSingleAsic:
             dom_cls = stack.enter_context(patch('xcvrd.xcvrd.DomInfoUpdateTask'))
             sfp_cls = stack.enter_context(patch('xcvrd.xcvrd.SfpStateUpdateTask'))
             cmis_cls = stack.enter_context(patch('xcvrd.xcvrd.CmisManagerTask'))
-            deinit = stack.enter_context(patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock()))
+            stack.enter_context(patch('xcvrd.xcvrd.DaemonXcvrd.deinit', MagicMock()))
             daemon.run()
         assert daemon.log.lines('ASIC_ALL_READY') == ['ASIC_ALL_READY: 1 namespace(s) ready']
         assert cmis_cls.call_args.args == ([''], pm, sfp, daemon.stop_event) and cmis_cls.call_args.kwargs == {'skip_cmis_mgr': False, 'asic_readiness': daemon.asic_readiness}
@@ -3219,7 +2909,7 @@ class TestSingleAsic:
                 worker_init(task, pm)
             assert publisher.call_count == 2 and task._pending_namespaces == set()
             for pass_fn in (task._post_port_sfp_info_and_dom_thr_to_db_once, task._init_port_sfp_status_sw_tbl):
-                assert pass_fn.call_args.kwargs['logical_ports'] is None             # the old calls, over every port
+                assert pass_fn.call_args.kwargs['logical_ports'] is None             # over every port
             cmis = make_cmis_task([''], pm, sfp, reg)
             for lport, pport, asic in [('Ethernet0', 1, 0), ('Ethernet4', 2, 0)]:
                 cmis.on_port_update_event(PortChangeEvent(lport, pport, asic, PortChangeEvent.PORT_SET, dict(CMIS_PORT_ATTRS)))

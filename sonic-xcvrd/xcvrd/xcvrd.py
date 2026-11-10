@@ -170,12 +170,11 @@ def waiting_time_compensation_with_sleep(time_start, time_to_wait):
 class SfpStateUpdateTask(threading.Thread):
     RETRY_EEPROM_READING_INTERVAL = 60
     SYSLOG_IDENTIFIER = SYSLOG_IDENTIFIER_SFPSTATEUPDATETASK
-    PUBLISHER_NAME = "SfpStateUpdateTask"
 
     def __init__(self, namespaces, port_mapping, port_obj_dict, main_thread_stop_event, sfp_error_event,
                  asic_readiness=None):
         threading.Thread.__init__(self)
-        self.name = self.PUBLISHER_NAME
+        self.name = self.SYSLOG_IDENTIFIER      # also the worker's name in the readiness registry
         self.exc = None
         self.task_stopping_event = threading.Event()
         self.main_thread_stop_event = main_thread_stop_event
@@ -195,7 +194,7 @@ class SfpStateUpdateTask(threading.Thread):
         self.xcvr_table_helper = self.create_xcvr_table_helper(self.namespaces)
         # Per-namespace readiness: the start-up pass of a namespace runs once it is ready, in init() for a
         # namespace ready then and at its admission in the worker loop otherwise; the NPU media settings of a
-        # pending namespace are published by that pass. None means "every namespace ready" (today's behaviour).
+        # pending namespace are published by that pass. None means "every namespace ready".
         self.asic_readiness = asic_readiness if asic_readiness is not None \
                               else AsicReadiness.all_ready_registry(namespaces)
         self.warm_fast_reboot_status = self.initialize_warm_fast_reboot_status()
@@ -209,8 +208,8 @@ class SfpStateUpdateTask(threading.Thread):
         self._pending_namespaces = {ns for ns in self.namespaces if not self.asic_readiness.is_ready(ns)}
         self._deferred_logged = set()       # namespaces for which MEDIA_SETTINGS_DEFERRED was logged
         # Declared here, where the pending snapshot is taken, so that the two agree: the namespaces ready now are
-        # exempt from the gate, as at the daemon's start today; a late namespace is marked after its admission pass
-        self.asic_readiness.register_publisher(self.PUBLISHER_NAME, set(self.namespaces) - self._pending_namespaces)
+        # exempt from the gate; a late namespace is marked after its admission pass
+        self.asic_readiness.register_publisher(self.name, set(self.namespaces) - self._pending_namespaces)
         self._pass_deadline = {}            # ns -> monotonic time after which its deferred start-up pass runs anyway
         self._reconciled = set()            # namespaces whose CONFIG_DB reconcile ran (once, at the first admission attempt)
 
@@ -226,8 +225,7 @@ class SfpStateUpdateTask(threading.Thread):
     def initialize_warm_fast_reboot_status(self):
         warm_fast_reboot_status = {}
         for namespace in self.namespaces:
-            # A namespace not ready yet is sampled at the worker's first publication into it, when its databases
-            # are populated
+            # A namespace not ready yet is sampled at its admission pass, when its databases are populated
             warm_fast_reboot_status[namespace] = self._sample_boot_policy(namespace) \
                 if self.asic_readiness.is_ready(namespace) else None
         return warm_fast_reboot_status
@@ -238,13 +236,11 @@ class SfpStateUpdateTask(threading.Thread):
         return bool(common.is_syncd_warm_restore_complete(namespace) or common.is_fast_reboot_enabled(namespace))
 
     def _boot_policy(self, namespace):
-        """The namespace's sample, taken once: in the constructor for a namespace ready then, otherwise at its pass or
-        at the first publication into it, whichever comes first."""
-        if namespace not in self.warm_fast_reboot_status:
-            return False
-        if self.warm_fast_reboot_status[namespace] is None:
+        """The namespace's sample, taken once: in the constructor for a namespace ready then, otherwise at its
+        admission pass."""
+        if self.warm_fast_reboot_status.get(namespace, False) is None:
             self.warm_fast_reboot_status[namespace] = self._sample_boot_policy(namespace)
-        return self.warm_fast_reboot_status[namespace]
+        return self.warm_fast_reboot_status.get(namespace, False)
 
     def _recorded_error(self, lport, port_mapping):
         """(recorded, blocking): a platform error recorded for one of lport's physical ports in this worker's error
@@ -286,10 +282,7 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_notice("[{}] MEDIA_SETTINGS_DEFERRED ({}): namespace pending, "
                                          "first pending port {}".format(ns, self.name, lport))
             return
-        # Namespace published by this worker, or an ASIC id outside the managed namespaces: the gated workers hold
-        # such a port until every namespace is admitted, the publisher has no namespace to defer it to and publishes now
-        policy_ns = ns if ns is not None else common.get_namespace_from_asic_id(asic_index)
-        if self._boot_policy(policy_ns):
+        if self._boot_policy(ns):
             return
         media_settings_parser.notify_media_setting(lport, transceiver_dict, helper, port_mapping)
 
@@ -330,7 +323,7 @@ class SfpStateUpdateTask(threading.Thread):
                     continue
             self._pass_deadline.pop(ns, None)
             self._pending_namespaces.discard(ns)        # the pass publishes into the namespace; so do the paths after it
-            self._boot_policy(ns)           # sampled now at the latest: the first publication may be far away
+            self._boot_policy(ns)           # sampled here: no media settings were published into the namespace before
             # Status rows and the cleanup of absent ports before the publication, as the daemon's start cleans before
             # the workers publish: a module that stops answering after its info read is not taken for absent by the
             # same pass
@@ -345,7 +338,7 @@ class SfpStateUpdateTask(threading.Thread):
                 self.last_retry_eeprom_time = time.time()   # the pass's entries get the ordinary interval before their first retry
             # The pass's entries join the set: a port the pass read gets one more retry, as after an insertion event
             self.retry_eeprom_set |= retry
-            self.asic_readiness.mark_admitted(self.PUBLISHER_NAME, ns)
+            self.asic_readiness.mark_admitted(self.name, ns)
             helper_logger.log_notice("[{}] {}: Posted all port DOM/SFP info to DB in {:.1f}s ({} ports, {} to retry{})".format(
                 ns, self.name, time.monotonic() - t_pass, len(ports), len(retry),
                 ", {} physical port(s) still soaking".format(len(soaking)) if soaking else ""))
@@ -539,8 +532,8 @@ class SfpStateUpdateTask(threading.Thread):
                 helper_logger.log_warning("Got invalid asic index for {}, ignored while posting SFP info during boot-up".format(logical_port_name))
                 continue
 
-            # No EEPROM access behind a recorded blocking error, as on the error event. The port is retried like one
-            # whose EEPROM was not ready: an error that clears without an insertion event still gets its rows
+            # No EEPROM access behind a recorded blocking error, as on the error event. The port is left to the EEPROM
+            # retry, like one whose EEPROM was not ready
             if self._recorded_error(logical_port_name, port_mapping)[1]:
                 retry_eeprom_set.add(logical_port_name)
                 continue
@@ -552,7 +545,7 @@ class SfpStateUpdateTask(threading.Thread):
                                              xcvr_table_helper=xcvr_table_helper)
             else:
                 retry_eeprom_set.add(logical_port_name)
-
+        
         dom_thresholds_cache = {}
         vdm_thresholds_cache = {}
         for logical_port_name in logical_port_list:
@@ -600,8 +593,12 @@ class SfpStateUpdateTask(threading.Thread):
                     break
 
                 # No presence read behind a recorded blocking error (on some platforms it is an EEPROM read, which
-                # answers "absent" for a present module): the error row stands until the port's next event
+                # answers "absent" for a present module): the error row stands until the port's next event. An error
+                # is recorded only once the worker polls, so this is the admission pass: the port's info rows are
+                # removed, as the daemon's stale-row cleanup removes those of a module that reads absent, and the row
+                # posted when the error ends is then a new one for the CMIS manager and SFF
                 if self._recorded_error(logical_port_name, port_mapping)[1]:
+                    common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, xcvr_table_helper.get_info_tables(asic_index))
                     continue
                 if common._wrapper_get_presence(physical_port):
                     # The status row an error event wrote stands while the module is present
@@ -610,8 +607,8 @@ class SfpStateUpdateTask(threading.Thread):
                     common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_INSERTED)
                     continue
                 if delete_absent:
-                    # Admission pass: a module gone while the namespace was pending had no removal event handled; its
-                    # info rows are removed as the daemon's start removes stale ones, the other rows stand
+                    # Admission pass: the daemon's stale-row cleanup skipped the namespace while it was pending, so the
+                    # info rows of an absent module are removed here; the other rows stand
                     common.del_port_sfp_dom_info_from_db(logical_port_name, port_mapping, xcvr_table_helper.get_info_tables(asic_index))
                 common.update_port_transceiver_status_table_sw(logical_port_name, xcvr_table_helper.get_status_sw_tbl(asic_index), sfp_status_helper.SFP_STATUS_REMOVED)
 
@@ -736,7 +733,7 @@ class SfpStateUpdateTask(threading.Thread):
             # Ensure not to block for any event if sfp insert event is pending
             if self.sfp_insert_events:
                 timeout = SFP_INSERT_EVENT_POLL_PERIOD_MSECS
-            # A pending namespace is admitted at most one poll after its marker: poll at the start-up period meanwhile
+            # While a namespace is pending, poll at the start-up period: its admission follows an answered poll
             poll_timeout = min(timeout, RETRY_PERIOD_FOR_SYSTEM_READY_MSECS) if self._pending_namespaces else timeout
             status, port_dict, error_dict = self._get_port_change_event(poll_timeout)
             # Answered: a successful poll, or one that reported no system event (handled below as no event)
@@ -1125,6 +1122,8 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         self.threads = []
         self.sfp_obj_dict = {}
         self.cpo_obj_dict = {}
+        # Table helper: chosen in init() once the device dictionaries exist, or by run() for deinit() after an earlier stop
+        self.xcvr_table_helper = None
         # Per-namespace readiness registry, built in init() from the discovered namespaces
         self.asic_readiness = None
         # Readiness checker thread -> main thread: namespace names, or ASIC_CHECKER_FAILED
@@ -1182,11 +1181,11 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                 sel.addSelectable(tbl)
                 pending[tbl] = (ns, appl_db)
                 self.log_notice("[{}] ASIC_WAITING: waiting for {} in APPL_DB PORT_TABLE".format(ns, "/".join(PORT_READY_KEYS)))
-            del appl_db, tbl                                # only `pending` references them (namespaces is non-empty)
+                del appl_db, tbl                            # only `pending` references them
             t0 = last_report = time.monotonic()
             select_errors = 0
             while pending and not self.stop_event.is_set():
-                state = sel.select(port_event_helper.SELECT_TIMEOUT_MSECS)[0]    # do not keep the returned selectable alive
+                state = sel.select(port_event_helper.SELECT_TIMEOUT_MSECS)[0]
                 now = time.monotonic()
                 if now - last_report >= ASIC_STILL_WAITING_LOG_SECS:   # heartbeat, independent of `state`
                     self.log_notice("ASIC_STILL_WAITING: {} not ready after {}s".format(
@@ -1194,7 +1193,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
                     last_report = now
                 if state == swsscommon.Select.TIMEOUT:
                     select_errors = 0
-                    self.initial_scan_done.set()
                     continue
                 if state != swsscommon.Select.OBJECT:
                     select_errors += 1
@@ -1228,18 +1226,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         finally:
             self.initial_scan_done.set()
 
-    def _next_ready_asic(self, timeout):
-        """Next item from the checker (a namespace or ASIC_CHECKER_FAILED), or None.
-
-        timeout=None: wait until an item arrives or stop_event is set (polled every second).
-        timeout=t (0 < t <= 1): wait at most t seconds, then None.
-        """
+    def _next_ready_asic(self):
+        """Next item from the checker (a namespace or ASIC_CHECKER_FAILED); None once stop_event is set, which is
+        polled every second."""
         while not self.stop_event.is_set():
             try:
-                return self.ready_asic_queue.get(timeout=1 if timeout is None else timeout)
+                return self.ready_asic_queue.get(timeout=1)
             except queue.Empty:
-                if timeout is not None:
-                    return None
+                pass
         return None
 
     def _drain_ready_queue(self):
@@ -1378,9 +1372,6 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         # To prevent race condition in get_all_namespaces() we cache the namespaces before
         # creating any worker threads
         self.namespaces = multi_asic.get_front_end_namespaces()
-        if not self.namespaces:
-            self.log_error("XCVRD INIT: no front-end namespaces found")
-            sys.exit(PORT_CONFIG_LOAD_ERROR)
         self.log_notice("ASIC_DISCOVERED: {} namespace(s): {}".format(len(self.namespaces), self.namespaces))
 
         if all(common.is_fast_reboot_enabled(ns) for ns in self.namespaces):
@@ -1398,7 +1389,7 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         checker.start()
         self.readiness_thread = checker                     # assigned once started: run() joins it at shutdown
 
-        first = self._next_ready_asic(timeout=None)
+        first = self._next_ready_asic()                     # no give-up: without a front-end namespace, until the stop request
         if first is None:
             return None                                     # stopping
         if first is ASIC_CHECKER_FAILED:
@@ -1480,15 +1471,19 @@ class DaemonXcvrd(daemon_base.DaemonBase):
         del globals()['platform_chassis']
 
     # Run daemon
+
     def run(self):
         self.log_notice("Starting up...")
 
         # Start daemon initialization sequence
         port_mapping_data = self.init()
         if port_mapping_data is None:
-            # Stop requested before or during init(): no worker exists; the checker is joined and deinit()
-            # runs, as they do today when a stop arrives during the marker wait
+            # Stop requested before or during init(): no worker exists; the checker is joined and deinit() runs
             self._join_checker()
+            if self.xcvr_table_helper is None:
+                # init() stopped before it chose the table helper: the CPO helper's tables include the common
+                # ones, so deinit() cleans the rows of either kind of platform
+                self.xcvr_table_helper = CpoXcvrTableHelper(self.namespaces)
             self.deinit()
             return
 
@@ -1568,14 +1563,14 @@ class DaemonXcvrd(daemon_base.DaemonBase):
 
         # Register the remaining namespaces as they become ready, then wait for the stop request. A checker
         # failure ends the daemon with a non-zero status (below) so that supervisord restarts it; the
-        # steady-state wait is never entered with a dead checker.
+        # steady-state wait is never entered with a failed checker.
         checker_failed = False
         while not self.stop_event.is_set():
             if self.asic_readiness.all_ready():
                 self.log_notice("ASIC_ALL_READY: {} namespace(s) ready".format(len(self.namespaces)))
                 self.stop_event.wait()
                 break
-            item = self._next_ready_asic(timeout=1)
+            item = self._next_ready_asic()
             if item is ASIC_CHECKER_FAILED:
                 self.log_error("ASIC readiness checker failed; shutting down for restart")
                 checker_failed = True

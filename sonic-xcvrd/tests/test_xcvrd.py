@@ -413,7 +413,7 @@ class TestXcvrdThreadException(object):
 
     @patch('xcvrd.xcvrd.platform_chassis', MagicMock())
     def test_CmisManagerTask_task_run_with_exception(self):
-        # An exception raised by the retained initialisation step of run() (the initial
+        # An exception raised by the initialisation step of run() (the initial
         # CMIS_STATE_UNKNOWN write for every mapped port) ends the thread and is re-raised by join()
         port_mapping = PortMapping()
         stop_event = threading.Event()
@@ -3071,7 +3071,6 @@ class TestXcvrdScript(object):
                                           threading.Event(),
                                           mock_chassis,
                                           mock_logger)
-        sff_manager_task.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE))
 
         # Setup port_dict with necessary data
         sff_manager_task.port_dict['Ethernet0'] = {
@@ -3158,7 +3157,6 @@ class TestXcvrdScript(object):
                               threading.Event(),
                               mock_chassis,
                               mock_logger)
-        task.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=Table("STATE_DB", TRANSCEIVER_STATUS_SW_TABLE))
 
         # TX enable case:
         port_change_event = PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_SET, {
@@ -6123,7 +6121,6 @@ class TestXcvrdScript(object):
         port_dict = {1, SFP_STATUS_INSERTED}
         assert task._mapping_event_from_change_event(True, port_dict) == NORMAL_EVENT
 
-    @patch('xcvrd.xcvrd_utilities.common.get_namespace_from_asic_id', MagicMock(return_value='asic2'))
     @patch('xcvrd.xcvrd_utilities.common.is_syncd_warm_restore_complete', MagicMock(return_value=False))
     @patch('xcvrd.xcvrd_utilities.common.is_fast_reboot_enabled', MagicMock(return_value=True))
     @patch('xcvrd.xcvrd_utilities.asic_readiness.multi_asic.get_asic_index_from_namespace', MagicMock(return_value=2))

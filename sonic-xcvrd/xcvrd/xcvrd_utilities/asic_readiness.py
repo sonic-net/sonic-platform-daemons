@@ -29,7 +29,7 @@ class AsicReadiness:
         self._ns_by_asic = {multi_asic.get_asic_index_from_namespace(ns): ns for ns in self._all}
         self._ready = set()
         # publishing worker name -> namespaces it has published: exempt when ready at its construction (their
-        # start-up pass runs in its init(), concurrently with the module-writing workers as today), marked after
+        # start-up pass runs in its init(), concurrently with the module-writing workers), marked after
         # the admission pass otherwise
         self._admitted = {}
         self._lock = threading.Lock()
@@ -67,9 +67,10 @@ class AsicReadiness:
 
     def admitted_namespaces(self):
         """Ready namespaces every declared publishing worker has published (exempt at its declaration, or
-        marked after its admission pass). Every publisher counts: each pass covers every port of the
-        namespace and each worker soaks its own insertion events. With no publisher declared this is the
-        ready set (callers that do not gate, and the gated workers' first iterations)."""
+        marked after its admission pass). Every publisher counts: each runs the pass over the ports of its
+        own device dictionary and soaks its own insertion events, and the gate is per namespace, not per
+        port owner. With no publisher declared this is the ready set (callers that do not gate, and the
+        gated workers' first iterations)."""
         with self._lock:
             result = set(self._ready)
             for done in self._admitted.values():
@@ -78,8 +79,7 @@ class AsicReadiness:
 
     def _attributed(self, asic_id, namespaces):
         """True when asic_id's namespace is in `namespaces`. An id that maps to no managed namespace (None or
-        unknown) cannot be attributed to one namespace: such a port waits for every namespace, the rule that
-        applied to every port before readiness was tracked per namespace."""
+        unknown) cannot be attributed to one namespace: such a port waits for every namespace."""
         ns = self._ns_by_asic.get(asic_id)
         return ns in namespaces if ns is not None else len(namespaces) == len(self._all)
 

@@ -1,5 +1,6 @@
 """The real daemon against real per-namespace databases, with the platform mocked."""
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -23,7 +24,6 @@ from xcvrd.xcvrd_utilities import media_settings_parser, port_event_helper
 
 from . import harness as h
 
-pytestmark = pytest.mark.integration
 
 SI_SETTINGS = {'preemphasis': {'lane{}'.format(i): '0x{:x}'.format(i + 1) for i in range(8)}}
 MEDIA_KEY = {'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface',
@@ -111,8 +111,15 @@ class DaemonRun:
                 hook, self.before_sfp_init = self.before_sfp_init, None
                 hook()
             return real_get_port_mapping(namespaces)
+
+        def kill(pid, sig, real_kill=os.kill):
+            # run() kills its own process when a worker thread raised: here that process is pytest
+            if pid == os.getpid() and sig == signal.SIGKILL:
+                raise RuntimeError('a worker thread raised: the daemon would kill itself')
+            real_kill(pid, sig)
         self.thread = threading.Thread(target=self._run, name='it-daemon', daemon=True)
         self.patches = h.multi_asic_patches() + [
+            patch('xcvrd.xcvrd.os.kill', kill),
             patch.object(port_event_helper, 'subscribe_port_config_change', subscribe),
             patch.object(port_event_helper, 'get_port_mapping', get_port_mapping),
             patch('xcvrd.xcvrd.helper_logger', self.worker_log),
@@ -524,9 +531,10 @@ def test_daemon_blocked_retry_entry_survives_admission(clean_dbs):
 def test_daemon_blocked_port_left_to_its_events_at_admission(clean_dbs):
     """A module of the late namespace is inserted, then reports a blocking error while the namespace is pending, and
     from then on its presence reads absent (NVIDIA's firmware-control presence is an EEPROM read). The pass at the
-    namespace's admission leaves the port to its events: rows, error row and cache entry stand, nothing is read behind
-    the error (the port is left to the retry, kept out of this window); the insertion event that clears the error
-    posts and publishes the port."""
+    namespace's admission leaves the port to its events: error row and cache entry stand, the publishing worker reads
+    nothing behind the error (the port is left to the retry, kept out of this window) and removes the port's
+    TRANSCEIVER_INFO row, on which the CMIS manager parks the port without reading its presence; the insertion event
+    that clears the error posts a new row and publishes the port, and the CMIS manager brings it to READY."""
     populate()
     chassis = h.FakeChassis(event_period=0.2)
     asic0_ports = [lp for lp, _, _ in h.ports_of('asic0')]
@@ -559,12 +567,15 @@ def test_daemon_blocked_port_left_to_its_events_at_admission(clean_dbs):
         notices = run.worker_log.wait_for('[asic1] SfpStateUpdateTask: Posted all port DOM/SFP info to DB', 15)
         assert len(notices) == 1 and notices[0].endswith('(4 ports, 1 to retry)'), notices
         assert worker.retry_eeprom_set == {blocked}
-        # the blocked port: not read (presence included), rows and error row intact, cache entry kept, not published
+        # the blocked port: not read (presence included), its TRANSCEIVER_INFO row removed, error row intact, cache
+        # entry kept, not published; the CMIS manager parks it on the removal, without reading its presence
         assert 'SfpStateUpdateTask' not in presence_readers, presence_readers
         assert chassis.sfps[blocked_pport].calls.count('get_transceiver_info') == info_reads
-        assert h.state_field('asic1', 'TRANSCEIVER_INFO', blocked, 'serial') == 'S{}'.format(blocked_pport)
+        assert h.state_field('asic1', 'TRANSCEIVER_INFO', blocked, 'serial') is None
         assert h.state_field('asic1', 'TRANSCEIVER_STATUS_SW', blocked, 'status') == i2c_stuck
         assert worker.sfp_error_dict.get(blocked_pport, (None,))[0] == i2c_stuck
+        assert wait_until(lambda: cmis_state('asic1', blocked) == 'REMOVED', 10), cmis_state('asic1', blocked)
+        assert not {'SfpStateUpdateTask', 'CmisManagerTask'} & set(presence_readers), presence_readers
         # the module that went away without an event: its TRANSCEIVER_INFO row removed, as the daemon's start removes a stale one; the others posted and published
         assert h.state_field('asic1', 'TRANSCEIVER_STATUS_SW', gone, 'status') == '0'
         assert h.state_field('asic1', 'TRANSCEIVER_INFO', gone, 'serial') is None
@@ -573,19 +584,15 @@ def test_daemon_blocked_port_left_to_its_events_at_admission(clean_dbs):
                 assert h.state_field('asic1', 'TRANSCEIVER_INFO', lp, 'serial') == 'S{}'.format(pport)
                 assert h.state_field('asic1', 'TRANSCEIVER_STATUS_SW', lp, 'status') == '1'
         assert set(si_rows(clean_dbs.cli, 'asic1')) == set(posted)
-        # the CMIS manager's sweep after the admission takes the posted ports to READY (the witness that it ran) and
-        # leaves the blocked port to its error's end: no presence read, state INSERTED
-        assert wait_until(lambda: all(cmis_state('asic1', lp) == 'READY' for lp in posted), 15), [cmis_state('asic1', lp) for lp in posted]
-        assert not wait_until(lambda: cmis_state('asic1', blocked) != 'INSERTED', 2), cmis_state('asic1', blocked)
-        assert 'CmisManagerTask' not in presence_readers, presence_readers
-        # the error clears with a re-plug: the insertion event reads the module, posts and publishes the port, and the
-        # CMIS worker, which the identical TRANSCEIVER_INFO row does not re-arm, initialises it from the state it kept
+        # the error clears with a re-plug: the insertion event reads the module, posts a new row and publishes the
+        # port; the new row starts the CMIS manager on the port again
         chassis.set_presence([blocked_pport], True)
         chassis.events.append({blocked_pport: '1'})
         assert wait_until(lambda: blocked in si_rows(clean_dbs.cli, 'asic1'), 15)
         assert h.state_field('asic1', 'TRANSCEIVER_STATUS_SW', blocked, 'status') == '1' and blocked_pport not in worker.sfp_error_dict
-        assert wait_until(lambda: cmis_state('asic1', blocked) == 'READY', 15), cmis_state('asic1', blocked)
+        assert h.state_field('asic1', 'TRANSCEIVER_INFO', blocked, 'serial') == 'S{}'.format(blocked_pport)
         assert published_ports(run) == sorted(asic0_ports + posted + [blocked])      # each published port exactly once, the gone one never
+        assert wait_until(lambda: cmis_state('asic1', blocked) == 'READY', 15), cmis_state('asic1', blocked)
     finally:
         exit_code, alive, exception = run.stop()
     assert exit_code == 0 and not alive and exception is None, (exit_code, alive, exception)
@@ -910,24 +917,49 @@ def test_daemon_late_namespace_steady_state_equals_start(clean_dbs):
     assert all(late['asic1']['state']['TRANSCEIVER_DOM_SENSOR|{}'.format(lp)]['last_update_time'] == '<time>' for lp in asic1_ports)
 
 
-def test_daemon_sigterm_during_burst(clean_dbs):
-    populate()
+@contextlib.contextmanager
+def daemon_subprocess(global_config):
+    """The real daemon in a subprocess (xcvrd_it_driver.py), for a real signal: yields the process and the lines of its
+    stdout and stderr. The child never outlives the block."""
     driver = os.path.join(os.path.dirname(__file__), 'xcvrd_it_driver.py')
     root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     env = dict(os.environ, PYTHONPATH=root, PYTHONUNBUFFERED='1')
-    proc = subprocess.Popen([sys.executable, driver, clean_dbs.global_config], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.Popen([sys.executable, driver, global_config], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, env=env, cwd=root)
     lines, err_lines = [], []
+
+    def reader(stream, sink):
+        for line in stream:
+            sink.append(line.rstrip())
+    readers = [threading.Thread(target=reader, args=(proc.stdout, lines), daemon=True),
+               threading.Thread(target=reader, args=(proc.stderr, err_lines), daemon=True)]
+    for thread in readers:
+        thread.start()
+    try:
+        yield proc, lines, err_lines
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(10)
+        for thread in readers:
+            thread.join(5)
+
+
+def sigterm_and_wait(proc, lines):
+    """Send SIGTERM and wait for the exit: (exit status, seconds from the signal to the exit)."""
+    t_sig = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    try:
+        rc = proc.wait(60)
+    except subprocess.TimeoutExpired:
+        pytest.fail('daemon did not exit within 60 s of SIGTERM; last lines: {}'.format(lines[-20:]))
+    return rc, time.monotonic() - t_sig
+
+
+def test_daemon_sigterm_during_burst(clean_dbs):
+    populate()
     stop_writer = threading.Event()
     written = {'count': 0}
-
-    def reader():
-        for line in proc.stdout:
-            lines.append(line.rstrip())
-
-    def err_reader():
-        for line in proc.stderr:
-            err_lines.append(line.rstrip())
 
     def burst():                                                                 # sustained traffic until told to stop
         tbl1 = swsscommon.Table(h.connector('APPL_DB', 'asic1'), 'PORT_TABLE')
@@ -935,33 +967,19 @@ def test_daemon_sigterm_during_burst(clean_dbs):
         while not stop_writer.is_set():
             tbl1.set('Ethernet16', swsscommon.FieldValuePairs([('flap_count', str(k))])); k += 1
             written['count'] = k
-    reader_thread = threading.Thread(target=reader, daemon=True); reader_thread.start()
-    err_thread = threading.Thread(target=err_reader, daemon=True); err_thread.start()
     writer = threading.Thread(target=burst, daemon=True)
-    try:
+    with daemon_subprocess(clean_dbs.global_config) as (proc, lines, err_lines):
         try:
             assert wait_until(lambda: any('Start daemon main loop' in l for l in lines), 90), (lines[-30:], err_lines[-30:])
             writer.start()
             assert wait_until(lambda: written['count'] >= 1000, 30)            # the pending namespace is under load
             count_at_signal = written['count']
-            t_sig = time.monotonic()
-            proc.send_signal(signal.SIGTERM)
-            try:
-                rc = proc.wait(60)
-            except subprocess.TimeoutExpired:
-                pytest.fail('daemon did not exit within 60 s of SIGTERM; last lines: {}'.format(lines[-20:]))
-            t_exit = time.monotonic() - t_sig
+            rc, t_exit = sigterm_and_wait(proc, lines)
             count_at_exit = written['count']
         finally:
             stop_writer.set()
             if writer.ident is not None:                                        # joining an unstarted thread raises
                 writer.join(30)
-    finally:                                                                     # the child never outlives the test
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait(10)
-        reader_thread.join(5)
-        err_thread.join(5)
     assert count_at_exit > count_at_signal                                       # the traffic overlapped the shutdown
     assert rc == 0, (rc, lines[-30:], err_lines[-30:])
     assert any('Stop daemon main loop' in l for l in lines) and any('Shutting down...' in l for l in lines), lines[-30:]
@@ -970,3 +988,26 @@ def test_daemon_sigterm_during_burst(clean_dbs):
     assert not any('Traceback' in l for l in err_lines), err_lines[-40:]         # nothing died on a thread outside the daemon's logging
     record_result('daemon_sigterm', sigterm_to_exit='{:.2f}s'.format(t_exit), rc=rc, writes_during_shutdown=count_at_exit - count_at_signal,
                   stderr_lines=len(err_lines))
+
+
+def test_daemon_sigterm_before_the_first_marker(clean_dbs):
+    # No namespace has published a marker: init() is in its first wait and has not chosen its table helper. A real
+    # SIGTERM ends the daemon with status 0 and no traceback, no worker is started, and deinit() runs as at every
+    # shutdown: the DOM rows an earlier lifetime left are removed (the common table and the ELS one of a CPO
+    # platform, whichever the platform is), its TRANSCEIVER_INFO row is kept
+    for ns in h.NAMESPACES:
+        h.populate_config_db(ns)
+        h.populate_appl_db(ns, [])
+    lport = h.ports_of('asic1')[0][0]
+    for table in ('TRANSCEIVER_INFO', 'TRANSCEIVER_DOM_SENSOR', 'TRANSCEIVER_ELS_DOM_THRESHOLD'):
+        swsscommon.Table(h.connector('STATE_DB', 'asic1'), table).set(lport, swsscommon.FieldValuePairs([('leftover', '1')]))
+    with daemon_subprocess(clean_dbs.global_config) as (proc, lines, err_lines):
+        assert wait_until(lambda: sum('ASIC_WAITING' in l for l in lines) == len(h.NAMESPACES), 90), (lines[-30:], err_lines[-30:])
+        rc, t_exit = sigterm_and_wait(proc, lines)
+    assert rc == 0, (rc, lines[-30:], err_lines[-30:])
+    assert not [l for l in lines + err_lines if 'Traceback' in l or 'Exception' in l], (lines[-30:], err_lines[-40:])
+    assert not any('ASIC_READY' in l or 'Started thread' in l for l in lines), lines[-30:]
+    assert h.state_field('asic1', 'TRANSCEIVER_DOM_SENSOR', lport, 'leftover') is None
+    assert h.state_field('asic1', 'TRANSCEIVER_ELS_DOM_THRESHOLD', lport, 'leftover') is None
+    assert h.state_field('asic1', 'TRANSCEIVER_INFO', lport, 'leftover') == '1'
+    record_result('daemon_sigterm_before_marker', sigterm_to_exit='{:.2f}s'.format(t_exit), rc=rc, stderr_lines=len(err_lines))

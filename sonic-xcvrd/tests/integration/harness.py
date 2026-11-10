@@ -55,12 +55,6 @@ def del_marker(ns, marker):
     swsscommon.Table(connector('APPL_DB', ns), 'PORT_TABLE')._del(marker)
 
 
-def appl_port_rows(ns):
-    """{lport: {field: value}} of APPL_DB PORT_TABLE as a plain Table read (what orchagent would consume after the producer)."""
-    tbl = swsscommon.Table(connector('APPL_DB', ns), 'PORT_TABLE')
-    return {key: dict(tbl.get(key)[1]) for key in tbl.getKeys()}
-
-
 def state_field(ns, table, key, field):
     found, value = swsscommon.Table(connector('STATE_DB', ns), table).hget(key, field)
     return value if found else None
