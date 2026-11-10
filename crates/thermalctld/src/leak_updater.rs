@@ -22,6 +22,28 @@ use platform_api::{LeakProfile, LeakSensorInfo, LeakSeverity};
 use crate::event_log::EventLogger;
 use crate::fmt;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemSeverity {
+    Minor,
+    Major,
+    Critical,
+}
+impl SystemSeverity {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Minor => "MINOR",
+            Self::Major => "MAJOR",
+            Self::Critical => "CRITICAL",
+        }
+    }
+    fn sensor(value: LeakSeverity) -> Self {
+        match value {
+            LeakSeverity::Minor => Self::Minor,
+            LeakSeverity::Critical => Self::Critical,
+        }
+    }
+}
+
 /// Fields of one `LIQUID_COOLING_INFO` row, in Python's order.
 type SensorRow = Vec<(&'static str, String)>;
 
@@ -30,6 +52,10 @@ type SensorRow = Vec<(&'static str, String)>;
 pub struct LeakState {
     /// When each sensor started leaking, for the MINOR escalation timer.
     leaking_since: HashMap<String, Instant>,
+    start_timestamps: HashMap<String, String>,
+    restored_critical: HashSet<String>,
+    escalated: HashSet<String>,
+    major_minimum: usize,
     /// Sensors already reported faulty, so the error is logged once.
     faulty: HashSet<String>,
     /// Sensors already reported CRITICAL, so it is logged once per episode.
@@ -39,7 +65,7 @@ pub struct LeakState {
     /// Last aggregate *decided*, so the CRITICAL alarm fires once per episode.
     /// Separate from `status_unpublished` on purpose: this answers "has the
     /// alarm already been raised", which a failed write must not undo.
-    last_status: Option<Option<LeakSeverity>>,
+    last_status: Option<Option<SystemSeverity>>,
     /// Whether that aggregate reached STATE_DB.  A failed write sets this so
     /// the next pass rewrites the same value without re-raising the alarm.
     status_unpublished: bool,
@@ -52,12 +78,71 @@ pub struct LeakOutcome {
     /// Rows to write to `LIQUID_COOLING_INFO`, keyed by sensor name.
     pub rows: Vec<(String, SensorRow)>,
     /// The aggregate, when it changed this cycle.
-    pub system_status: Option<Option<LeakSeverity>>,
+    pub system_status: Option<Option<SystemSeverity>>,
 }
 
 impl LeakState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_major_minimum(&mut self, minimum: usize) {
+        self.major_minimum = minimum;
+    }
+
+    pub fn restore(&mut self, tables: &crate::db::LeakTables) -> Result<(), String> {
+        self.restore_at(tables, chrono::Local::now().naive_local(), Instant::now())
+    }
+
+    fn restore_at(
+        &mut self,
+        tables: &crate::db::LeakTables,
+        local_now: chrono::NaiveDateTime,
+        now: Instant,
+    ) -> Result<(), String> {
+        for name in tables.sensor.get_keys()? {
+            let row = tables.sensor.get(&name)?.unwrap_or_default();
+            let field = |key: &str| row.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+            if field("leaking") != Some("Yes") {
+                continue;
+            }
+            let timestamp = field("timestamp").unwrap_or("");
+            let elapsed = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%d %H:%M:%S")
+                .ok()
+                // fmt::timestamp and Python's writer both store local time.
+                .map(|t| (local_now - t).num_seconds().max(0) as u64)
+                .unwrap_or(0);
+            self.leaking_since.insert(
+                name.clone(),
+                now.checked_sub(std::time::Duration::from_secs(elapsed))
+                    .unwrap_or(now),
+            );
+            self.start_timestamps.insert(
+                name.clone(),
+                if timestamp.is_empty() {
+                    fmt::timestamp()
+                } else {
+                    timestamp.to_string()
+                },
+            );
+            if field("leak_severity") == Some("CRITICAL") {
+                self.restored_critical.insert(name.clone());
+                self.critical.insert(name);
+            }
+        }
+        if let Some(row) = tables.system.get("system")? {
+            let status = row
+                .iter()
+                .find(|(k, _)| k == "device_leak_status")
+                .map(|(_, v)| v.as_str());
+            self.last_status = Some(match status {
+                Some("CRITICAL") => Some(SystemSeverity::Critical),
+                Some("MAJOR") => Some(SystemSeverity::Major),
+                Some("MINOR") => Some(SystemSeverity::Minor),
+                _ => None,
+            });
+        }
+        Ok(())
     }
 
     /// One pass over every sensor.
@@ -72,10 +157,11 @@ impl LeakState {
         events: &mut dyn EventLogger,
     ) -> LeakOutcome {
         let mut out = LeakOutcome::default();
-        let mut status: Option<LeakSeverity> = None;
+        let mut status: Option<SystemSeverity> = None;
         // How many sensors are leaking this pass; two or more is critical
         // regardless of what each one reports on its own.
         let mut leaking_count = 0usize;
+        let mut major_escalated = false;
 
         for sensor in sensors {
             let name = sensor.name.as_str();
@@ -89,20 +175,36 @@ impl LeakState {
             let is_leak = sensor.is_leak.unwrap_or(false);
             if !is_ok {
                 if self.faulty.insert(name.to_string()) {
-                    events.error(&format!("Liquid cooling leakage sensor {name} reported faulty"));
+                    events.error(&format!(
+                        "Liquid cooling leakage sensor {name} reported faulty"
+                    ));
                 }
             } else if self.faulty.remove(name) {
-                events.notice(&format!("Liquid cooling leaking sensor {name} recovered from fault"));
+                events.notice(&format!(
+                    "Liquid cooling leaking sensor {name} recovered from fault"
+                ));
             }
 
             let mut severity = sensor.severity;
 
             if is_ok {
                 if is_leak {
-                    let started = *self.leaking_since.entry(name.to_string()).or_insert_with(|| {
-                        events.error(&format!("Liquid cooling leakage sensor {name} reported leaking"));
-                        now
-                    });
+                    self.start_timestamps
+                        .entry(name.to_string())
+                        .or_insert_with(fmt::timestamp);
+                    if self.restored_critical.contains(name) {
+                        severity = Some(LeakSeverity::Critical);
+                    }
+                    let started =
+                        *self
+                            .leaking_since
+                            .entry(name.to_string())
+                            .or_insert_with(|| {
+                                events.error(&format!(
+                                    "Liquid cooling leakage sensor {name} reported leaking"
+                                ));
+                                now
+                            });
 
                     // A MINOR leak becomes CRITICAL once it outlasts its
                     // profile's max_minor_duration_sec.
@@ -115,9 +217,14 @@ impl LeakState {
                             .and_then(|p| p.max_minor_duration_sec)
                             .map(|secs| secs as f64)
                         {
-                            if now.duration_since(started).as_secs_f64() >= limit {
-                                severity = Some(LeakSeverity::Critical);
-                                escalated_after = Some(limit);
+                            if limit > 0.0
+                                && limit.is_finite()
+                                && now.duration_since(started).as_secs_f64() >= limit
+                            {
+                                major_escalated = true;
+                                if self.escalated.insert(name.to_string()) {
+                                    escalated_after = Some(limit);
+                                }
                             }
                         }
                     }
@@ -131,7 +238,15 @@ impl LeakState {
                         ));
                     }
 
-                    if severity == Some(LeakSeverity::Critical) && self.critical.insert(name.to_string()) {
+                    if let Some(secs) = escalated_after {
+                        events.warning(&format!(
+                            "Leak on sensor {name} escalated from MINOR to MAJOR after {}s",
+                            secs as i64
+                        ));
+                    }
+                    if severity == Some(LeakSeverity::Critical)
+                        && self.critical.insert(name.to_string())
+                    {
                         events.error(&match escalated_after {
                             Some(secs) => format!(
                                 "Leak on sensor {name} escalated from MINOR to CRITICAL after {}s",
@@ -141,24 +256,27 @@ impl LeakState {
                         });
                     }
 
-                    // More than one leaking sensor is critical whatever each
-                    // one says on its own.  Count the sensors rather than test
-                    // whether the aggregate is already `Some`: a provider that
-                    // reports no severity at all would otherwise keep the
-                    // aggregate at `None` however many sensors were leaking.
-                    leaking_count += 1;
-                    status = if leaking_count > 1 {
-                        Some(LeakSeverity::Critical)
-                    } else {
-                        severity
-                    };
+                    if severity == Some(LeakSeverity::Minor) {
+                        leaking_count += 1;
+                    }
+                    if severity == Some(LeakSeverity::Critical)
+                        || (severity == Some(LeakSeverity::Minor)
+                            && status != Some(SystemSeverity::Critical))
+                    {
+                        status = severity.map(SystemSeverity::sensor);
+                    }
                 } else if self.leaking_since.remove(name).is_some() {
+                    self.start_timestamps.remove(name);
+                    self.restored_critical.remove(name);
+                    self.escalated.remove(name);
                     if self.critical.remove(name) {
                         events.notice(&format!(
                             "Liquid cooling leakage sensor {name} recovered from CRITICAL leak"
                         ));
                     } else {
-                        events.notice(&format!("Liquid cooling leakage sensor {name} recovered from leaking"));
+                        events.notice(&format!(
+                            "Liquid cooling leakage sensor {name} recovered from leaking"
+                        ));
                     }
                 }
             }
@@ -170,7 +288,7 @@ impl LeakState {
             } else {
                 "No"
             };
-            let row: SensorRow = vec![
+            let mut row: SensorRow = vec![
                 ("name", sensor.name.clone()),
                 ("leaking", leaking.to_string()),
                 // leak_status duplicates leaking for the system-health checker
@@ -187,14 +305,29 @@ impl LeakState {
                     severity.map_or("None".to_string(), |s| s.as_str().to_string()),
                 ),
             ];
+            if let Some(timestamp) = self.start_timestamps.get(name) {
+                row.push(("timestamp", timestamp.clone()));
+            }
             if self.last_row.get(name) != Some(&row) {
                 self.last_row.insert(name.to_string(), row.clone());
                 out.rows.push((sensor.name.clone(), row));
             }
         }
 
-        let was_critical = matches!(self.last_status, Some(Some(LeakSeverity::Critical)));
-        let is_critical = status == Some(LeakSeverity::Critical);
+        if status != Some(SystemSeverity::Critical)
+            && (major_escalated || (self.major_minimum >= 2 && leaking_count >= self.major_minimum))
+        {
+            status = Some(SystemSeverity::Major);
+        }
+        let was_major = matches!(self.last_status, Some(Some(SystemSeverity::Major)));
+        if status == Some(SystemSeverity::Major) && !was_major {
+            events.warning("MAJOR system leak detected");
+        }
+        if was_major && status != Some(SystemSeverity::Major) {
+            events.notice("MAJOR system leak cleared");
+        }
+        let was_critical = matches!(self.last_status, Some(Some(SystemSeverity::Critical)));
+        let is_critical = status == Some(SystemSeverity::Critical);
         if is_critical && !was_critical {
             let mut names: Vec<&str> = self.leaking_since.keys().map(|s| s.as_str()).collect();
             names.sort_unstable();
@@ -234,7 +367,7 @@ pub fn publish_profiles_and_seed(
             (
                 "max_minor_duration_sec",
                 p.max_minor_duration_sec
-                    .map_or("inf".to_string(), |secs| fmt::float(secs as f64)),
+                    .map_or("None".to_string(), |secs| secs.to_string()),
             ),
         ];
         if let Err(e) = tables.profile.set(&p.r#type, &fvs) {
@@ -321,7 +454,9 @@ pub fn apply(tables: &crate::db::LeakTables, outcome: &LeakOutcome) -> Unwritten
         // leaving it out altogether loses when the state last moved, which is
         // the one thing an operator reads this row for.
         let mut fvs: Vec<(&str, String)> = row.iter().map(|(k, v)| (*k, v.clone())).collect();
-        fvs.push(("timestamp", fmt::timestamp()));
+        if !fvs.iter().any(|(key, _)| *key == "timestamp") {
+            fvs.push(("timestamp", fmt::timestamp()));
+        }
         if let Err(e) = tables.sensor.set(name, &fvs) {
             log::warn!("failed to update LIQUID_COOLING_INFO for {name}: {e}");
             unwritten.sensors.push(name.clone());
@@ -329,7 +464,10 @@ pub fn apply(tables: &crate::db::LeakTables, outcome: &LeakOutcome) -> Unwritten
     }
     if let Some(status) = outcome.system_status {
         let fvs = [
-            ("device_leak_status", status.map_or("None", |s| s.as_str()).to_string()),
+            (
+                "device_leak_status",
+                status.map_or("None", |s| s.as_str()).to_string(),
+            ),
             ("timestamp", fmt::timestamp()),
         ];
         if let Err(e) = tables.system.set("system", &fvs) {
@@ -345,7 +483,155 @@ pub fn apply(tables: &crate::db::LeakTables, outcome: &LeakOutcome) -> Unwritten
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pmon_common::db::TableLike;
     use std::time::Duration;
+
+    #[test]
+    fn restore_uses_local_clock_in_non_utc_processes() {
+        if std::env::var_os("SONIC_LEAK_CLOCK_TEST_CHILD").is_none() {
+            for (timezone, offset) in [("XXX-2", 7200), ("XXX+5", -18000)] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "leak_updater::tests::restore_uses_local_clock_in_non_utc_processes",
+                    ])
+                    .env("SONIC_LEAK_CLOCK_TEST_CHILD", "1")
+                    .env("TZ", timezone)
+                    .env("SONIC_LEAK_CLOCK_OFFSET", offset.to_string())
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{timezone}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+        assert_eq!(
+            chrono::Local::now().offset().local_minus_utc(),
+            std::env::var("SONIC_LEAK_CLOCK_OFFSET")
+                .unwrap()
+                .parse::<i32>()
+                .unwrap()
+        );
+        for (age, expected) in [(60, SystemSeverity::Minor), (600, SystemSeverity::Major)] {
+            let mock = MockLeak::new();
+            let timestamp = (chrono::Local::now() - chrono::Duration::seconds(age))
+                .format("%Y%m%d %H:%M:%S")
+                .to_string();
+            mock.sensor
+                .set(
+                    "a",
+                    &[
+                        ("leaking", "Yes".into()),
+                        ("leak_severity", "MINOR".into()),
+                        ("timestamp", timestamp),
+                    ],
+                )
+                .unwrap();
+            let mut state = LeakState::new();
+            state.restore(&mock.tables).unwrap();
+            let result = state.refresh(
+                &[minor("a", true)],
+                &profile(300.0),
+                Instant::now(),
+                &mut Recorder::default(),
+            );
+            assert_eq!(result.system_status, Some(Some(expected)));
+        }
+    }
+
+    #[test]
+    fn restored_leak_age_and_max_t_are_independent_of_utc_offset() {
+        use chrono::TimeZone;
+        for offset in [2 * 3600, -5 * 3600, 0] {
+            for (age, expected) in [(60, SystemSeverity::Minor), (600, SystemSeverity::Major)] {
+                let zone = chrono::FixedOffset::east_opt(offset).unwrap();
+                let local_now = zone.with_ymd_and_hms(2026, 11, 9, 12, 0, 0).unwrap();
+                let timestamp = (local_now - chrono::Duration::seconds(age))
+                    .format("%Y%m%d %H:%M:%S")
+                    .to_string();
+                let mock = MockLeak::new();
+                mock.sensor
+                    .set(
+                        "a",
+                        &[
+                            ("leaking", "Yes".to_string()),
+                            ("leak_severity", "MINOR".to_string()),
+                            ("timestamp", timestamp.clone()),
+                        ],
+                    )
+                    .unwrap();
+                let now = Instant::now();
+                let mut state = LeakState::new();
+                state
+                    .restore_at(&mock.tables, local_now.naive_local(), now)
+                    .unwrap();
+                assert_eq!(
+                    now.duration_since(state.leaking_since["a"]),
+                    Duration::from_secs(age as u64)
+                );
+                let result = state.refresh(
+                    &[minor("a", true)],
+                    &profile(300.0),
+                    now,
+                    &mut Recorder::default(),
+                );
+                assert_eq!(
+                    result.system_status,
+                    Some(Some(expected)),
+                    "offset={offset}, age={age}"
+                );
+                assert_eq!(state.start_timestamps["a"], timestamp);
+            }
+        }
+    }
+
+    #[test]
+    fn zero_duration_does_not_escalate_a_minor_leak() {
+        let mut state = LeakState::new();
+        let mut events = Recorder::default();
+        let now = Instant::now();
+        let result = state.refresh(&[minor("a", true)], &profile(0.0), now, &mut events);
+        assert_eq!(result.system_status, Some(Some(SystemSeverity::Minor)));
+        assert_eq!(
+            state
+                .refresh(
+                    &[minor("a", true)],
+                    &profile(0.0),
+                    now + Duration::from_secs(600),
+                    &mut events
+                )
+                .system_status,
+            None
+        );
+    }
+
+    #[test]
+    fn restarting_during_a_critical_leak_preserves_its_severity_and_start_time() {
+        let mock = MockLeak::new();
+        let mut state = LeakState::new();
+        let mut events = Recorder::default();
+        let result = state.refresh(
+            &[severe("a", LeakSeverity::Critical)],
+            &[],
+            Instant::now(),
+            &mut events,
+        );
+        let _ = apply(&mock.tables, &result);
+        let timestamp = mock.sensor.field("a", "timestamp");
+        let mut restored = LeakState::new();
+        restored.restore(&mock.tables).unwrap();
+        let result = restored.refresh(&[minor("a", true)], &[], Instant::now(), &mut events);
+        let _ = apply(&mock.tables, &result);
+        assert_eq!(
+            mock.system.field("system", "device_leak_status").as_deref(),
+            Some("CRITICAL")
+        );
+        assert_eq!(mock.sensor.field("a", "timestamp"), timestamp);
+    }
 
     #[derive(Default)]
     struct Recorder {
@@ -401,7 +687,10 @@ mod tests {
     }
 
     fn field<'a>(row: &'a SensorRow, key: &str) -> &'a str {
-        row.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str()).unwrap()
+        row.iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_str())
+            .unwrap()
     }
 
     #[test]
@@ -410,7 +699,11 @@ mod tests {
         let mut ev = Recorder::default();
         let t = Instant::now();
         let out = st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev);
-        assert_eq!(out.system_status, Some(None), "first cycle establishes the status");
+        assert_eq!(
+            out.system_status,
+            Some(None),
+            "first cycle establishes the status"
+        );
         let out = st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev);
         assert_eq!(out.system_status, None, "unchanged, so not rewritten");
         assert!(out.rows.is_empty(), "unchanged row, so not rewritten");
@@ -422,25 +715,35 @@ mod tests {
         let mut ev = Recorder::default();
         let t = Instant::now();
         let out = st.refresh(&[sensor("leakage1", true)], &[], t, &mut ev);
-        assert_eq!(out.system_status, Some(Some(LeakSeverity::Critical)));
+        assert_eq!(out.system_status, Some(Some(SystemSeverity::Critical)));
         assert_eq!(field(&out.rows[0].1, "leaking"), "Yes");
-        assert_eq!(ev.lines.iter().filter(|l| l.contains("reported leaking")).count(), 1);
+        assert_eq!(
+            ev.lines
+                .iter()
+                .filter(|l| l.contains("reported leaking"))
+                .count(),
+            1
+        );
 
         st.refresh(&[sensor("leakage1", true)], &[], t, &mut ev);
         assert_eq!(
-            ev.lines.iter().filter(|l| l.contains("reported leaking")).count(),
+            ev.lines
+                .iter()
+                .filter(|l| l.contains("reported leaking"))
+                .count(),
             1,
             "still one: a standing leak is not re-logged"
         );
     }
 
     #[test]
-    fn two_leaking_sensors_are_critical_whatever_each_says() {
+    fn two_minor_leaks_are_major_when_the_minimum_is_two() {
         let mut st = LeakState::new();
+        st.set_major_minimum(2);
         let mut ev = Recorder::default();
         let t = Instant::now();
         let out = st.refresh(&[minor("a", true), minor("b", true)], &[], t, &mut ev);
-        assert_eq!(out.system_status, Some(Some(LeakSeverity::Critical)));
+        assert_eq!(out.system_status, Some(Some(SystemSeverity::Major)));
     }
 
     #[test]
@@ -449,9 +752,14 @@ mod tests {
         let mut ev = Recorder::default();
         let t = Instant::now();
         let out = st.refresh(&[minor("a", true)], &profile(10.0), t, &mut ev);
-        assert_eq!(out.system_status, Some(Some(LeakSeverity::Minor)));
+        assert_eq!(out.system_status, Some(Some(SystemSeverity::Minor)));
 
-        let out = st.refresh(&[minor("a", true)], &profile(10.0), t + Duration::from_secs(9), &mut ev);
+        let out = st.refresh(
+            &[minor("a", true)],
+            &profile(10.0),
+            t + Duration::from_secs(9),
+            &mut ev,
+        );
         assert_eq!(out.system_status, None, "not yet");
 
         let out = st.refresh(
@@ -460,11 +768,11 @@ mod tests {
             t + Duration::from_secs(10),
             &mut ev,
         );
-        assert_eq!(out.system_status, Some(Some(LeakSeverity::Critical)));
+        assert_eq!(out.system_status, Some(Some(SystemSeverity::Major)));
         assert!(ev
             .lines
             .iter()
-            .any(|l| l.contains("escalated from MINOR to CRITICAL after 10")));
+            .any(|l| l.contains("escalated from MINOR to MAJOR after 10")));
     }
 
     #[test]
@@ -473,7 +781,12 @@ mod tests {
         let mut ev = Recorder::default();
         let t = Instant::now();
         st.refresh(&[minor("a", true)], &[], t, &mut ev);
-        let out = st.refresh(&[minor("a", true)], &[], t + Duration::from_secs(3600), &mut ev);
+        let out = st.refresh(
+            &[minor("a", true)],
+            &[],
+            t + Duration::from_secs(3600),
+            &mut ev,
+        );
         assert_eq!(out.system_status, None, "still MINOR");
     }
 
@@ -486,8 +799,14 @@ mod tests {
         let out = st.refresh(&[sensor("a", false)], &[], t, &mut ev);
         assert_eq!(out.system_status, Some(None));
         assert_eq!(field(&out.rows[0].1, "leaking"), "No");
-        assert!(ev.lines.iter().any(|l| l.contains("recovered from CRITICAL leak")));
-        assert!(ev.lines.iter().any(|l| l.contains("CRITICAL system leak cleared")));
+        assert!(ev
+            .lines
+            .iter()
+            .any(|l| l.contains("recovered from CRITICAL leak")));
+        assert!(ev
+            .lines
+            .iter()
+            .any(|l| l.contains("CRITICAL system leak cleared")));
     }
 
     #[test]
@@ -499,7 +818,10 @@ mod tests {
         st.refresh(&[sensor("a", false)], &[], t, &mut ev);
         st.refresh(&[sensor("a", true)], &[], t, &mut ev);
         assert_eq!(
-            ev.lines.iter().filter(|l| l.contains("CRITICAL leak reported")).count(),
+            ev.lines
+                .iter()
+                .filter(|l| l.contains("CRITICAL leak reported"))
+                .count(),
             2
         );
     }
@@ -520,7 +842,13 @@ mod tests {
         assert_eq!(field(&out.rows[0].1, "leaking"), "N/A");
         assert_eq!(field(&out.rows[0].1, "leak_sensor_status"), "Fault");
         st.refresh(&[s], &[], t, &mut ev);
-        assert_eq!(ev.lines.iter().filter(|l| l.contains("reported faulty")).count(), 1);
+        assert_eq!(
+            ev.lines
+                .iter()
+                .filter(|l| l.contains("reported faulty"))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -531,7 +859,7 @@ mod tests {
         let mut bad = sensor("a", false);
         bad.is_ok = Some(false);
         let out = st.refresh(&[bad, sensor("b", true)], &[], t, &mut ev);
-        assert_eq!(out.system_status, Some(Some(LeakSeverity::Critical)));
+        assert_eq!(out.system_status, Some(Some(SystemSeverity::Critical)));
     }
 
     #[test]
@@ -539,9 +867,22 @@ mod tests {
         let mut st = LeakState::new();
         let mut ev = Recorder::default();
         let t = Instant::now();
-        assert_eq!(st.refresh(&[sensor("a", false)], &[], t, &mut ev).rows.len(), 1);
-        assert_eq!(st.refresh(&[sensor("a", false)], &[], t, &mut ev).rows.len(), 0);
-        assert_eq!(st.refresh(&[sensor("a", true)], &[], t, &mut ev).rows.len(), 1);
+        assert_eq!(
+            st.refresh(&[sensor("a", false)], &[], t, &mut ev)
+                .rows
+                .len(),
+            1
+        );
+        assert_eq!(
+            st.refresh(&[sensor("a", false)], &[], t, &mut ev)
+                .rows
+                .len(),
+            0
+        );
+        assert_eq!(
+            st.refresh(&[sensor("a", true)], &[], t, &mut ev).rows.len(),
+            1
+        );
     }
 
     // ── Landing the outcome in a database ─────────────────────────────────────
@@ -585,7 +926,10 @@ mod tests {
             m.sensor.field("leakage1", "timestamp").is_some(),
             "the row an operator reads must say when it was written"
         );
-        assert_eq!(m.sensor.field("leakage1", "leak_severity").as_deref(), Some("CRITICAL"));
+        assert_eq!(
+            m.sensor.field("leakage1", "leak_severity").as_deref(),
+            Some("CRITICAL")
+        );
 
         let out = st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev);
         assert!(
@@ -614,7 +958,10 @@ mod tests {
 
         let e = publish_profiles_and_seed(&m.tables, &[])
             .expect_err("a status that cannot be read has to be reported");
-        assert!(e.contains("SYSTEM_LEAK_STATUS"), "the error names the table: {e}");
+        assert!(
+            e.contains("SYSTEM_LEAK_STATUS"),
+            "the error names the table: {e}"
+        );
         assert_eq!(
             m.system.field("system", "device_leak_status").as_deref(),
             Some("CRITICAL"),
@@ -626,7 +973,10 @@ mod tests {
     fn an_empty_table_is_seeded_with_none() {
         let m = MockLeak::new();
         publish_profiles_and_seed(&m.tables, &[]).unwrap();
-        assert_eq!(m.system.field("system", "device_leak_status").as_deref(), Some("None"));
+        assert_eq!(
+            m.system.field("system", "device_leak_status").as_deref(),
+            Some("None")
+        );
     }
 
     #[test]
@@ -646,11 +996,11 @@ mod tests {
         assert_eq!(m.profile.keys(), ["fast", "slow"]);
         assert_eq!(
             m.profile.field("fast", "max_minor_duration_sec").as_deref(),
-            Some("30.0")
+            Some("30")
         );
         assert_eq!(
             m.profile.field("slow", "max_minor_duration_sec").as_deref(),
-            Some("inf"),
+            Some("None"),
             "no limit is inf, as Python's float(inf) prints"
         );
     }
@@ -663,7 +1013,10 @@ mod tests {
         let mut ev = Recorder::default();
         let out = st.refresh(&[sensor("leakage1", true)], &[], Instant::now(), &mut ev);
         let _ = apply(tables, &out);
-        assert_eq!(m.sensor.field("leakage1", "leaking").as_deref(), Some("Yes"));
+        assert_eq!(
+            m.sensor.field("leakage1", "leaking").as_deref(),
+            Some("Yes")
+        );
         assert_eq!(
             m.system.field("system", "device_leak_status").as_deref(),
             Some("CRITICAL")
@@ -679,22 +1032,28 @@ mod tests {
         let mut st = LeakState::new();
         let mut ev = Recorder::default();
         let t = Instant::now();
-        let _ = apply(tables, &st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev));
+        let _ = apply(
+            tables,
+            &st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev),
+        );
         let before = m.sensor.row("leakage1");
 
         m.sensor.fail_writes("must not be written again");
         m.system.fail_writes("must not be written again");
-        let _ = apply(tables, &st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev));
+        let _ = apply(
+            tables,
+            &st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev),
+        );
         assert_eq!(m.sensor.row("leakage1"), before);
     }
 
     #[test]
-    fn two_leaking_sensors_are_critical_even_without_a_severity() {
+    fn unrated_leaks_do_not_manufacture_a_critical_alarm() {
         let mut st = LeakState::new();
         let mut ev = Recorder::default();
         let t = Instant::now();
         let out = st.refresh(&[unrated("a", true), unrated("b", true)], &[], t, &mut ev);
-        assert_eq!(out.system_status, Some(Some(LeakSeverity::Critical)));
+        assert_eq!(out.system_status, Some(None));
     }
 
     #[test]
@@ -730,7 +1089,11 @@ mod tests {
         let t = Instant::now();
 
         st.refresh(&[faulty("leakage1")], &[], t, &mut ev);
-        assert!(ev.lines.iter().any(|l| l.contains("reported faulty")), "{:?}", ev.lines);
+        assert!(
+            ev.lines.iter().any(|l| l.contains("reported faulty")),
+            "{:?}",
+            ev.lines
+        );
 
         ev.lines.clear();
         st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev);
@@ -757,7 +1120,11 @@ mod tests {
             st.refresh(&[severe("leakage1", sev)], &[], t, &mut ev);
             ev.lines.clear();
             st.refresh(&[sensor("leakage1", false)], &[], t, &mut ev);
-            assert!(ev.lines.iter().any(|l| l.contains(want)), "{sev:?}: {:?}", ev.lines);
+            assert!(
+                ev.lines.iter().any(|l| l.contains(want)),
+                "{sev:?}: {:?}",
+                ev.lines
+            );
         }
     }
 
@@ -769,18 +1136,30 @@ mod tests {
         let mut ev = Recorder::default();
         let t = Instant::now();
 
-        st.refresh(&[severe("leakage1", LeakSeverity::Critical)], &[], t, &mut ev);
+        st.refresh(
+            &[severe("leakage1", LeakSeverity::Critical)],
+            &[],
+            t,
+            &mut ev,
+        );
         ev.lines.clear();
 
         st.refresh(&[severe("leakage1", LeakSeverity::Minor)], &[], t, &mut ev);
         assert!(
-            ev.lines.iter().any(|l| l.contains("downgraded from CRITICAL to MINOR")),
+            ev.lines
+                .iter()
+                .any(|l| l.contains("downgraded from CRITICAL to MINOR")),
             "{:?}",
             ev.lines
         );
 
         ev.lines.clear();
-        st.refresh(&[severe("leakage1", LeakSeverity::Critical)], &[], t, &mut ev);
+        st.refresh(
+            &[severe("leakage1", LeakSeverity::Critical)],
+            &[],
+            t,
+            &mut ev,
+        );
         assert!(
             ev.lines.iter().any(|l| l.contains("CRITICAL")),
             "the second CRITICAL is announced again: {:?}",
@@ -827,7 +1206,10 @@ mod tests {
         // alarm must not fire again.
         m.system.allow_writes();
         let out = st.refresh(&[sensor_crit], &profiles, Instant::now(), &mut ev);
-        assert!(out.system_status.is_some(), "the dropped value is rewritten");
+        assert!(
+            out.system_status.is_some(),
+            "the dropped value is rewritten"
+        );
         let _ = apply(&m.tables, &out);
         let alarms = ev
             .lines

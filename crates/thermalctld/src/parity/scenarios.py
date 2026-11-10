@@ -458,3 +458,55 @@ def stop_while_starting_rust():
     c, watch, waiting = vendor_platform()
     H.use_chassis(c, watch)
     return waiting
+
+
+def leak_system_status(case):
+    """Run the current Python leak updater for the Rust state regressions."""
+    H.reset()
+
+    class Profile:
+        def get_type(self): return 'p'
+        def get_leak_max_minor_duration_sec(self): return 0 if case == 'zero_limit' else 10
+
+    class Sensor:
+        def __init__(self, name, severity):
+            self.name, self.severity, self.failed = name, severity, False
+        def get_name(self): return self.name
+        def is_leak_sensor_ok(self): return True
+        def is_leak(self):
+            if self.failed: raise IOError('sensor unavailable')
+            return True
+        def get_leak_severity(self): return self.severity
+        def get_leak_profile(self): return Profile()
+        def get_leak_sensor_type(self): return 'leak'
+        def get_leak_sensor_location(self): return 'rack'
+
+    critical = case in ('restart', 'read_failure')
+    sensors = [Sensor('a', TD.LeakSeverity.CRITICAL if critical else TD.LeakSeverity.MINOR)]
+    if case == 'two_minor': sensors.append(Sensor('b', TD.LeakSeverity.MINOR))
+
+    class Cooling:
+        leakage_sensors = sensors
+        def get_all_profiles(self): return [Profile()]
+        def get_major_leak_num_min_sensors(self): return 2
+
+    class Chassis:
+        def get_liquid_cooling(self): return Cooling()
+
+    updater = TD.LiquidCoolingUpdater(Chassis(), 0.001)
+    ALIVE.append(updater)
+    updater.update()
+    if case == 'restart':
+        sensors[0].severity = TD.LeakSeverity.MINOR
+        updater = TD.LiquidCoolingUpdater(Chassis(), 0.001)
+        ALIVE.append(updater)
+        updater.update()
+    elif case == 'read_failure':
+        sensors[0].failed = True
+        try:
+            updater.update()
+        except IOError:
+            pass
+    found, fields = updater.system_table.get('system')
+    assert found
+    return dict(fields)['device_leak_status']
