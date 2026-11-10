@@ -174,6 +174,56 @@ class XcvrTableHelper:
     def get_firmware_info_tbl(self, asic_id):
         return self.firmware_info_tbl[asic_id]
 
+    def get_dom_tables(self, asic_id):
+        """Returns the tables holding DOM data, including PM and firmware info."""
+        return [
+            self.get_dom_tbl(asic_id),
+            self.get_dom_temperature_tbl(asic_id),
+            self.get_dom_flag_tbl(asic_id),
+            self.get_dom_flag_change_count_tbl(asic_id),
+            self.get_dom_flag_set_time_tbl(asic_id),
+            self.get_dom_flag_clear_time_tbl(asic_id),
+            self.get_dom_threshold_tbl(asic_id),
+            self.get_pm_tbl(asic_id),
+            self.get_firmware_info_tbl(asic_id),
+        ]
+
+    def get_vdm_tables(self, asic_id):
+        """Returns the tables holding VDM data."""
+        return [
+            self.get_vdm_real_value_tbl(asic_id),
+            *[self.get_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_change_count_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_set_time_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_clear_time_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+        ]
+
+    def get_status_tables(self, asic_id, include_sw):
+        """Returns the tables holding transceiver status data.
+
+        Args:
+            asic_id (int): the asic index to get the tables for
+            include_sw (bool): also include TRANSCEIVER_STATUS_SW, which holds the
+                SW-driven status/error fields.
+        """
+        tables = [
+            self.get_status_tbl(asic_id),
+            self.get_status_flag_tbl(asic_id),
+            self.get_status_flag_change_count_tbl(asic_id),
+            self.get_status_flag_set_time_tbl(asic_id),
+            self.get_status_flag_clear_time_tbl(asic_id),
+        ]
+        if include_sw:
+            tables.append(self.get_status_sw_tbl(asic_id))
+        return tables
+
+    def get_info_tables(self, asic_id):
+        """Returns the tables holding static transceiver data (TRANSCEIVER_INFO)."""
+        return [
+            self.get_intf_tbl(asic_id),
+        ]
+
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
 

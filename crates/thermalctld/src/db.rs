@@ -6,8 +6,8 @@
 //! a dictionary-backed stand-in (`tests/mock_swsscommon.py`); this is that,
 //! expressed as a trait.
 
-pub use pmon_common::db::{open as open_named, TableLike};
 use pmon_common::db::STATE_DB;
+pub use pmon_common::db::{open as open_named, TableLike};
 
 pub const TEMPERATURE_INFO: &str = "TEMPERATURE_INFO";
 pub const FAN_INFO: &str = "FAN_INFO";
@@ -43,6 +43,7 @@ pub struct LeakTables {
     pub sensor: Box<dyn TableLike>,
     pub system: Box<dyn TableLike>,
     pub profile: Box<dyn TableLike>,
+    pub policy: Option<Box<dyn TableLike>>,
 }
 
 /// How a table is opened: the database it lives in, and its name.
@@ -63,6 +64,7 @@ impl LeakTables {
             sensor: open(STATE_DB, LIQUID_COOLING_INFO)?,
             system: open(STATE_DB, SYSTEM_LEAK_STATUS)?,
             profile: open(STATE_DB, LEAK_PROFILE)?,
+            policy: Some(open("CONFIG_DB", "LEAK_CONTROL_POLICY")?),
         })
     }
 
@@ -102,7 +104,6 @@ impl LeakTables {
 }
 
 impl StateDb {
-
     /// Delete every row this daemon owns.
     ///
     /// Python does it from two destructors -- `thermalctld:FanUpdater.__del__`
@@ -233,7 +234,8 @@ pub mod mock {
             let physical_entity = MockTable::new();
             let db = StateDb {
                 temperature: Box::new(temperature.clone()),
-                chassis_temperature: with_chassis.then(|| Box::new(chassis_temperature.clone()) as Box<dyn TableLike>),
+                chassis_temperature: with_chassis
+                    .then(|| Box::new(chassis_temperature.clone()) as Box<dyn TableLike>),
                 fan: Box::new(fan.clone()),
                 fan_drawer: Box::new(fan_drawer.clone()),
                 physical_entity: Box::new(physical_entity.clone()),
@@ -273,6 +275,7 @@ pub mod mock {
                     sensor: Box::new(sensor.clone()),
                     system: Box::new(system.clone()),
                     profile: Box::new(profile.clone()),
+                    policy: None,
                 },
                 sensor,
                 system,
@@ -300,10 +303,18 @@ mod tests {
         for t in [&m.temperature, &m.fan, &m.fan_drawer] {
             TableLike::set(t, "ASIC", &[("temperature", "45".to_string())]).unwrap();
         }
-        TableLike::set(&m.chassis_temperature, "ASIC", &[("temperature", "45".to_string())])
-            .unwrap();
-        TableLike::set(&m.physical_entity, "ASIC", &[("position_in_parent", "1".to_string())])
-            .unwrap();
+        TableLike::set(
+            &m.chassis_temperature,
+            "ASIC",
+            &[("temperature", "45".to_string())],
+        )
+        .unwrap();
+        TableLike::set(
+            &m.physical_entity,
+            "ASIC",
+            &[("position_in_parent", "1".to_string())],
+        )
+        .unwrap();
 
         m.db.clear();
 
@@ -326,7 +337,9 @@ mod tests {
             Some("drawer1")
         );
         assert_eq!(
-            m.physical_entity.field("fan1", "position_in_parent").as_deref(),
+            m.physical_entity
+                .field("fan1", "position_in_parent")
+                .as_deref(),
             Some("1")
         );
     }
@@ -354,10 +367,9 @@ mod tests {
     fn a_failing_write_is_reported_to_the_caller() {
         let m = MockDb::new(false);
         m.physical_entity.fail_writes("redis is down");
-        let e = m
-            .db
-            .set_entity_info("fan1", "drawer1", "1")
-            .expect_err("the caller has to be told");
+        let e =
+            m.db.set_entity_info("fan1", "drawer1", "1")
+                .expect_err("the caller has to be told");
         assert!(e.contains("fan1"), "the error names the row: {e}");
         assert!(m.physical_entity.is_empty());
     }
@@ -458,6 +470,7 @@ mod tests {
                 ("STATE_DB".into(), "LIQUID_COOLING_INFO".into()),
                 ("STATE_DB".into(), "SYSTEM_LEAK_STATUS".into()),
                 ("STATE_DB".into(), "LEAK_PROFILE".into()),
+                ("CONFIG_DB".into(), "LEAK_CONTROL_POLICY".into()),
             ]
         );
     }

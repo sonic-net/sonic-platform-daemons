@@ -5,8 +5,8 @@ edition = "2021"
 authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
 description = "SONiC thermal control daemon in Rust"
 license = "Apache-2.0"
-homepage = "https://github.com/Azure/sonic-buildimage"
-repository = "https://github.com/Azure/sonic-buildimage"
+homepage = "https://github.com/sonic-net/sonic-platform-daemons"
+repository = "https://github.com/sonic-net/sonic-platform-daemons"
 keywords = ["sonic", "thermal", "networking"]
 
 [[bin]]
@@ -26,11 +26,9 @@ pmon-common     = { path = "../pmon-common" }
 # "rt", not "rt-multi-thread": one worker thread is plenty at ~0.4 polls/s, and
 # the thread count is part of what this daemon exists to measure.
 tokio   = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
-# Held below 4.6: from 4.6 the clap family is edition 2024, and the
-# cargo-auditable the sonic-slave image wraps rustc in cannot parse that
-# edition out of `cargo metadata` (the image pins 0.6.4). The committed
-# lock is what actually holds the version; this says why, so a later
-# `cargo update` does not silently put the build back.
+# Compatibility cap for release builders still using cargo-auditable 0.6.4,
+# which cannot read edition-2024 metadata. Current master uses 0.7.6 and
+# supports that edition; retain the cap while the older build baseline is supported.
 clap    = { version = ">=4.0, <4.6", features = ["derive"] }
 chrono  = "0.4"
 serde_json = "1"
@@ -42,7 +40,7 @@ syslog  = "6.0"
 # rather than carried by the shipped binary, as every daemon in the workspace
 # does.
 pmon-common = { path = "../pmon-common", features = ["testing"] }
-# Same constraint: 3.15 onward pulls getrandom 0.4, which is edition 2024.
+# Retain the older dev-dependency graph for the same release-builder compatibility.
 tempfile = ">=3, <3.15"
 # "test-util" gives the tests `tokio::time::pause()`, which makes the polling
 # loop's wait arithmetic observable without any test sleeping.  It is a

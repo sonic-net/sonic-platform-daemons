@@ -523,12 +523,12 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "platform-api"
 version = "0.1.0"
-source = "git+https://github.com/sonic-net/sonic-platform-common.git?branch=master#608be693d782cfcaf25a6b4012a6b89389a14991"
+source = "git+https://github.com/sonic-net/sonic-platform-common.git?rev=15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2#15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2"
 
 [[package]]
 name = "platform-provider"
 version = "0.1.0"
-source = "git+https://github.com/sonic-net/sonic-platform-common.git?branch=master#608be693d782cfcaf25a6b4012a6b89389a14991"
+source = "git+https://github.com/sonic-net/sonic-platform-common.git?rev=15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2#15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2"
 dependencies = [
  "platform-api",
  "platform-pyo3",
@@ -537,7 +537,7 @@ dependencies = [
 [[package]]
 name = "platform-pyo3"
 version = "0.1.0"
-source = "git+https://github.com/sonic-net/sonic-platform-common.git?branch=master#608be693d782cfcaf25a6b4012a6b89389a14991"
+source = "git+https://github.com/sonic-net/sonic-platform-common.git?rev=15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2#15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2"
 dependencies = [
  "libc",
  "platform-api",

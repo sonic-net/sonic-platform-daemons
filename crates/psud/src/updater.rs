@@ -50,11 +50,27 @@ pub struct Updater {
 /// `PowerBudget`).
 impl Default for Updater {
     fn default() -> Self {
-        Self { status: BTreeMap::new(), first_run: true, published: BTreeSet::new() }
+        Self {
+            status: BTreeMap::new(),
+            first_run: true,
+            published: BTreeSet::new(),
+        }
     }
 }
 
 impl Updater {
+    pub fn psu_needs_fan_details(&self, row: &PsuInfo) -> bool {
+        row.presence
+            && self
+                .status
+                .get(&row.name)
+                .map(|s| s.presence != row.presence)
+                .unwrap_or(true)
+    }
+    pub fn needs_fan_details(&self, psus: &[PsuInfo]) -> bool {
+        psus.iter().any(|row| self.psu_needs_fan_details(row))
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -78,7 +94,10 @@ impl Updater {
                 // uses `try_get(entity.get_position_in_parent, 0)`.  Mellanox
                 // does not implement the getter for PDBs, so this is the value
                 // every PDB row on a liquid-cooled switch actually carries.
-                ("position_in_parent", fmt::position(row.position_in_parent, 0)),
+                (
+                    "position_in_parent",
+                    fmt::position(row.position_in_parent, 0),
+                ),
                 ("parent_name", CHASSIS_INFO_KEY.to_string()),
             ];
             if let Err(e) = tables.entity.set(&row.name, &fvs) {
@@ -174,7 +193,9 @@ impl Updater {
         if present && power_good_changed {
             set_led = true;
             if status.power_good {
-                pmon_common::notice!("Power absence warning cleared: {name} power is back to normal.");
+                pmon_common::notice!(
+                    "Power absence warning cleared: {name} power is back to normal."
+                );
             } else {
                 log::warn!("Power absence warning: {name} is out of power.");
             }
@@ -184,8 +205,12 @@ impl Updater {
             // Re-armed from scratch: a PSU that has just come back has not yet
             // drawn anything worth judging.
             status.check_power_threshold = status.power_good
-                && row.power_critical_threshold.is_some()
-                && row.power_warning_suppress_threshold.is_some()
+                && row
+                    .power_critical_threshold
+                    .is_some_and(|v| v.as_f64() != 0.0)
+                && row
+                    .power_warning_suppress_threshold
+                    .is_some_and(|v| v.as_f64() != 0.0)
                 && power.is_some();
         }
 
@@ -221,7 +246,9 @@ impl Updater {
                             pmon_common::notice!(
                                 "PSU power warning cleared: system power {} is back to normal, \
                                  below the warning suppress threshold {}.",
-                                fmt::float(system_power), fmt::number(Some(suppress)));
+                                fmt::float(system_power),
+                                fmt::number(Some(suppress))
+                            );
                         }
                         *threshold_logged = true;
                     }
@@ -237,8 +264,10 @@ impl Updater {
                     // the row is the difference, and is why this is not the
                     // message below: the thresholds are fine, the reading is
                     // not.
-                    log::error!("{name} power reading became unavailable, \
-                                 stopped checking it against the power thresholds");
+                    log::error!(
+                        "{name} power reading became unavailable, \
+                                 stopped checking it against the power thresholds"
+                    );
                     status.check_power_threshold = false;
                     status.power_exceeded_threshold = false;
                 }
@@ -246,7 +275,8 @@ impl Updater {
                     log::error!(
                         "PSU power thresholds become invalid: threshold {} critical threshold {}",
                         fmt::number(row.power_warning_suppress_threshold),
-                        fmt::number(row.power_critical_threshold));
+                        fmt::number(row.power_critical_threshold)
+                    );
                     status.check_power_threshold = false;
                     // The local keeps its earlier value, so this cycle still
                     // publishes the alarm that was standing when the daemon
@@ -281,7 +311,8 @@ impl Updater {
                      valid range=[{}, {}].",
                     fmt::number(voltage),
                     fmt::threshold(voltage_high),
-                    fmt::threshold(voltage_low));
+                    fmt::threshold(voltage_low)
+                );
             }
         }
 
@@ -294,7 +325,9 @@ impl Updater {
         {
             set_led = true;
             if status.temperature_good {
-                pmon_common::notice!("Temperature warning cleared: {name} temperature is back to normal.");
+                pmon_common::notice!(
+                    "Temperature warning cleared: {name} temperature is back to normal."
+                );
             } else {
                 log::warn!(
                     "Temperature warning: {name} temperature too hot, temperature={}, threshold={}.",
@@ -305,7 +338,11 @@ impl Updater {
 
         let led = set_led.then(|| LedWrite {
             psu: row.key.clone(),
-            color: if status.is_ok() { LedColor::Green } else { LedColor::Red },
+            color: if status.is_ok() {
+                LedColor::Green
+            } else {
+                LedColor::Red
+            },
         });
 
         // `presence` and `status` are lower case where `is_replaceable` and
@@ -321,13 +358,22 @@ impl Updater {
             ("voltage_max_threshold", fmt::threshold(voltage_high)),
             ("current", fmt::number(reading(row.current))),
             ("power", fmt::number(power)),
-            ("power_warning_suppress_threshold", fmt::number(row.power_warning_suppress_threshold)),
-            ("power_critical_threshold", fmt::number(row.power_critical_threshold)),
+            (
+                "power_warning_suppress_threshold",
+                fmt::number(row.power_warning_suppress_threshold),
+            ),
+            (
+                "power_critical_threshold",
+                fmt::number(row.power_critical_threshold),
+            ),
             ("power_overload", fmt::bool(power_exceeded)),
             ("is_replaceable", fmt::bool(row.is_replaceable)),
             ("input_current", fmt::number(reading(row.input_current))),
             ("input_voltage", fmt::number(reading(row.input_voltage))),
-            ("max_power", fmt::number(reading(row.maximum_supplied_power))),
+            (
+                "max_power",
+                fmt::number(reading(row.maximum_supplied_power)),
+            ),
             ("presence", fmt::lower_bool(present)),
             ("status", fmt::lower_bool(power_good)),
             // The epoch float, unlike FAN_INFO's below: Python writes
@@ -409,7 +455,14 @@ fn publish_psu_fans(psu: &str, present: bool, fans: &[FanInfo], table: &dyn Tabl
                     fmt::NOT_AVAILABLE.to_string()
                 },
             ),
-            ("speed", if present { fmt::number(fan.speed_pct) } else { fmt::NOT_AVAILABLE.to_string() }),
+            (
+                "speed",
+                if present {
+                    fmt::number(fan.speed_pct)
+                } else {
+                    fmt::NOT_AVAILABLE.to_string()
+                },
+            ),
             // `%Y%m%d %H:%M:%S`, unlike PSU_INFO's epoch float: Python writes
             // `datetime.now().strftime(...)` here
             // (`psud:DaemonPsud._update_psu_fan_data`).
@@ -495,10 +548,18 @@ pub(crate) mod tests {
 
     impl Db {
         fn new() -> Self {
-            Self { psu: MockTable::new(), fan: MockTable::new(), entity: MockTable::new() }
+            Self {
+                psu: MockTable::new(),
+                fan: MockTable::new(),
+                entity: MockTable::new(),
+            }
         }
         fn tables(&self) -> Tables<'_> {
-            Tables { psu: &self.psu, fan: &self.fan, entity: &self.entity }
+            Tables {
+                psu: &self.psu,
+                fan: &self.fan,
+                entity: &self.entity,
+            }
         }
     }
 
@@ -512,7 +573,10 @@ pub(crate) mod tests {
         assert_eq!(f("voltage_max_threshold").as_deref(), Some("13.0"));
         assert_eq!(f("temp").as_deref(), Some("40.0"));
         assert_eq!(f("max_power").as_deref(), Some("1000.0"));
-        assert_eq!(db.entity.field("PSU 1", "parent_name").as_deref(), Some("chassis 1"));
+        assert_eq!(
+            db.entity.field("PSU 1", "parent_name").as_deref(),
+            Some("chassis 1")
+        );
     }
 
     /// A getter that raised: psud reads every column through a `try_get`
@@ -534,7 +598,10 @@ pub(crate) mod tests {
         assert_eq!(db.psu.field("PSU 1", "voltage").as_deref(), Some("N/A"));
         assert_eq!(db.psu.field("PSU 1", "temp").as_deref(), Some("40.0"));
         assert_eq!(db.fan.field("psu1_fan1", "speed").as_deref(), Some("N/A"));
-        assert_eq!(db.fan.field("psu1_fan1", "direction").as_deref(), Some("intake"));
+        assert_eq!(
+            db.fan.field("psu1_fan1", "direction").as_deref(),
+            Some("intake")
+        );
         assert_eq!(leds.len(), 1);
     }
 
@@ -567,7 +634,13 @@ pub(crate) mod tests {
         let leds = u.refresh(&[hot], &[broken], &db.tables());
         assert!(!log.logged(log::Level::Warn, "Failed to update PSU data"));
         assert_eq!(db.psu.field("PSU 1", "temp").as_deref(), Some("70.0"));
-        assert_eq!(leds, vec![LedWrite { psu: key_of("PSU 1"), color: LedColor::Red }]);
+        assert_eq!(
+            leds,
+            vec![LedWrite {
+                psu: key_of("PSU 1"),
+                color: LedColor::Red
+            }]
+        );
     }
 
     /// The one hash carries both spellings.  A consumer that matches `presence`
@@ -579,8 +652,14 @@ pub(crate) mod tests {
         Updater::new().refresh(&[psu("PSU 1")], &[], &db.tables());
         assert_eq!(db.psu.field("PSU 1", "presence").as_deref(), Some("true"));
         assert_eq!(db.psu.field("PSU 1", "status").as_deref(), Some("true"));
-        assert_eq!(db.psu.field("PSU 1", "is_replaceable").as_deref(), Some("True"));
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("False"));
+        assert_eq!(
+            db.psu.field("PSU 1", "is_replaceable").as_deref(),
+            Some("True")
+        );
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("False")
+        );
     }
 
     /// A PSU that has been pulled has no readings.  The driver may still answer
@@ -593,8 +672,19 @@ pub(crate) mod tests {
         let mut gone = psu("PSU 1");
         gone.presence = false;
         u.refresh(&[gone], &[], &db.tables());
-        for field in ["voltage", "temp", "current", "power", "max_power", "input_voltage"] {
-            assert_eq!(db.psu.field("PSU 1", field).as_deref(), Some("N/A"), "{field}");
+        for field in [
+            "voltage",
+            "temp",
+            "current",
+            "power",
+            "max_power",
+            "input_voltage",
+        ] {
+            assert_eq!(
+                db.psu.field("PSU 1", field).as_deref(),
+                Some("N/A"),
+                "{field}"
+            );
         }
         assert_eq!(db.psu.field("PSU 1", "presence").as_deref(), Some("false"));
         // Identity is not a reading: the slot still knows which PSU model was
@@ -627,7 +717,13 @@ pub(crate) mod tests {
     fn a_default_updater_starts_on_its_first_pass() {
         let db = Db::new();
         let leds = Updater::default().refresh(&[psu("PSU 1")], &[], &db.tables());
-        assert_eq!(leds, vec![LedWrite { psu: key_of("PSU 1"), color: LedColor::Green }]);
+        assert_eq!(
+            leds,
+            vec![LedWrite {
+                psu: key_of("PSU 1"),
+                color: LedColor::Green
+            }]
+        );
     }
 
     /// After that, only a change writes.  The LED is an i2c write; doing it
@@ -643,7 +739,13 @@ pub(crate) mod tests {
         let mut hot = psu("PSU 1");
         hot.temperature = Some(Number::Float(90.0));
         let leds = u.refresh(&[hot], &[], &db.tables());
-        assert_eq!(leds, vec![LedWrite { psu: key_of("PSU 1"), color: LedColor::Red }]);
+        assert_eq!(
+            leds,
+            vec![LedWrite {
+                psu: key_of("PSU 1"),
+                color: LedColor::Red
+            }]
+        );
     }
 
     /// psud owns five FAN_INFO fields on a PSU fan and thermalctld owns the
@@ -656,8 +758,14 @@ pub(crate) mod tests {
         stopped.presence = false;
         stopped.status = false;
         Updater::new().refresh(&[psu("PSU 1")], &[stopped], &db.tables());
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "presence").as_deref(), Some("True"));
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "status").as_deref(), Some("True"));
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "presence").as_deref(),
+            Some("True")
+        );
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "status").as_deref(),
+            Some("True")
+        );
         assert_eq!(db.fan.field("PSU 1 FAN 1", "speed").as_deref(), Some("60"));
     }
 
@@ -670,8 +778,14 @@ pub(crate) mod tests {
         let mut gone = psu("PSU 1");
         gone.presence = false;
         u.refresh(&[gone], &[f], &db.tables());
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "presence").as_deref(), Some("False"));
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "direction").as_deref(), Some("N/A"));
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "presence").as_deref(),
+            Some("False")
+        );
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "direction").as_deref(),
+            Some("N/A")
+        );
         assert_eq!(db.fan.field("PSU 1 FAN 1", "speed").as_deref(), Some("N/A"));
     }
 
@@ -685,7 +799,10 @@ pub(crate) mod tests {
         let mut f = fan("PSU 1 FAN 1", "PSU 1");
         f.direction = Some("EXHAUST".to_string());
         u.refresh(&[psu("PSU 1")], &[f], &db.tables());
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "direction").as_deref(), Some("EXHAUST"));
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "direction").as_deref(),
+            Some("EXHAUST")
+        );
     }
 
     /// Another PSU's fans are not this one's.  Matching on the name prefix
@@ -721,8 +838,11 @@ pub(crate) mod tests {
 
         let mut u = Updater::new();
         u.refresh(&[a.clone(), b.clone()], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("True"),
-            "120W over a 100W critical threshold, though neither PSU draws 100W");
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("True"),
+            "120W over a 100W critical threshold, though neither PSU draws 100W"
+        );
     }
 
     /// Coming back down uses the lower suppress threshold, so a system sitting
@@ -739,12 +859,21 @@ pub(crate) mod tests {
         };
         let mut u = Updater::new();
         u.refresh(&[armed(120.0)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("True"));
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("True")
+        );
         u.refresh(&[armed(90.0)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("True"),
-            "still above the suppress threshold");
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("True"),
+            "still above the suppress threshold"
+        );
         u.refresh(&[armed(70.0)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("False"));
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("False")
+        );
     }
 
     /// A platform that publishes no thresholds is never judged against them.
@@ -753,7 +882,10 @@ pub(crate) mod tests {
         let db = Db::new();
         let mut u = Updater::new();
         u.refresh(&[psu("PSU 1")], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("False"));
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("False")
+        );
     }
 
     /// Published after the write, from a fresh read, so the colour in STATE_DB
@@ -762,7 +894,11 @@ pub(crate) mod tests {
     fn the_led_colour_published_is_the_one_read_back() {
         let db = Db::new();
         let mut u = Updater::new();
-        u.refresh(&[psu("PSU 1")], &[fan("PSU 1 FAN 1", "PSU 1")], &db.tables());
+        u.refresh(
+            &[psu("PSU 1")],
+            &[fan("PSU 1 FAN 1", "PSU 1")],
+            &db.tables(),
+        );
 
         let mut after = psu("PSU 1");
         after.status_led = Some("red".to_string());
@@ -770,7 +906,10 @@ pub(crate) mod tests {
         hot_fan.status_led = Some("amber".to_string());
         u.update_led_color(&[after], &[hot_fan], &db.tables());
         assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("red"));
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "led_status").as_deref(), Some("amber"));
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "led_status").as_deref(),
+            Some("amber")
+        );
     }
 
     /// A refusing table costs that PSU's row; the LED write has already
@@ -833,14 +972,24 @@ pub(crate) mod tests {
     fn a_vendor_led_colour_is_published_as_the_platform_spelled_it() {
         let db = Db::new();
         let mut u = Updater::new();
-        u.refresh(&[psu("PSU 1")], &[fan("PSU 1 FAN 1", "PSU 1")], &db.tables());
+        u.refresh(
+            &[psu("PSU 1")],
+            &[fan("PSU 1 FAN 1", "PSU 1")],
+            &db.tables(),
+        );
         let mut lit = psu("PSU 1");
         lit.status_led = Some("orange".to_string());
         let mut blinking = fan("PSU 1 FAN 1", "PSU 1");
         blinking.status_led = Some("green_blink".to_string());
         u.update_led_color(&[lit], &[blinking], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("orange"));
-        assert_eq!(db.fan.field("PSU 1 FAN 1", "led_status").as_deref(), Some("green_blink"));
+        assert_eq!(
+            db.psu.field("PSU 1", "led_status").as_deref(),
+            Some("orange")
+        );
+        assert_eq!(
+            db.fan.field("PSU 1 FAN 1", "led_status").as_deref(),
+            Some("green_blink")
+        );
     }
 
     /// A PSU that was never published is not one this daemon publishes a
@@ -866,8 +1015,15 @@ pub(crate) mod tests {
         let mut gone = psu("PSU 1");
         gone.presence = false;
         assert_eq!(u.refresh(&[gone.clone()], &[], &db.tables()).len(), 1);
-        assert!(u.refresh(&[gone], &[], &db.tables()).is_empty(), "still gone, still quiet");
-        assert_eq!(u.refresh(&[psu("PSU 1")], &[], &db.tables()).len(), 1, "inserted back");
+        assert!(
+            u.refresh(&[gone], &[], &db.tables()).is_empty(),
+            "still gone, still quiet"
+        );
+        assert_eq!(
+            u.refresh(&[psu("PSU 1")], &[], &db.tables()).len(),
+            1,
+            "inserted back"
+        );
 
         // Power lost, then back.
         let mut dead = psu("PSU 1");
@@ -896,7 +1052,13 @@ pub(crate) mod tests {
         let mut gone = psu("PSU 1");
         gone.presence = false;
         let leds = Updater::new().refresh(&[gone], &[], &db.tables());
-        assert_eq!(leds, vec![LedWrite { psu: key_of("PSU 1"), color: LedColor::Red }]);
+        assert_eq!(
+            leds,
+            vec![LedWrite {
+                psu: key_of("PSU 1"),
+                color: LedColor::Red
+            }]
+        );
     }
 
     /// The system draw crossing and clearing is one line each, and it is the
@@ -912,11 +1074,28 @@ pub(crate) mod tests {
             p
         };
         let mut u = Updater::new();
-        u.refresh(&[armed("PSU 1", 60.0), armed("PSU 2", 60.0)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("True"));
-        assert_eq!(db.psu.field("PSU 2", "power_overload").as_deref(), Some("True"));
-        u.refresh(&[armed("PSU 1", 30.0), armed("PSU 2", 30.0)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("False"));
+        u.refresh(
+            &[armed("PSU 1", 60.0), armed("PSU 2", 60.0)],
+            &[],
+            &db.tables(),
+        );
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("True")
+        );
+        assert_eq!(
+            db.psu.field("PSU 2", "power_overload").as_deref(),
+            Some("True")
+        );
+        u.refresh(
+            &[armed("PSU 1", 30.0), armed("PSU 2", 30.0)],
+            &[],
+            &db.tables(),
+        );
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("False")
+        );
     }
 
     /// The reading goes away with the check armed.  Python reaches
@@ -934,14 +1113,23 @@ pub(crate) mod tests {
             p
         };
         u.refresh(&[armed(Some(200.0))], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("True"));
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("True")
+        );
 
         u.refresh(&[armed(None)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "voltage").as_deref(), Some("12.0"),
-            "the rest of the row is still published");
+        assert_eq!(
+            db.psu.field("PSU 1", "voltage").as_deref(),
+            Some("12.0"),
+            "the rest of the row is still published"
+        );
         u.refresh(&[armed(None)], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("False"),
-            "and the alarm clears on the pass after");
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("False"),
+            "and the alarm clears on the pass after"
+        );
     }
 
     /// A threshold that goes away while the check is armed is reported, and
@@ -961,7 +1149,10 @@ pub(crate) mod tests {
         lost.power = Some(Number::Float(200.0));
         u.refresh(&[lost.clone()], &[], &db.tables());
         u.refresh(&[lost], &[], &db.tables());
-        assert_eq!(db.psu.field("PSU 1", "power_overload").as_deref(), Some("False"));
+        assert_eq!(
+            db.psu.field("PSU 1", "power_overload").as_deref(),
+            Some("False")
+        );
     }
 
     /// A PDB is the case this was found on: Mellanox implements
@@ -979,7 +1170,10 @@ pub(crate) mod tests {
         // published -1 -- the value the base class documents for "cannot
         // determine" and the value no daemon actually uses -- which is what
         // a run on hardware caught: Python wrote 0 for both PDBs, the port wrote -1.
-        assert_eq!(db.entity.field("PDB 1", "position_in_parent").as_deref(), Some("0"));
+        assert_eq!(
+            db.entity.field("PDB 1", "position_in_parent").as_deref(),
+            Some("0")
+        );
     }
 
     /// A refusing entity table costs that row and nothing else.
@@ -997,11 +1191,19 @@ pub(crate) mod tests {
         let db = Db::new();
         db.fan.fail_writes("read-only replica");
         let mut u = Updater::new();
-        u.refresh(&[psu("PSU 1")], &[fan("PSU 1 FAN 1", "PSU 1")], &db.tables());
+        u.refresh(
+            &[psu("PSU 1")],
+            &[fan("PSU 1 FAN 1", "PSU 1")],
+            &db.tables(),
+        );
         assert!(db.psu.field("PSU 1", "voltage").is_some());
 
         db.psu.fail_writes("read-only replica");
-        u.update_led_color(&[psu("PSU 1")], &[fan("PSU 1 FAN 1", "PSU 1")], &db.tables());
+        u.update_led_color(
+            &[psu("PSU 1")],
+            &[fan("PSU 1 FAN 1", "PSU 1")],
+            &db.tables(),
+        );
     }
 
     #[test]

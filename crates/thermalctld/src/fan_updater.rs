@@ -51,7 +51,12 @@ impl Default for FanStatus {
 }
 
 impl FanStatus {
-    fn set_presence(&mut self, presence: bool, kind: FanKind, counters: &mut BadFanCounters) -> bool {
+    fn set_presence(
+        &mut self,
+        presence: bool,
+        kind: FanKind,
+        counters: &mut BadFanCounters,
+    ) -> bool {
         // Only drawer fans count toward "insufficient working fans".
         if !presence && kind == FanKind::Drawer {
             counters.absent += 1;
@@ -105,7 +110,11 @@ impl FanStatus {
     }
 
     fn is_ok(&self) -> bool {
-        self.presence && self.status && !self.under_speed && !self.over_speed && !self.invalid_direction
+        self.presence
+            && self.status
+            && !self.under_speed
+            && !self.over_speed
+            && !self.invalid_direction
     }
 }
 
@@ -143,7 +152,14 @@ fn fan_row(fan: &FanInfo, status: &FanStatus, drawer_name: String) -> [(&'static
         ("drawer_name", drawer_name),
         ("model", fmt::opt_str(&fan.model)),
         ("serial", fmt::opt_str(&fan.serial)),
-        ("status", if fan.presence { fmt::bool(status.is_ok()) } else { na() }),
+        (
+            "status",
+            if fan.presence {
+                fmt::bool(status.is_ok())
+            } else {
+                na()
+            },
+        ),
         (
             "direction",
             if fan.presence {
@@ -209,7 +225,9 @@ struct LedWrite {
 /// in FAN_INFO that the Python daemon never wrote, and hand two daemons the
 /// same key.
 fn fans_this_daemon_publishes(fans: Vec<FanInfo>) -> Vec<FanInfo> {
-    fans.into_iter().filter(|f| f.kind != FanKind::Pdb).collect()
+    fans.into_iter()
+        .filter(|f| f.kind != FanKind::Pdb)
+        .collect()
 }
 
 /// Every `FanInfo` column but the LED.  Python reads a fan's LED in a pass of
@@ -299,7 +317,14 @@ impl FanUpdater {
         db: &StateDb,
         stop: &dyn Fn() -> bool,
     ) -> Result<(), UpdateError> {
-        let drawers = platform.get_fan_drawers(FanDrawerInfoCols::ALL)?;
+        let drawers = platform.get_fan_drawers(
+            FanDrawerInfoCols::POSITION_IN_PARENT
+                .with(FanDrawerInfoCols::PRESENCE)
+                .with(FanDrawerInfoCols::STATUS)
+                .with(FanDrawerInfoCols::IS_REPLACEABLE)
+                .with(FanDrawerInfoCols::MODEL)
+                .with(FanDrawerInfoCols::SERIAL),
+        )?;
         let fans = fans_this_daemon_publishes(platform.get_fans(FAN_COLS, false)?);
         let mut counters = BadFanCounters::default();
         let mut led_writes: Vec<LedWrite> = Vec::new();
@@ -373,7 +398,8 @@ impl FanUpdater {
                     }
                     Some(_) => {
                         let position = fmt::position(fan.position_in_parent, seq);
-                        if let Err(db_err) = db.set_entity_info(&fan.name, &fan.parent_name, &position)
+                        if let Err(db_err) =
+                            db.set_entity_info(&fan.name, &fan.parent_name, &position)
                         {
                             log::warn!(
                                 "Failed to update {}fan status - {db_err}",
@@ -403,7 +429,14 @@ impl FanUpdater {
         // publishes is what the hardware accepted.  A drawer's is re-read only
         // when something was written, which in steady state (after the first
         // cycle) is never.
-        let mut fresh_drawers = None;
+        let mut fresh_drawers = Some(
+            platform
+                .get_fan_drawers(FanDrawerInfoCols::STATUS_LED)
+                .unwrap_or_else(|e| {
+                    log::warn!("Failed to read fan drawer LEDs: {e}");
+                    drawers.clone()
+                }),
+        );
         if !led_writes.is_empty() {
             for write in &led_writes {
                 // Two calls, not one: `thermalctld:FanUpdater._set_fan_led`
@@ -411,24 +444,35 @@ impl FanUpdater {
                 // colour, tolerating either being unimplemented. Folding them
                 // into one call would hide which of the two a platform refused.
                 let fan_result = platform.set_fan_led(&write.fan_key, write.color);
-                if let Some(drawer) = &write.drawer_key {
-                    let _ = platform.set_fan_drawer_led(drawer, write.color);
+                let drawer_result = match &write.drawer_key {
+                    Some(drawer) => platform.set_fan_drawer_led(drawer, write.color),
+                    None => Ok(None),
+                };
+                let completed = |result: &Result<Option<bool>, platform_api::PlatformError>| {
+                    matches!(
+                        result,
+                        Ok(_) | Err(platform_api::PlatformError::NotSupported(_))
+                    )
+                };
+                if let Some(status) = self.status.get_mut(&write.fan_name) {
+                    status.led_initialized = completed(&fan_result) && completed(&drawer_result);
                 }
-                if let Err(e) = fan_result {
-                    // The warning Python logs for a NotImplementedError
-                    // (`thermalctld:FanUpdater._set_fan_led`): a platform whose
-                    // fan LED is not software-controlled answers NotSupported.
-                    log::warn!(
-                        "Failed to set status LED for fan {}, set_status_led not implemented: {}",
-                        write.fan_name,
-                        e
-                    );
+                for result in [fan_result, drawer_result] {
+                    match result {
+                        Err(platform_api::PlatformError::NotSupported(e)) => log::warn!(
+                            "Failed to set status LED for fan {}, set_status_led not implemented: {}", write.fan_name, e),
+                        Err(e) => log::warn!("Failed to set status LED for fan {}: {e}", write.fan_name),
+                        Ok(_) => {},
+                    }
                 }
             }
             fresh_drawers = Some(
                 platform
-                    .get_fan_drawers(FanDrawerInfoCols::ALL)
-                    .unwrap_or_default(),
+                    .get_fan_drawers(FanDrawerInfoCols::STATUS_LED)
+                    .unwrap_or_else(|e| {
+                        log::warn!("Failed to read fan drawer LEDs: {e}");
+                        drawers.clone()
+                    }),
             );
         }
         let leds = fans_this_daemon_publishes(platform.get_fans(FanInfoCols::STATUS_LED, false)?);
@@ -447,7 +491,9 @@ impl FanUpdater {
                 if bad_fan_count == 1 { " is" } else { "s are" }
             );
         } else if self.previous_bad_fan_count > 0 && bad_fan_count == 0 {
-            pmon_common::notice!("Insufficient number of working fans warning cleared: all fans are back to normal");
+            pmon_common::notice!(
+                "Insufficient number of working fans warning cleared: all fans are back to normal"
+            );
         }
         self.previous_bad_fan_count = bad_fan_count;
 
@@ -493,7 +539,11 @@ impl FanUpdater {
         publish: bool,
     ) -> Result<(), String> {
         let name = fan.name.as_str();
-        db.set_entity_info(name, &fan.parent_name, &fmt::position(fan.position_in_parent, seq))?;
+        db.set_entity_info(
+            name,
+            &fan.parent_name,
+            &fmt::position(fan.position_in_parent, seq),
+        )?;
 
         let status = self.status.entry(name.to_string()).or_default();
         let mut set_led = !status.led_initialized;
@@ -559,7 +609,7 @@ impl FanUpdater {
                 color,
             });
             // Mark initialized so we only retry on state changes, not every cycle.
-            status.led_initialized = true;
+            // The write result, below, decides whether a retry is needed.
         }
 
         let drawer_name_str = if fan.drawer_name.is_empty() {
@@ -574,7 +624,9 @@ impl FanUpdater {
             return Ok(());
         }
         let fvs = fan_row(fan, status, drawer_name_str);
-        db.fan.set(name, &fvs).map_err(|e| format!("failed to update FAN_INFO for {name}: {e}"))
+        db.fan
+            .set(name, &fvs)
+            .map_err(|e| format!("failed to update FAN_INFO for {name}: {e}"))
     }
 
     fn update_led_color(
@@ -621,7 +673,10 @@ impl FanUpdater {
             }
             let fvs = [("led_status", fmt::opt_str(&drawer.status_led))];
             db.fan_drawer.set(&drawer.name, &fvs).map_err(|e| {
-                format!("Failed to get status LED state for fan drawer {} - {e}", drawer.name)
+                format!(
+                    "Failed to get status LED state for fan drawer {} - {e}",
+                    drawer.name
+                )
             })?;
         }
         Ok(())
@@ -652,7 +707,6 @@ mod tests {
     use super::*;
     use platform_api::Number;
     use platform_api::{ChassisInfoCols, DeviceKey, FanDrawerInfoCols, FanInfoCols, PlatformError};
-
 
     /// A PDB fan belongs to psud.  If this daemon published it too, two writers
     /// would own one FAN_INFO key and the row would flip between their two
@@ -703,6 +757,7 @@ mod tests {
     fn drawer(name: &str) -> FanDrawerInfo {
         FanDrawerInfo {
             name: name.to_string(),
+            name_text: Some(name.to_string()),
             key: DeviceKey::from("fan_drawers[0]"),
             position_in_parent: Some(1),
             presence: true,
@@ -717,7 +772,10 @@ mod tests {
 
     /// A fan of the first drawer, at the position its name's number says.
     fn fan(name: &str) -> FanInfo {
-        let n: usize = name.trim_start_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(1);
+        let n: usize = name
+            .trim_start_matches(|c: char| !c.is_ascii_digit())
+            .parse()
+            .unwrap_or(1);
         FanInfo {
             name: name.to_string(),
             key: DeviceKey::from(format!("fan_drawers[0]/fans[{}]", n - 1)),
@@ -815,7 +873,11 @@ mod tests {
         assert_eq!(val(&row, "serial"), "MT1234X00001");
         assert_eq!(val(&row, "status"), "True");
         assert_eq!(val(&row, "direction"), "intake");
-        assert_eq!(val(&row, "speed"), "50", "a percentage, with no unit or decimal");
+        assert_eq!(
+            val(&row, "speed"),
+            "50",
+            "a percentage, with no unit or decimal"
+        );
         assert_eq!(val(&row, "speed_target"), "60");
         assert_eq!(val(&row, "is_under_speed"), "False");
         assert_eq!(val(&row, "is_over_speed"), "False");
@@ -837,7 +899,11 @@ mod tests {
         f.direction = Some("exhaust".to_string());
         let row = fan_row(&f, &FanStatus::default(), "d".to_string());
         assert_eq!(val(&row, "is_replaceable"), "False");
-        assert_eq!(val(&row, "direction"), "exhaust", "lower case, unlike the booleans");
+        assert_eq!(
+            val(&row, "direction"),
+            "exhaust",
+            "lower case, unlike the booleans"
+        );
     }
 
     /// The drawer's baseline, for the same reason.
@@ -892,7 +958,11 @@ mod tests {
             "is_under_speed",
             "is_over_speed",
         ] {
-            assert_eq!(val(&row, field), "N/A", "{field} should be N/A on an absent fan");
+            assert_eq!(
+                val(&row, field),
+                "N/A",
+                "{field} should be N/A on an absent fan"
+            );
         }
         // The six that do not depend on the fan answering are still written.
         assert_eq!(val(&row, "presence"), "False");
@@ -916,8 +986,14 @@ mod tests {
         let mut status = FanStatus::default();
         let mut counters = BadFanCounters::default();
         assert!(status.set_fault_status(false, &mut counters));
-        assert!(!status.set_fault_status(false, &mut counters), "no second transition");
-        assert_eq!(counters.faulty, 2, "but it is counted every cycle it is faulty");
+        assert!(
+            !status.set_fault_status(false, &mut counters),
+            "no second transition"
+        );
+        assert_eq!(
+            counters.faulty, 2,
+            "but it is counted every cycle it is faulty"
+        );
     }
 
     #[test]
@@ -941,6 +1017,64 @@ mod tests {
 
     use crate::db::mock::MockDb;
 
+    #[test]
+    fn failed_fan_or_drawer_led_writes_are_retried_until_success() {
+        struct Flaky {
+            drawer_fails: bool,
+            fan_writes: usize,
+            drawer_writes: usize,
+        }
+        impl PlatformApi for Flaky {
+            fn get_fan_drawers(
+                &mut self,
+                _: FanDrawerInfoCols,
+            ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+                Ok(vec![drawer("drawer1")])
+            }
+            fn get_fans(&mut self, _: FanInfoCols, _: bool) -> Result<Vec<FanInfo>, PlatformError> {
+                Ok(vec![fan("fan1")])
+            }
+            fn set_fan_led(
+                &mut self,
+                _: &DeviceKey,
+                _: platform_api::LedColor,
+            ) -> Result<Option<bool>, PlatformError> {
+                self.fan_writes += 1;
+                if !self.drawer_fails && self.fan_writes == 1 {
+                    Err(PlatformError::Backend("fan I/O error".into()))
+                } else {
+                    Ok(Some(true))
+                }
+            }
+            fn set_fan_drawer_led(
+                &mut self,
+                _: &DeviceKey,
+                _: platform_api::LedColor,
+            ) -> Result<Option<bool>, PlatformError> {
+                self.drawer_writes += 1;
+                if self.drawer_fails && self.drawer_writes == 1 {
+                    Err(PlatformError::Backend("drawer I/O error".into()))
+                } else {
+                    Ok(Some(true))
+                }
+            }
+        }
+        for drawer_fails in [false, true] {
+            let mut platform = Flaky {
+                drawer_fails,
+                fan_writes: 0,
+                drawer_writes: 0,
+            };
+            let db = MockDb::new(false);
+            let mut updater = FanUpdater::new();
+            for _ in 0..3 {
+                updater.update(&mut platform, &db.db, &|| false).unwrap();
+            }
+            assert_eq!(platform.fan_writes, 2);
+            assert_eq!(platform.drawer_writes, 2);
+        }
+    }
+
     struct FakePlatform {
         drawers: Vec<FanDrawerInfo>,
         fans: Vec<FanInfo>,
@@ -955,7 +1089,10 @@ mod tests {
     }
 
     impl platform_api::PlatformApi for FakePlatform {
-        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<platform_api::ChassisInfo, PlatformError> {
+        fn get_chassis_info(
+            &mut self,
+            _cols: ChassisInfoCols,
+        ) -> Result<platform_api::ChassisInfo, PlatformError> {
             Ok(platform_api::ChassisInfo {
                 is_modular_chassis: false,
                 is_smartswitch: false,
@@ -971,19 +1108,34 @@ mod tests {
         ) -> Result<Vec<platform_api::ThermalInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+        fn get_fan_drawers(
+            &mut self,
+            _cols: FanDrawerInfoCols,
+        ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
             Ok(self.drawers.clone())
         }
-        fn get_fans(&mut self, _cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(
+            &mut self,
+            _cols: FanInfoCols,
+            _absorb: bool,
+        ) -> Result<Vec<FanInfo>, PlatformError> {
             if self.fans_fail {
                 return Err(PlatformError::Backend("fan read failed".into()));
             }
             Ok(self.fans.clone())
         }
-        fn set_fan_led(&mut self, fan: &DeviceKey, color: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
-            self.led_calls.borrow_mut().push((fan.to_string(), color.to_string()));
+        fn set_fan_led(
+            &mut self,
+            fan: &DeviceKey,
+            color: platform_api::LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
+            self.led_calls
+                .borrow_mut()
+                .push((fan.to_string(), color.to_string()));
             if self.led_fails {
-                return Err(PlatformError::NotSupported("no LED on this drawer".into()));
+                return Err(platform_api::PlatformError::NotSupported(
+                    "no LED on this drawer".into(),
+                ));
             }
             Ok(Some(true))
         }
@@ -992,7 +1144,9 @@ mod tests {
             drawer: &DeviceKey,
             color: platform_api::LedColor,
         ) -> Result<Option<bool>, PlatformError> {
-            self.drawer_led_calls.borrow_mut().push((drawer.to_string(), color.to_string()));
+            self.drawer_led_calls
+                .borrow_mut()
+                .push((drawer.to_string(), color.to_string()));
             Ok(Some(true))
         }
     }
@@ -1022,7 +1176,10 @@ mod tests {
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
         assert_eq!(m.fan.field("fan1", "presence").as_deref(), Some("True"));
-        assert_eq!(m.fan_drawer.field("drawer1", "status").as_deref(), Some("N/A"));
+        assert_eq!(
+            m.fan_drawer.field("drawer1", "status").as_deref(),
+            Some("N/A")
+        );
         assert_eq!(
             m.physical_entity.field("fan1", "parent_name").as_deref(),
             Some("drawer1")
@@ -1055,7 +1212,10 @@ mod tests {
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
         assert_eq!(m.fan.field("fan1", "led_status").as_deref(), Some("green"));
-        assert_eq!(m.fan_drawer.field("drawer1", "led_status").as_deref(), Some("green"));
+        assert_eq!(
+            m.fan_drawer.field("drawer1", "led_status").as_deref(),
+            Some("green")
+        );
     }
 
     /// A colour outside the four `LedColor` names is published as the
@@ -1075,7 +1235,10 @@ mod tests {
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
         assert_eq!(m.fan.field("fan1", "led_status").as_deref(), Some("orange"));
-        assert_eq!(m.fan_drawer.field("drawer1", "led_status").as_deref(), Some("green_blink"));
+        assert_eq!(
+            m.fan_drawer.field("drawer1", "led_status").as_deref(),
+            Some("green_blink")
+        );
     }
 
     /// A fan direction is published as the platform spelled it, as Python's
@@ -1117,10 +1280,16 @@ mod tests {
         u.update(&mut p, &m.db, &never_stop).unwrap();
         let calls = p.led_calls.borrow().clone();
         let fan = "fan_drawers[0]/fans[0]";
-        assert!(calls.iter().any(|(f, c)| f == fan && c == "red"), "{calls:?}");
+        assert!(
+            calls.iter().any(|(f, c)| f == fan && c == "red"),
+            "{calls:?}"
+        );
         // And its drawer's, at the key the fan's row names as its parent.
         let calls = p.drawer_led_calls.borrow().clone();
-        assert_eq!(calls, vec![("fan_drawers[0]".to_string(), "red".to_string())]);
+        assert_eq!(
+            calls,
+            vec![("fan_drawers[0]".to_string(), "red".to_string())]
+        );
     }
 
     /// Unlike TemperatureUpdater, the fan path does not sweep stale keys each
@@ -1155,7 +1324,11 @@ mod tests {
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
         assert!(m.fan_drawer.is_empty(), "no FAN_DRAWER_INFO row");
-        assert_eq!(m.physical_entity.row("N/A"), None, "no PHYSICAL_ENTITY_INFO row");
+        assert_eq!(
+            m.physical_entity.row("N/A"),
+            None,
+            "no PHYSICAL_ENTITY_INFO row"
+        );
         // The fan itself is still published.
         assert_eq!(m.fan.field("fan1", "presence").as_deref(), Some("True"));
     }
@@ -1273,13 +1446,16 @@ mod tests {
         match u.update(&mut p, &m.db, &never_stop) {
             Err(UpdateError::Db(e)) => assert!(
                 e.contains("status LED"),
-                "the pass got past the fan row and failed later: {e}"),
+                "the pass got past the fan row and failed later: {e}"
+            ),
             other => panic!("the LED path still propagates: {other:?}"),
         }
         assert!(m.fan.is_empty());
-        assert!(!m.fan_drawer.is_empty(), "the drawer written before it stays");
+        assert!(
+            !m.fan_drawer.is_empty(),
+            "the drawer written before it stays"
+        );
     }
-
 
     /// And a platform that will not answer is *not* that: it stays a
     /// `Platform` error, which the caller logs and moves past, because Python
@@ -1312,14 +1488,19 @@ mod tests {
             other => panic!("a lost STATE_DB has to surface as Db: {other:?}"),
         }
         assert!(m.fan_drawer.row("drawer1").is_some());
-        assert!(m.fan.field("fan1", "led_status").is_some(), "the fan's LED row came first");
+        assert!(
+            m.fan.field("fan1", "led_status").is_some(),
+            "the fan's LED row came first"
+        );
     }
 
     /// What the loop logs for each kind: the message, and nothing else.
     #[test]
     fn an_update_error_reads_as_its_cause() {
-        assert_eq!(UpdateError::Db("failed to update FAN_INFO".into()).to_string(),
-                   "failed to update FAN_INFO");
+        assert_eq!(
+            UpdateError::Db("failed to update FAN_INFO".into()).to_string(),
+            "failed to update FAN_INFO"
+        );
         let e: UpdateError = PlatformError::Backend("no sysfs".into()).into();
         assert!(e.to_string().contains("no sysfs"), "{e}");
     }
@@ -1374,7 +1555,10 @@ mod tests {
                 _ => p.fans[0].presence = false,
             }
             u.update(&mut p, &m.db, &never_stop).unwrap();
-            assert!(p.led_calls.borrow().len() > baseline, "{change} should be a transition");
+            assert!(
+                p.led_calls.borrow().len() > baseline,
+                "{change} should be a transition"
+            );
 
             // And recovering is a transition too, not a silent return.
             let after = p.led_calls.borrow().len();
@@ -1405,7 +1589,10 @@ mod tests {
         let mut p = platform(vec![drawer("drawer1")], vec![f]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
 
-        assert_eq!(m.fan.field("fan1", "is_under_speed").as_deref(), Some("N/A"));
+        assert_eq!(
+            m.fan.field("fan1", "is_under_speed").as_deref(),
+            Some("N/A")
+        );
         assert_eq!(m.fan.field("fan1", "is_over_speed").as_deref(), Some("N/A"));
     }
 
@@ -1423,7 +1610,10 @@ mod tests {
 
         let mut p = platform(Vec::new(), vec![f]);
         u.update(&mut p, &m.db, &never_stop).unwrap();
-        assert_eq!(m.fan.field("psu1_fan1", "drawer_name").as_deref(), Some("N/A"));
+        assert_eq!(
+            m.fan.field("psu1_fan1", "drawer_name").as_deref(),
+            Some("N/A")
+        );
     }
 
     /// A drawer row that cannot be written stops the pass, and the fans behind
@@ -1460,7 +1650,8 @@ mod tests {
         let mut p = platform(vec![drawer("drawer1")], vec![bad]);
         p.led_fails = true;
 
-        u.update(&mut p, &m.db, &never_stop).expect("still not an error");
+        u.update(&mut p, &m.db, &never_stop)
+            .expect("still not an error");
         assert_eq!(m.fan.field("fan1", "status").as_deref(), Some("False"));
     }
 
@@ -1512,11 +1703,20 @@ mod tests {
                 asked.set(asked.get() + 1);
                 asked.get() >= stop_on
             };
-            u.update(&mut p, &m.db, &stop).expect("a stop is not an error");
+            u.update(&mut p, &m.db, &stop)
+                .expect("a stop is not an error");
             assert_eq!(asked.get(), stop_on, "nothing asked again after the stop");
             assert!(m.fan.row("fan1").is_some(), "the rows were written first");
-            assert_eq!(m.fan.wrote("fan1", "led_status"), fan_led, "stop_on={stop_on}");
-            assert_eq!(m.fan_drawer.wrote("drawer1", "led_status"), drawer_led, "stop_on={stop_on}");
+            assert_eq!(
+                m.fan.wrote("fan1", "led_status"),
+                fan_led,
+                "stop_on={stop_on}"
+            );
+            assert_eq!(
+                m.fan_drawer.wrote("drawer1", "led_status"),
+                drawer_led,
+                "stop_on={stop_on}"
+            );
         }
     }
 

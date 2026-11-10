@@ -123,31 +123,15 @@ fn psud_publishes_what_the_python_daemon_publishes() {
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
 const KNOWN: &[parity::Known] = &[
-    // Unnamed PSUs and PDBs.  psud names one for its rows from an `index`
-    // attribute the base class does not have, falling back to 'unknown' for
-    // every one of them (`psud:DaemonPsud._update_single_power_entity_data`,
-    // `_update_single_psu_entity_info`), and its fans '{} FAN {}'
-    // (`psud:DaemonPsud._update_psu_fan_data`) -- not what psud's own
-    // `get_psu_key` / `get_pdb_key`, nor thermalctld, call them.  The facade
-    // gives the one name everything else uses: 'PSU 1', 'PDB 1', '... fan 1'.
-    parity::Known {
-        scenario: "unnamed_devices",
-        contains: "PSU 1",
-        why: "psud's own fallback names for an unnamed PSU disagree with the facade's",
-    },
-    parity::Known {
-        scenario: "unnamed_devices",
-        contains: "PSU 2",
-        why: "psud's own fallback names for an unnamed PSU disagree with the facade's",
-    },
-    parity::Known {
-        scenario: "unnamed_devices",
-        contains: "PDB 1",
-        why: "psud's own fallback names for an unnamed PDB disagree with the facade's",
-    },
-    parity::Known {
-        scenario: "unnamed_devices",
-        contains: "unknown",
-        why: "psud's own fallback names for an unnamed PSU disagree with the facade's",
-    },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB FAN_INFO|PDB 1 fan 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB FAN_INFO|PSU 1 fan 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB FAN_INFO|unknown FAN 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PHYSICAL_ENTITY_INFO|PDB 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PHYSICAL_ENTITY_INFO|PSU 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PHYSICAL_ENTITY_INFO|PSU 2: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PHYSICAL_ENTITY_INFO|unknown: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PSU_INFO|PDB 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PSU_INFO|PSU 1: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PSU_INFO|PSU 2: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
+    parity::Known { scenario: "unnamed_devices", contains: "STATE_DB PSU_INFO|unknown: only ", why: "Python fallback names disagree with the shared facade; limited to this exact entity row" },
 ];

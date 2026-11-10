@@ -15,6 +15,7 @@ const TOTAL_SUPPLIED_FIELD: &str = "Total Supplied Power";
 const TOTAL_CONSUMED_FIELD: &str = "Total Consumed Power";
 
 pub struct PowerBudget {
+    incomplete: bool,
     /// The first pass always writes the LED, because nothing has told the
     /// hardware what colour it should be yet.
     first_run: bool,
@@ -26,6 +27,7 @@ pub struct PowerBudget {
 impl Default for PowerBudget {
     fn default() -> Self {
         Self {
+            incomplete: false,
             first_run: true,
             master_status_good: true,
             total_supplied_power: 0.0,
@@ -54,7 +56,10 @@ fn supplier(row: &PsuInfo) -> Entry {
         return Entry::Set(field, Number::Float(0.0));
     }
     // `try_get(get_maximum_supplied_power, 0.0)`: the default is a float.
-    Entry::Set(field, row.maximum_supplied_power.unwrap_or(Number::Float(0.0)))
+    Entry::Set(
+        field,
+        row.maximum_supplied_power.unwrap_or(Number::Float(0.0)),
+    )
 }
 
 fn consumer(name: &str, presence: bool, power: Option<Number>) -> Entry {
@@ -66,6 +71,13 @@ fn consumer(name: &str, presence: bool, power: Option<Number>) -> Entry {
 }
 
 impl PowerBudget {
+    pub fn incomplete_read(&mut self) {
+        if !self.incomplete {
+            log::warn!("Skipping power budget: incomplete power readings");
+        }
+        self.incomplete = true;
+    }
+
     /// One accounting pass: write every device's figure and the two totals.
     ///
     /// `psus` carries PSUs and PDBs in that order, which is the order Python
@@ -78,9 +90,32 @@ impl PowerBudget {
         modules: &[ModuleInfo],
         table: &dyn TableLike,
     ) {
+        let valid = |power: Option<Number>| {
+            power.is_some_and(|value| {
+                let value = value.as_f64();
+                value.is_finite() && value >= 0.0
+            })
+        };
+        if psus
+            .iter()
+            .any(|row| row.presence && row.power_good && !valid(row.maximum_supplied_power))
+            || drawers
+                .iter()
+                .any(|row| row.presence && !valid(row.maximum_consumed_power))
+            || modules
+                .iter()
+                .any(|row| row.presence && !valid(row.maximum_consumed_power))
+        {
+            // A missing present consumer is unknown consumption, not zero.
+            // Retain the last complete snapshot and make no new LED verdict.
+            self.incomplete_read();
+            return;
+        }
+        self.incomplete = false;
         let mut entries: Vec<Entry> = Vec::new();
         let mut total_supplied = 0.0;
-        let mut total_consumed = 0.0;
+        let mut drawer_consumed = 0.0;
+        let mut module_consumed = 0.0;
 
         for row in psus {
             let e = supplier(row);
@@ -94,21 +129,30 @@ impl PowerBudget {
             }
             entries.push(e);
         }
-        for d in drawers {
-            let e = consumer(&d.name, d.presence, d.maximum_consumed_power);
+        for (i, d) in drawers.iter().enumerate() {
+            let e = consumer(
+                d.name_text.as_deref().unwrap_or(&format!("FAN-DRAWER {i}")),
+                d.presence,
+                d.maximum_consumed_power,
+            );
             if let Entry::Set(_, w) = &e {
-                total_consumed += w.as_f64();
+                drawer_consumed += w.as_f64();
             }
             entries.push(e);
         }
-        for m in modules {
-            let e = consumer(&m.name, m.presence, m.maximum_consumed_power);
+        for (i, m) in modules.iter().enumerate() {
+            let e = consumer(
+                m.name_text.as_deref().unwrap_or(&format!("MODULE {i}")),
+                m.presence,
+                m.maximum_consumed_power,
+            );
             if let Entry::Set(_, w) = &e {
-                total_consumed += w.as_f64();
+                module_consumed += w.as_f64();
             }
             entries.push(e);
         }
 
+        let total_consumed = drawer_consumed + module_consumed;
         self.total_supplied_power = total_supplied;
         self.total_consumed_power = total_consumed;
 
@@ -126,8 +170,7 @@ impl PowerBudget {
         row.push((TOTAL_SUPPLIED_FIELD.to_string(), fmt::float(total_supplied)));
         row.push((TOTAL_CONSUMED_FIELD.to_string(), fmt::float(total_consumed)));
 
-        let fvs: Vec<(&str, String)> =
-            row.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let fvs: Vec<(&str, String)> = row.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         if let Err(e) = table.set(CHASSIS_POWER_KEY, &fvs) {
             log::error!("Failed to update chassis power budget to DB: {e}");
         }
@@ -138,6 +181,9 @@ impl PowerBudget {
     /// Returns the colour to set the LED to, or `None` to leave it alone.  The
     /// caller sets it; nothing here touches the hardware.
     pub fn master_status(&mut self) -> Option<LedColor> {
+        if self.incomplete {
+            return None;
+        }
         let mut set_led = self.first_run;
         let mut master_status_good = false;
 
@@ -156,7 +202,11 @@ impl PowerBudget {
             self.master_status_good = master_status_good;
         }
 
-        let verdict = if master_status_good { LedColor::Green } else { LedColor::Red };
+        let verdict = if master_status_good {
+            LedColor::Green
+        } else {
+            LedColor::Red
+        };
         let colour = set_led.then_some(verdict);
 
         if colour.is_some() {
@@ -215,10 +265,92 @@ mod tests {
     fn drawer(name: &str, presence: bool, consumed: Option<f64>) -> FanDrawerInfo {
         FanDrawerInfo {
             name: name.to_string(),
+            name_text: Some(name.to_string()),
             presence,
             maximum_consumed_power: consumed.map(Number::Float),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_partial_consumer_failure_cannot_clear_an_over_budget_verdict() {
+        let table = MockTable::new();
+        let mut budget = PowerBudget::default();
+        let suppliers = [psu("PSU 1", true, true, Some(100.0))];
+        budget.run(
+            &suppliers,
+            &[
+                drawer("one", true, Some(60.0)),
+                drawer("two", true, Some(60.0)),
+            ],
+            &[],
+            &table,
+        );
+        assert_eq!(budget.master_status(), Some(LedColor::Red));
+        let writes = table.writes().len();
+        budget.run(
+            &suppliers,
+            &[drawer("one", true, Some(60.0)), drawer("two", true, None)],
+            &[],
+            &table,
+        );
+        assert_eq!(
+            budget.master_status(),
+            None,
+            "unknown consumption cannot clear the alarm"
+        );
+        assert_eq!(
+            table.writes().len(),
+            writes,
+            "retain the complete budget snapshot"
+        );
+        assert_eq!(
+            table
+                .field(CHASSIS_POWER_KEY, TOTAL_CONSUMED_FIELD)
+                .as_deref(),
+            Some("120.0")
+        );
+        budget.run(
+            &suppliers,
+            &[
+                drawer("one", true, Some(20.0)),
+                drawer("two", true, Some(20.0)),
+            ],
+            &[],
+            &table,
+        );
+        assert_eq!(budget.master_status(), Some(LedColor::Green));
+    }
+
+    #[test]
+    fn invalid_power_and_missing_present_modules_are_not_zero_consumption() {
+        for bad in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1.0)] {
+            let table = MockTable::new();
+            let mut budget = PowerBudget::default();
+            budget.run(
+                &[psu("PSU 1", true, true, Some(1000.0))],
+                &[drawer("good", true, Some(10.0)), drawer("bad", true, bad)],
+                &[],
+                &table,
+            );
+            assert!(table.writes().is_empty());
+            assert_eq!(budget.master_status(), None);
+        }
+        let table = MockTable::new();
+        let mut budget = PowerBudget::default();
+        budget.run(
+            &[psu("PSU 1", true, true, Some(1000.0))],
+            &[drawer("good", true, Some(10.0))],
+            &[ModuleInfo {
+                name: "LINE-CARD0".into(),
+                presence: true,
+                maximum_consumed_power: None,
+                ..Default::default()
+            }],
+            &table,
+        );
+        assert!(table.writes().is_empty());
+        assert_eq!(budget.master_status(), None);
     }
 
     #[test]
@@ -230,10 +362,26 @@ mod tests {
             &[],
             &t,
         );
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 1").as_deref(), Some("1000.0"));
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Consumed Power drawer1").as_deref(), Some("50.0"));
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Total Supplied Power").as_deref(), Some("1000.0"));
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Total Consumed Power").as_deref(), Some("50.0"));
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 1")
+                .as_deref(),
+            Some("1000.0")
+        );
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Consumed Power drawer1")
+                .as_deref(),
+            Some("50.0")
+        );
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Total Supplied Power")
+                .as_deref(),
+            Some("1000.0")
+        );
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Total Consumed Power")
+                .as_deref(),
+            Some("50.0")
+        );
     }
 
     /// A PSU that is present but has lost power supplies nothing, and says so
@@ -243,8 +391,16 @@ mod tests {
     fn an_unpowered_supplier_reports_zero_rather_than_disappearing() {
         let t = MockTable::new();
         PowerBudget::default().run(&[psu("PSU 1", true, false, Some(1000.0))], &[], &[], &t);
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 1").as_deref(), Some("0.0"));
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Total Supplied Power").as_deref(), Some("0.0"));
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 1")
+                .as_deref(),
+            Some("0.0")
+        );
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Total Supplied Power")
+                .as_deref(),
+            Some("0.0")
+        );
     }
 
     /// A removed one does disappear -- and only its own field does.  Writing
@@ -255,19 +411,29 @@ mod tests {
         let t = MockTable::new();
         let mut b = PowerBudget::default();
         b.run(
-            &[psu("PSU 1", true, true, Some(1000.0)), psu("PSU 2", true, true, Some(1000.0))],
+            &[
+                psu("PSU 1", true, true, Some(1000.0)),
+                psu("PSU 2", true, true, Some(1000.0)),
+            ],
             &[],
             &[],
             &t,
         );
         b.run(
-            &[psu("PSU 1", false, false, None), psu("PSU 2", true, true, Some(1000.0))],
+            &[
+                psu("PSU 1", false, false, None),
+                psu("PSU 2", true, true, Some(1000.0)),
+            ],
             &[],
             &[],
             &t,
         );
         assert_eq!(t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 1"), None);
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 2").as_deref(), Some("1000.0"));
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Supplied Power PSU 2")
+                .as_deref(),
+            Some("1000.0")
+        );
     }
 
     #[test]
@@ -290,17 +456,35 @@ mod tests {
     fn the_led_is_written_on_the_first_pass_and_then_only_on_a_change() {
         let t = MockTable::new();
         let mut b = PowerBudget::default();
-        let healthy = || (vec![psu("PSU 1", true, true, Some(1000.0))], vec![drawer("d1", true, Some(50.0))]);
+        let healthy = || {
+            (
+                vec![psu("PSU 1", true, true, Some(1000.0))],
+                vec![drawer("d1", true, Some(50.0))],
+            )
+        };
 
         let (p, d) = healthy();
         b.run(&p, &d, &[], &t);
-        assert_eq!(b.master_status(), Some(LedColor::Green), "the first pass always writes");
+        assert_eq!(
+            b.master_status(),
+            Some(LedColor::Green),
+            "the first pass always writes"
+        );
         let (p, d) = healthy();
         b.run(&p, &d, &[], &t);
         assert_eq!(b.master_status(), None, "nothing changed");
 
-        b.run(&[psu("PSU 1", true, true, Some(10.0))], &[drawer("d1", true, Some(50.0))], &[], &t);
-        assert_eq!(b.master_status(), Some(LedColor::Red), "the budget went negative");
+        b.run(
+            &[psu("PSU 1", true, true, Some(10.0))],
+            &[drawer("d1", true, Some(50.0))],
+            &[],
+            &t,
+        );
+        assert_eq!(
+            b.master_status(),
+            Some(LedColor::Red),
+            "the budget went negative"
+        );
     }
 
     /// Line cards draw power too, and a chassis whose budget left them out
@@ -310,6 +494,7 @@ mod tests {
         let t = MockTable::new();
         let module = |name: &str, presence: bool, w: f64| platform_api::ModuleInfo {
             name: name.to_string(),
+            name_text: Some(name.to_string()),
             presence,
             maximum_consumed_power: Some(Number::Float(w)),
             ..Default::default()
@@ -318,13 +503,27 @@ mod tests {
         b.run(
             &[psu("PSU 1", true, true, Some(1000.0))],
             &[drawer("d1", true, Some(50.0))],
-            &[module("LINE-CARD0", true, 400.0), module("LINE-CARD1", false, 400.0)],
+            &[
+                module("LINE-CARD0", true, 400.0),
+                module("LINE-CARD1", false, 400.0),
+            ],
             &t,
         );
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Consumed Power LINE-CARD0").as_deref(), Some("400.0"));
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Consumed Power LINE-CARD1"), None,
-            "a card that is not there draws nothing and is not listed");
-        assert_eq!(t.field(CHASSIS_POWER_KEY, "Total Consumed Power").as_deref(), Some("450.0"));
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Consumed Power LINE-CARD0")
+                .as_deref(),
+            Some("400.0")
+        );
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Consumed Power LINE-CARD1"),
+            None,
+            "a card that is not there draws nothing and is not listed"
+        );
+        assert_eq!(
+            t.field(CHASSIS_POWER_KEY, "Total Consumed Power")
+                .as_deref(),
+            Some("450.0")
+        );
     }
 
     /// A refusing table is reported and not fatal: the budget is advisory, and
@@ -341,7 +540,11 @@ mod tests {
             &t,
         );
         assert!(t.is_empty());
-        assert_eq!(b.master_status(), Some(LedColor::Red), "the LED is still decided");
+        assert_eq!(
+            b.master_status(),
+            Some(LedColor::Red),
+            "the LED is still decided"
+        );
     }
 
     /// Coming back from a negative budget is the other edge, and it is a
@@ -350,9 +553,19 @@ mod tests {
     fn the_master_led_goes_green_again_when_the_budget_recovers() {
         let t = MockTable::new();
         let mut b = PowerBudget::default();
-        b.run(&[psu("PSU 1", true, true, Some(100.0))], &[drawer("d1", true, Some(500.0))], &[], &t);
+        b.run(
+            &[psu("PSU 1", true, true, Some(100.0))],
+            &[drawer("d1", true, Some(500.0))],
+            &[],
+            &t,
+        );
         assert_eq!(b.master_status(), Some(LedColor::Red));
-        b.run(&[psu("PSU 1", true, true, Some(1000.0))], &[drawer("d1", true, Some(50.0))], &[], &t);
+        b.run(
+            &[psu("PSU 1", true, true, Some(1000.0))],
+            &[drawer("d1", true, Some(50.0))],
+            &[],
+            &t,
+        );
         assert_eq!(b.master_status(), Some(LedColor::Green));
     }
 
@@ -367,7 +580,10 @@ mod tests {
         let mut b = PowerBudget::default();
         b.run(&[psu("PSU 1", true, true, Some(1000.0))], &[], &[], &t);
         assert_eq!(b.master_status(), Some(LedColor::Red));
-        assert!(b.master_status_good, "and the flag it logs from is untouched");
+        assert!(
+            b.master_status_good,
+            "and the flag it logs from is untouched"
+        );
         assert_eq!(b.master_status(), None, "not the first pass any more");
     }
 }

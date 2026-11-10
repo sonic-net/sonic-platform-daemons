@@ -132,7 +132,30 @@ def out_of_range():
     return build, [('pass',), ('call', recover), ('pass',)]
 
 
-SCENARIOS = [healthy, unnamed_devices, psu_raises, presence_changes, psu_fan_raises,
+def modular_budget():
+    def build():
+        c = chassis(psus=[psu('PSU 1', 1), psu('PSU 2', 2)])
+        c.is_modular_chassis = lambda: True
+        for p in c._psu_list:
+            p.set_maximum_supplied_power(1200.0)
+        c._fan_drawer_list.append(MP.MockFanDrawer('drawer1', 1))
+        c._module_list.append(MP.MockModule('module1', 1))
+        return c
+    return build, [('pass',), ('pass',)]
+
+
+def unsupported_modular_power_getter():
+    build, steps = modular_budget()
+    def unsupported():
+        raise NotImplementedError()
+    def make():
+        c = build()
+        c._fan_drawer_list[0].get_maximum_consumed_power = unsupported
+        return c
+    return make, steps
+
+
+SCENARIOS = [modular_budget, unsupported_modular_power_getter, healthy, unnamed_devices, psu_raises, presence_changes, psu_fan_raises,
              psu_fan_absent, pdb_without_presence, out_of_range]
 
 

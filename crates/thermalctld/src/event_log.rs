@@ -18,6 +18,9 @@ pub const CRITICAL_EVENT_LOG_FILE: &str = "/host/bmc/event.log";
 pub trait EventLogger {
     fn error(&mut self, msg: &str);
     fn notice(&mut self, msg: &str);
+    fn warning(&mut self, msg: &str) {
+        self.error(msg);
+    }
 }
 
 /// Tees to syslog and, on the BMC, to the event log file.
@@ -63,6 +66,10 @@ impl BmcEventLogger {
 }
 
 impl EventLogger for BmcEventLogger {
+    fn warning(&mut self, msg: &str) {
+        log::warn!("{msg}");
+        self.tee("WARNING", msg);
+    }
     fn error(&mut self, msg: &str) {
         log::error!("{msg}");
         self.tee("ERROR", msg);

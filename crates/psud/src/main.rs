@@ -18,10 +18,11 @@ mod updater;
 
 use std::time::Duration;
 
-use platform_api::{
-    ChassisInfoCols, FanDrawerInfoCols, FanInfoCols, ModuleInfoCols, PlatformApi, PlatformError, PowerEntityKind,
-};
 use clap::Parser;
+use platform_api::{
+    ChassisInfoCols, FanDrawerInfoCols, FanInfoCols, ModuleInfoCols, PlatformApi, PlatformError,
+    PowerEntityKind,
+};
 use platform_provider::PlatformImpl;
 use pmon_common::cycles::{Cycles, Tick};
 use pmon_common::db::{self, TableLike};
@@ -77,7 +78,10 @@ fn counts(psus: &[platform_api::PsuInfo]) -> (usize, usize) {
 /// wrong number here hides a PSU that is otherwise being published correctly.
 fn publish_counts(psus: &[platform_api::PsuInfo], table: &dyn TableLike) -> bool {
     let (psu_num, pdb_num) = counts(psus);
-    let fvs = [("psu_num", psu_num.to_string()), ("pdb_num", pdb_num.to_string())];
+    let fvs = [
+        ("psu_num", psu_num.to_string()),
+        ("pdb_num", pdb_num.to_string()),
+    ];
     match table.set(CHASSIS_INFO_KEY, &fvs) {
         Ok(()) => true,
         Err(e) => {
@@ -181,10 +185,12 @@ const CHASSIS_COLS: ChassisInfoCols = ChassisInfoCols::IS_MODULAR_CHASSIS;
 
 /// What the power budget needs off a fan drawer and a module: how much each
 /// draws, and whether it is there to draw it.  `name` is always read.
-const DRAWER_COLS: FanDrawerInfoCols =
-    FanDrawerInfoCols::PRESENCE.with(FanDrawerInfoCols::MAXIMUM_CONSUMED_POWER);
-const MODULE_COLS: ModuleInfoCols =
-    ModuleInfoCols::PRESENCE.with(ModuleInfoCols::MAXIMUM_CONSUMED_POWER);
+const DRAWER_COLS: FanDrawerInfoCols = FanDrawerInfoCols::NAME_TEXT
+    .with(FanDrawerInfoCols::PRESENCE)
+    .with(FanDrawerInfoCols::MAXIMUM_CONSUMED_POWER);
+const MODULE_COLS: ModuleInfoCols = ModuleInfoCols::NAME_TEXT
+    .with(ModuleInfoCols::PRESENCE)
+    .with(ModuleInfoCols::MAXIMUM_CONSUMED_POWER);
 
 /// The `FanInfo` columns psud publishes.
 ///
@@ -222,6 +228,33 @@ const FAN_LED_COLS: FanInfoCols = FanInfoCols::STATUS_LED;
 /// nothing -- Python asks only `get_status_led` of each PSU and PSU fan per
 /// cycle (`psud:DaemonPsud._update_led_color`), not the whole row.  The fan
 /// re-read is narrowed to that one column for the same reason.
+fn read_psu_fans(
+    platform: &mut dyn PlatformApi,
+    psus: &[platform_api::PsuInfo],
+    updater: Option<&Updater>,
+) -> Vec<platform_api::FanInfo> {
+    let mut fans = Vec::new();
+    for psu in psus {
+        let details = updater.is_some_and(|u| u.psu_needs_fan_details(psu));
+        match platform.get_psu_fans(&psu.key, details) {
+            Ok(rows) => fans.extend(rows),
+            Err(PlatformError::NotSupported(_)) => {
+                let cols = if updater.is_some_and(|u| u.needs_fan_details(psus)) {
+                    FAN_COLS
+                } else {
+                    FAN_LED_COLS
+                };
+                return platform.get_fans(cols, true).unwrap_or_else(|e| {
+                    log::warn!("Failed to read PSU fan data: {e}");
+                    Vec::new()
+                });
+            }
+            Err(e) => log::warn!("Failed to read fan data for {}: {e}", psu.name),
+        }
+    }
+    fans
+}
+
 fn one_pass(
     platform: &mut dyn PlatformApi,
     updater: &mut Updater,
@@ -233,31 +266,17 @@ fn one_pass(
 ) {
     // The fans absorbing every getter's exception, column by column, as
     // `psud:try_get` reads them; the PSUs are always read that way.
-    let (psus, fans) = match (platform.get_psus(), platform.get_fans(FAN_COLS, true)) {
-        (Ok(p), Ok(f)) => {
+    let psus = match platform.get_psus() {
+        Ok(p) => {
             pmon_common::recovered!(read, "PSU read recovered");
-            (p, f)
+            p
         }
-        (p, f) => {
-            let e = p.err().map(|e| e.to_string())
-                .or_else(|| f.err().map(|e| e.to_string()))
-                .unwrap_or_default();
-            // WARNING and this wording, both from the catch-all `except` in
-            // `psud:DaemonPsud.update_psu_data`.
-            //
-            // The granularity differs and cannot be made to match: Python
-            // reads one PSU at a time and warns per PSU, while the facade
-            // returns every PSU in one call, so one unreadable PSU fails the
-            // batch.  What can match is how loud it is -- a port that logged
-            // ERROR here would have LogAnalyzer flagging a transient i2c read
-            // that the Python daemon only warns about.  `fail_once` keeps it
-            // to one line per outage where Python repeats it every cycle.
+        Err(e) => {
             pmon_common::fail_once_warn!(read, "Failed to update PSU data - {e}");
-            // Not treated as "every PSU vanished": that would blank PSU_INFO
-            // on a transient i2c failure and red every tray LED.
             return;
         }
     };
+    let fans = read_psu_fans(platform, &psus, Some(updater));
     counts.refresh(&psus, chassis_tbl);
 
     let leds = updater.refresh(&psus, &fans, tables);
@@ -277,16 +296,30 @@ fn one_pass(
     }
 
     if wrote_led {
-        let fresh_psus = platform.get_psus().unwrap_or_default();
-        let fresh_fans = platform.get_fans(FAN_LED_COLS, true).unwrap_or_default();
+        let fresh_psus = match platform.get_psus() {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!("Failed to read PSU LED state after update: {error}");
+                psus.clone()
+            }
+        };
+        let fresh_fans = read_psu_fans(platform, &fresh_psus, None);
         updater.update_led_color(&fresh_psus, &fresh_fans, tables);
     } else {
         updater.update_led_color(&psus, &fans, tables);
     }
 
     if let Some(budget) = budget.current(platform) {
-        let drawers = platform.get_fan_drawers(DRAWER_COLS).unwrap_or_default();
-        let modules = platform.get_modules(MODULE_COLS).unwrap_or_default();
+        let (drawers, modules) = match (
+            platform.get_fan_drawers(DRAWER_COLS),
+            platform.get_modules(MODULE_COLS),
+        ) {
+            (Ok(drawers), Ok(modules)) => (drawers, modules),
+            _ => {
+                budget.incomplete_read();
+                return;
+            }
+        };
         budget.run(&psus, &drawers, &modules, chassis_tbl);
 
         if let Some(color) = budget.master_status() {
@@ -331,7 +364,15 @@ async fn run(
             Tick::Exit(code) => break code,
             Tick::Cycle => {}
         }
-        one_pass(platform, &mut updater, &mut counts, &mut budget, tables, chassis_tbl, &mut read);
+        one_pass(
+            platform,
+            &mut updater,
+            &mut counts,
+            &mut budget,
+            tables,
+            chassis_tbl,
+            &mut read,
+        );
     };
 
     // These rows are this daemon's, and a stale one is worse than none: nothing
@@ -345,6 +386,7 @@ async fn run(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let mut cycles = Cycles::signals().expect("failed to install the signal handlers");
     let args = Args::parse();
     logging::init(SYSLOG_IDENTIFIER);
     log::info!("Starting up...");
@@ -364,12 +406,7 @@ async fn main() {
         }
     };
 
-    let code = start(
-        &mut platform,
-        &db::open,
-        &mut Cycles::signals().expect("failed to install the signal handlers"),
-    )
-    .await;
+    let code = start(&mut platform, &db::open, &mut cycles).await;
 
     log::info!("Shutting down...");
     // Whatever the implementation set up, released before the process goes
@@ -420,12 +457,15 @@ mod tests {
     fn the_four_tables_are_opened_on_state_db() {
         let o = pmon_common::db::MockOpener::new();
         open_all(&|d, t| o.open(d, t)).expect("opens");
-        assert_eq!(o.asked(), vec![
-            ("STATE_DB".to_string(), "CHASSIS_INFO".to_string()),
-            ("STATE_DB".to_string(), "PSU_INFO".to_string()),
-            ("STATE_DB".to_string(), "FAN_INFO".to_string()),
-            ("STATE_DB".to_string(), "PHYSICAL_ENTITY_INFO".to_string()),
-        ]);
+        assert_eq!(
+            o.asked(),
+            vec![
+                ("STATE_DB".to_string(), "CHASSIS_INFO".to_string()),
+                ("STATE_DB".to_string(), "PSU_INFO".to_string()),
+                ("STATE_DB".to_string(), "FAN_INFO".to_string()),
+                ("STATE_DB".to_string(), "PHYSICAL_ENTITY_INFO".to_string()),
+            ]
+        );
     }
 
     /// There is nowhere to publish, so the daemon says so rather than running
@@ -433,7 +473,9 @@ mod tests {
     #[test]
     fn a_table_that_will_not_open_stops_the_daemon() {
         let o = pmon_common::db::MockOpener::failing("FAN_INFO");
-        let e = open_all(&|d, t| o.open(d, t)).err().expect("cannot publish");
+        let e = open_all(&|d, t| o.open(d, t))
+            .err()
+            .expect("cannot publish");
         assert!(e.contains("STATE_DB"), "{e}");
     }
 
@@ -453,9 +495,16 @@ mod tests {
         // filters on, are always populated too: they are `Parent()` fields in
         // the facade, filled from where the fan was found, and have no column
         // bit to forget.
-        for col in [FanInfoCol::Direction, FanInfoCol::SpeedPct, FanInfoCol::StatusLed] {
-            assert!(FAN_COLS.contains(col), "psud reads {} but does not ask for it",
-                    col.as_str());
+        for col in [
+            FanInfoCol::Direction,
+            FanInfoCol::SpeedPct,
+            FanInfoCol::StatusLed,
+        ] {
+            assert!(
+                FAN_COLS.contains(col),
+                "psud reads {} but does not ask for it",
+                col.as_str()
+            );
         }
         // And nothing more: the point is to decline `is_under_speed`, whose
         // Mellanox implementation reads a file a switched-off PSU empties.
@@ -473,7 +522,10 @@ mod tests {
         assert_eq!(CHASSIS_COLS.bits().count_ones(), 1);
 
         // The budget wants what each unit draws and whether it is there.
-        for col in [FanDrawerInfoCol::Presence, FanDrawerInfoCol::MaximumConsumedPower] {
+        for col in [
+            FanDrawerInfoCol::Presence,
+            FanDrawerInfoCol::MaximumConsumedPower,
+        ] {
             assert!(DRAWER_COLS.contains(col), "{} not asked for", col.as_str());
         }
         for col in [ModuleInfoCol::Presence, ModuleInfoCol::MaximumConsumedPower] {
@@ -492,6 +544,7 @@ mod tests {
         fail: bool,
         /// Fail this many `get_psus` calls, then answer.
         fail_first: usize,
+        fail_on: Option<usize>,
         modular: bool,
         /// Fail this many `get_chassis_info` calls, then answer.
         chassis_fail_first: usize,
@@ -505,26 +558,40 @@ mod tests {
     impl PlatformApi for FakePlatform {
         fn get_psus(&mut self) -> Result<Vec<platform_api::PsuInfo>, PlatformError> {
             self.reads += 1;
-            if self.fail || self.reads <= self.fail_first {
+            if self.fail || self.reads <= self.fail_first || self.fail_on == Some(self.reads) {
                 return Err(PlatformError::Backend("i2c timeout".into()));
             }
             Ok(self.psus.clone())
         }
-        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<platform_api::ChassisInfo, PlatformError> {
+        fn get_chassis_info(
+            &mut self,
+            _cols: ChassisInfoCols,
+        ) -> Result<platform_api::ChassisInfo, PlatformError> {
             if self.chassis_fail_first > 0 {
                 self.chassis_fail_first -= 1;
                 return Err(PlatformError::Backend("i2c timeout".into()));
             }
-            Ok(platform_api::ChassisInfo { is_modular_chassis: self.modular, ..Default::default() })
+            Ok(platform_api::ChassisInfo {
+                is_modular_chassis: self.modular,
+                ..Default::default()
+            })
         }
-        fn get_fans(&mut self, cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(
+            &mut self,
+            cols: FanInfoCols,
+            _absorb: bool,
+        ) -> Result<Vec<FanInfo>, PlatformError> {
             self.fan_cols.push(cols);
             if self.fail {
                 return Err(PlatformError::Backend("i2c timeout".into()));
             }
             Ok(Vec::new())
         }
-        fn set_psu_led(&mut self, psu: &DeviceKey, color: LedColor) -> Result<Option<bool>, PlatformError> {
+        fn set_psu_led(
+            &mut self,
+            psu: &DeviceKey,
+            color: LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
             self.leds.push((psu.clone(), color));
             if let Some(e) = self.led_error.clone() {
                 return Err(e);
@@ -536,7 +603,11 @@ mod tests {
             }
             Ok(Some(true))
         }
-        fn set_psu_master_led(&mut self, _psu: &DeviceKey, color: LedColor) -> Result<Option<bool>, PlatformError> {
+        fn set_psu_master_led(
+            &mut self,
+            _psu: &DeviceKey,
+            color: LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
             self.master_leds.push(color);
             Ok(Some(true))
         }
@@ -571,7 +642,11 @@ mod tests {
             }
         }
         fn tables(&self) -> Tables<'_> {
-            Tables { psu: &self.psu, fan: &self.fan, entity: &self.entity }
+            Tables {
+                psu: &self.psu,
+                fan: &self.fan,
+                entity: &self.entity,
+            }
         }
     }
 
@@ -581,15 +656,31 @@ mod tests {
     async fn the_loop_publishes_and_then_clears_up_after_itself() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
-        db.chassis.set(CHASSIS_INFO_KEY, &[("psu_num", "1".to_string())]).unwrap();
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
+        db.chassis
+            .set(CHASSIS_INFO_KEY, &[("psu_num", "1".to_string())])
+            .unwrap();
 
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 143 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
         let code = run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
 
         assert_eq!(code, 143);
-        assert_eq!(p.leds, vec![(key_of("PSU 1"), LedColor::Green)],
-            "the first pass writes every LED");
+        assert_eq!(
+            p.leds,
+            vec![(key_of("PSU 1"), LedColor::Green)],
+            "the first pass writes every LED"
+        );
+        assert!(db
+            .psu
+            .writes()
+            .iter()
+            .any(|(key, field)| key == "PSU 1" && field == "presence"));
         assert!(db.psu.is_empty() && db.entity.is_empty());
         assert!(db.chassis.is_empty(), "the count and the budget go too");
     }
@@ -600,11 +691,18 @@ mod tests {
     async fn a_read_failure_writes_nothing_and_touches_no_led() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { fail: true, ..Default::default() };
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
+        let mut p = FakePlatform {
+            fail: true,
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(p.leds.is_empty());
         assert!(db.psu.is_empty());
+        assert!(db.psu.writes().is_empty());
     }
 
     /// Only a modular chassis accounts for power.  A fixed one has no line
@@ -613,14 +711,27 @@ mod tests {
     async fn the_power_budget_runs_only_when_there_is_one() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(p.master_leds.is_empty(), "no budget, no master LED");
 
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], modular: true, ..Default::default() };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            modular: true,
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert_eq!(p.master_leds.len(), 1, "the first pass always writes it");
     }
@@ -643,10 +754,17 @@ mod tests {
             fail_first: 2,
             ..Default::default()
         };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
-        let n = db.chassis.writes().iter()
-            .filter(|(k, f)| k == CHASSIS_INFO_KEY && f == "psu_num").count();
+        let n = db
+            .chassis
+            .writes()
+            .iter()
+            .filter(|(k, f)| k == CHASSIS_INFO_KEY && f == "psu_num")
+            .count();
         assert_eq!(n, 1, "written once, by the pass whose read succeeded");
     }
 
@@ -656,7 +774,10 @@ mod tests {
     fn the_counts_are_written_from_the_rows_and_remembered() {
         let t = MockTable::new();
         let mut c = Counts::default();
-        let psus = [row("PSU 1", PowerEntityKind::Psu), row("PSU 2", PowerEntityKind::Psu)];
+        let psus = [
+            row("PSU 1", PowerEntityKind::Psu),
+            row("PSU 2", PowerEntityKind::Psu),
+        ];
         c.refresh(&psus, &t);
         assert_eq!(t.field(CHASSIS_INFO_KEY, "psu_num").as_deref(), Some("2"));
         assert_eq!(c.0, Some((2, 0)));
@@ -691,11 +812,21 @@ mod tests {
     async fn an_unchanged_count_is_not_rewritten() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
-        let mut cycles = Cycles::Fixed { remaining: 3, code: 0 };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
-        let n = db.chassis.writes().iter()
-            .filter(|(k, f)| k == CHASSIS_INFO_KEY && f == "psu_num").count();
+        let n = db
+            .chassis
+            .writes()
+            .iter()
+            .filter(|(k, f)| k == CHASSIS_INFO_KEY && f == "psu_num")
+            .count();
         assert_eq!(n, 1);
     }
 
@@ -713,10 +844,16 @@ mod tests {
             chassis_fail_first: 1,
             ..Default::default()
         };
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert_eq!(p.master_leds.len(), 1, "the second pass runs the budget");
-        assert!(log.logged(log::Level::Warn, "Failed to read whether the chassis is modular"));
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to read whether the chassis is modular"
+        ));
     }
 
     /// The colour published is the one read back after the write, which is why
@@ -733,12 +870,55 @@ mod tests {
         // pass writes green over it.
         let mut stale = healthy("PSU 1");
         stale.status_led = Some("red".to_string());
-        let mut p = FakePlatform { psus: vec![stale], ..Default::default() };
-        one_pass(&mut p, &mut Updater::new(), &mut Counts::default(), &mut Budget::default(),
-                 &db.tables(), &db.chassis, &mut Latch::new());
+        let mut p = FakePlatform {
+            psus: vec![stale],
+            ..Default::default()
+        };
+        one_pass(
+            &mut p,
+            &mut Updater::new(),
+            &mut Counts::default(),
+            &mut Budget::default(),
+            &db.tables(),
+            &db.chassis,
+            &mut Latch::new(),
+        );
         assert_eq!(p.leds, vec![(key_of("PSU 1"), LedColor::Green)]);
-        assert_eq!(p.reads, 2, "once for the pass, once to read the colour back");
-        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("green"));
+        assert_eq!(
+            p.reads, 2,
+            "once for the pass, once to read the colour back"
+        );
+        assert_eq!(
+            db.psu.field("PSU 1", "led_status").as_deref(),
+            Some("green")
+        );
+    }
+
+    #[test]
+    fn a_failed_led_readback_keeps_the_published_psu_and_reports_the_failure() {
+        let log = pmon_common::logging::capture();
+        let db = Db::new();
+        let mut row = healthy("PSU 1");
+        row.status_led = Some("red".into());
+        let mut platform = FakePlatform {
+            psus: vec![row],
+            fail_on: Some(2),
+            ..Default::default()
+        };
+        one_pass(
+            &mut platform,
+            &mut Updater::new(),
+            &mut Counts::default(),
+            &mut Budget::default(),
+            &db.tables(),
+            &db.chassis,
+            &mut Latch::new(),
+        );
+        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("red"));
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to read PSU LED state after update"
+        ));
     }
 
     /// The same through the loop, counted: the start-up count read, the
@@ -747,10 +927,19 @@ mod tests {
     async fn the_first_cycle_reads_the_psus_three_times() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
-        assert_eq!(p.reads, 3, "once for the count, once for the pass, once to read the colour back");
+        assert_eq!(
+            p.reads, 3,
+            "once for the count, once for the pass, once to read the colour back"
+        );
     }
 
     /// The re-read asks a fan for its colour and nothing else.  The fans are
@@ -760,8 +949,14 @@ mod tests {
     async fn the_fan_read_back_asks_only_for_the_led() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert_eq!(p.fan_cols, vec![FAN_COLS, FanInfoCols::STATUS_LED]);
     }
@@ -773,15 +968,28 @@ mod tests {
     async fn a_pass_that_wrote_no_led_does_not_read_the_platform_again() {
         tokio::time::pause();
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
         // The first pass writes every LED; the second, steady, writes none.
-        let mut cycles = Cycles::Fixed { remaining: 2, code: 0 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 2,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert_eq!(p.leds.len(), 1, "only the first pass wrote");
         assert_eq!(p.reads, 4, "the count, two passes, and one read-back");
-        assert_eq!(p.fan_cols, vec![FAN_COLS, FanInfoCols::STATUS_LED, FAN_COLS]);
-        let led_writes = db.psu.writes().iter()
-            .filter(|(k, f)| k == "PSU 1" && f == "led_status").count();
+        assert_eq!(
+            p.fan_cols,
+            vec![FAN_COLS, FanInfoCols::STATUS_LED, FanInfoCols::STATUS_LED]
+        );
+        let led_writes = db
+            .psu
+            .writes()
+            .iter()
+            .filter(|(k, f)| k == "PSU 1" && f == "led_status")
+            .count();
         assert_eq!(led_writes, 2, "the steady pass still publishes the colour");
     }
 
@@ -790,16 +998,39 @@ mod tests {
     #[test]
     fn a_pass_that_wrote_no_led_publishes_the_colour_its_own_read_saw() {
         let db = Db::new();
-        let mut p = FakePlatform { psus: vec![healthy("PSU 1")], ..Default::default() };
+        let mut p = FakePlatform {
+            psus: vec![healthy("PSU 1")],
+            ..Default::default()
+        };
         let mut updater = Updater::new();
-        let (mut counts, mut budget, mut read) = (Counts::default(), Budget::default(), Latch::new());
-        one_pass(&mut p, &mut updater, &mut counts, &mut budget, &db.tables(), &db.chassis, &mut read);
+        let (mut counts, mut budget, mut read) =
+            (Counts::default(), Budget::default(), Latch::new());
+        one_pass(
+            &mut p,
+            &mut updater,
+            &mut counts,
+            &mut budget,
+            &db.tables(),
+            &db.chassis,
+            &mut read,
+        );
         // Someone else turns it amber; the PSU itself is unchanged.
         p.psus[0].status_led = Some("amber".to_string());
         let before = p.reads;
-        one_pass(&mut p, &mut updater, &mut counts, &mut budget, &db.tables(), &db.chassis, &mut read);
+        one_pass(
+            &mut p,
+            &mut updater,
+            &mut counts,
+            &mut budget,
+            &db.tables(),
+            &db.chassis,
+            &mut read,
+        );
         assert_eq!(p.reads - before, 1, "no read-back without a write");
-        assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("amber"));
+        assert_eq!(
+            db.psu.field("PSU 1", "led_status").as_deref(),
+            Some("amber")
+        );
     }
 
     /// A platform without a PSU LED gets Python's line and nothing after it.
@@ -815,10 +1046,16 @@ mod tests {
             led_error: Some(PlatformError::NotSupported(String::new())),
             ..Default::default()
         };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
         assert!(log.logged(log::Level::Warn, "set_status_led() not implemented"));
-        assert!(!log.contains("not implemented:"), "nothing after Python's wording");
+        assert!(
+            !log.contains("not implemented:"),
+            "nothing after Python's wording"
+        );
     }
 
     /// Any other LED failure is not "not implemented".  Python lets it out of
@@ -833,9 +1070,15 @@ mod tests {
             led_error: Some(PlatformError::Backend("i2c timeout".into())),
             ..Default::default()
         };
-        let mut cycles = Cycles::Fixed { remaining: 1, code: 0 };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 0,
+        };
         run(&mut p, &db.tables(), &db.chassis, &mut cycles).await;
-        assert!(log.logged(log::Level::Warn, "Failed to update PSU data - platform error: i2c timeout"));
+        assert!(log.logged(
+            log::Level::Warn,
+            "Failed to update PSU data - platform error: i2c timeout"
+        ));
         assert!(!log.contains("not implemented"));
     }
 
@@ -908,7 +1151,10 @@ mod tests {
         fn get_psus(&mut self) -> Result<Vec<platform_api::PsuInfo>, PlatformError> {
             Ok(self.psus.clone())
         }
-        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<platform_api::ChassisInfo, PlatformError> {
+        fn get_chassis_info(
+            &mut self,
+            _cols: ChassisInfoCols,
+        ) -> Result<platform_api::ChassisInfo, PlatformError> {
             Ok(platform_api::ChassisInfo {
                 is_modular_chassis: self.modular,
                 ..Default::default()
@@ -927,11 +1173,17 @@ mod tests {
     #[tokio::test]
     async fn the_psu_count_is_published_before_the_first_cycle() {
         let o = pmon_common::db::MockOpener::new();
-        let mut p = Shaped { psus: vec![psu("PSU 1"), psu("PSU 2")], modular: false };
+        let mut p = Shaped {
+            psus: vec![psu("PSU 1"), psu("PSU 2")],
+            modular: false,
+        };
         let code = start(
             &mut p,
             &|d, t| o.open(d, t),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, 0);
@@ -952,7 +1204,10 @@ mod tests {
         let code = start(
             &mut Shaped::default(),
             &|d, t| o.open(d, t),
-            &mut Cycles::Fixed { remaining: 0, code: 0 },
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 0,
+            },
         )
         .await;
         assert_eq!(code, PSU_DB_CONNECT_ERROR);
@@ -967,8 +1222,20 @@ mod tests {
     async fn a_fixed_switch_keeps_no_power_budget() {
         for modular in [false, true] {
             let o = pmon_common::db::MockOpener::new();
-            let mut p = Shaped { psus: vec![psu("PSU 1")], modular };
-            start(&mut p, &|d, t| o.open(d, t), &mut Cycles::Fixed { remaining: 1, code: 0 }).await;
+            let mut p = Shaped {
+                psus: vec![psu("PSU 1")],
+                modular,
+            };
+            p.psus[0].maximum_supplied_power = Some(platform_api::Number::Float(1000.0));
+            start(
+                &mut p,
+                &|d, t| o.open(d, t),
+                &mut Cycles::Fixed {
+                    remaining: 1,
+                    code: 0,
+                },
+            )
+            .await;
             let touched = o
                 .table("CHASSIS_INFO")
                 .unwrap()

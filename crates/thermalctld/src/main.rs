@@ -27,6 +27,7 @@ use clap::Parser;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(test)]
 use tokio::signal::unix::{signal, Signal, SignalKind};
 use tokio::sync::watch;
 
@@ -39,6 +40,30 @@ use platform_provider::PlatformImpl;
 
 const SYSLOG_IDENTIFIER: &str = "thermalctld";
 const CHASSIS_GET_ERROR: i32 = 2;
+
+/// Keep deinitialization on the policy handle, after the main handle's stop.
+#[derive(Default)]
+pub(crate) struct TmStopped {
+    stopped: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl TmStopped {
+    fn notify(&self) {
+        *self.stopped.lock().expect("thermal manager stop lock") = true;
+        self.changed.notify_all();
+    }
+
+    fn wait(&self) {
+        let _stopped = self
+            .changed
+            .wait_while(
+                self.stopped.lock().expect("thermal manager stop lock"),
+                |stopped| !*stopped,
+            )
+            .expect("thermal manager stop notification");
+    }
+}
 
 /// The `ChassisInfo` columns thermalctld reads: the shape that picks the slot
 /// it publishes under (`slot_or_dpu_id_of`) and whether to run the leak thread.
@@ -171,6 +196,15 @@ async fn main() {
     let args = Args::parse();
     init_logging();
 
+    let exit_code = Arc::new(AtomicI32::new(0));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
+    let _signals = pmon_common::cycles::Cycles::signals_with_shutdown(
+        pmon_common::cycles::SignalLog::Info,
+        Some((Arc::clone(&shutdown_tx), Arc::clone(&exit_code))),
+    )
+    .expect("failed to install signal handlers");
+
     // Initialise the platform first: the slot or DPU id it reports decides
     // whether there is a suffixed table to open below.
     // Mirrors Python: `chassis = Platform().get_chassis()`
@@ -191,6 +225,7 @@ async fn main() {
         Ok(db) => db,
         Err(e) => {
             log::error!("Failed to open STATE_DB due to {e:?}");
+            platform.finalize();
             std::process::exit(CHASSIS_GET_ERROR);
         }
     };
@@ -207,23 +242,6 @@ async fn main() {
     // pmon's `critical_processes` file is empty, nothing reports it either.
     // On hardware that showed up as thermalctld going to `EXITED` on a plain
     // SIGTERM and staying there, silently, with the fans left to hw-management.
-    let exit_code = Arc::new(AtomicI32::new(0));
-    let signal_code = Arc::clone(&exit_code);
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    // Shared rather than moved: the signal handler is no longer its only
-    // user -- the leak thread needs it to stop the rest of the daemon when
-    // STATE_DB goes away.
-    let shutdown_tx = Arc::new(shutdown_tx);
-    let signal_tx = Arc::clone(&shutdown_tx);
-    // Installed here rather than inside the task, so all three are in place
-    // before anything below can take long enough for a signal to arrive.
-    let mut signals = StopSignals::install().expect("failed to install signal handlers");
-    tokio::spawn(async move {
-        let kind = signals.wait().await;
-        signal_code.store(pmon_common::cycles::exit_code_for(kind), Ordering::SeqCst);
-        let _ = signal_tx.send(true);
-    });
-
     // Mirrors Python: `ThermalMonitor(ThermalUpdater(), FanUpdater()).task_worker()`
     let mut monitor = Monitor::new(
         args.thermal_monitor_initial_interval,
@@ -235,6 +253,14 @@ async fn main() {
     // closure has to own what it captures.
     let which = args.platform_api;
 
+    let policy_request = Arc::new(AtomicBool::new(false));
+    monitor.shutdown_sender = Some(Arc::clone(&shutdown_tx));
+    monitor.policy_request = Some(Arc::clone(&policy_request));
+    let tm_stopped = Arc::new(TmStopped::default());
+    monitor.policy_stopped = Some(Arc::clone(&tm_stopped));
+    let policy_interval = Arc::clone(&monitor.policy_interval);
+    let policy_shutdown = shutdown_rx.clone();
+    let monitor_shutdown = Arc::clone(&shutdown_tx);
     let leak_exit_code = Arc::clone(&exit_code);
     let leak_shutdown_tx = Arc::clone(&shutdown_tx);
     let db_lost = run(
@@ -249,11 +275,22 @@ async fn main() {
         // Either thread is half of this daemon, so a panic on one takes the
         // process down, as one on the poll loop does (`pmon_common::thread`).
         &|ready| {
+            let policy_request = Arc::clone(&policy_request);
+            let policy_interval = Arc::clone(&policy_interval);
+            let policy_shutdown = policy_shutdown.clone();
+            let tm_stopped = Arc::clone(&tm_stopped);
             std::thread::Builder::new()
                 .name("tm-init".into())
                 .spawn(move || {
                     pmon_common::thread::abort_on_panic("tm-init", || {
-                        tm_init_thread_main(which, ready)
+                        tm_policy_thread_main(
+                            which,
+                            ready,
+                            Arc::clone(&policy_request),
+                            Arc::clone(&policy_interval),
+                            policy_shutdown.clone(),
+                            &tm_stopped,
+                        )
                     })
                 })
         },
@@ -277,6 +314,7 @@ async fn main() {
 
     // Exit with the signal's code rather than falling off the end of main.
     // Mirrors Python: `thermalctld:main`.
+    let _ = monitor_shutdown.send(true);
     let code = final_exit_code(exit_code.load(Ordering::SeqCst), db_lost);
     log::info!("Shutting down with exit code {code}...");
     // Whatever the implementation set up, released before the process goes
@@ -296,12 +334,14 @@ async fn main() {
 /// and lets it through in `thermalctld:ThermalControlDaemon.signal_handler`,
 /// and `pmon_common::cycles` does the same for the other daemons; the log
 /// line is theirs.
+#[cfg(test)]
 struct StopSignals {
     sigterm: Signal,
     sigint: Signal,
     sighup: Signal,
 }
 
+#[cfg(test)]
 impl StopSignals {
     fn install() -> std::io::Result<Self> {
         Ok(Self {
@@ -382,13 +422,9 @@ async fn run(
     // system-health to report no fans at all.  Python is unaffected only
     // because its updaters are already on another thread by then.
     //
-    // A second platform handle rather than this one: the poll loop below
-    // borrows this one for the rest of the run.  `ThermalManager`'s methods are
-    // all @classmethod, so both handles drive the same Python class object and
-    // the `tm_deinitialize()` at the end still pairs with the
-    // `tm_initialize()` over there.  The wait releases the GIL -- mlnx's
-    // `wait_until_conditions` sleeps on a `threading.Event` -- so the loop
-    // keeps its cadence throughout.
+    // The worker owns one handle through initialization, policy execution and
+    // deinitialization: the facade's readiness belongs to that handle. The
+    // main handle remains available for polling and early shutdown notification.
     let tm_ready = Arc::new(AtomicBool::new(false));
     let tm_init_thread = match start_tm_init(Arc::clone(&tm_ready)) {
         Ok(handle) => Some(handle),
@@ -405,6 +441,7 @@ async fn run(
     // Leak detection runs on its own thread at its own cadence — 0.5 s on the
     // platforms that set it — because it is a hundred times faster than the
     // poll cycle and a slow sysfs read must not delay either side.
+    let mut leak_start_failed = false;
     let leak_thread = if leak_enabled(args.enable_liquid_cooling, chassis) {
         let interval = Duration::from_secs_f64(args.liquid_cooling_update_interval);
         // Leak detection is a safety function, so a thread that fails to start
@@ -421,6 +458,7 @@ async fn run(
             }
             Err(e) => {
                 log::error!("failed to start the leak updater thread, leak monitoring is off: {e}");
+                leak_start_failed = true;
                 None
             }
         }
@@ -428,7 +466,16 @@ async fn run(
         None
     };
 
-    let db_lost = monitor.run(platform, db, Arc::clone(&tm_ready), shutdown_rx).await;
+    let db_lost = if leak_start_failed {
+        Some(ERR_DB_WRITE)
+    } else {
+        monitor
+            .run(platform, db, Arc::clone(&tm_ready), shutdown_rx)
+            .await
+    };
+    if let Some(tx) = &monitor.shutdown_sender {
+        let _ = tx.send(true);
+    }
 
     // What Python's signal handlers do the moment SIGTERM arrives, before
     // anything is joined.  The vendor's first: a handler it installed while
@@ -443,6 +490,9 @@ async fn run(
     pmon_common::cycles::notify_shutdown(platform);
     if let Err(e) = platform.tm_stop() {
         log::warn!("ThermalManager stop failed: {e}");
+    }
+    if let Some(stopped) = &monitor.policy_stopped {
+        stopped.notify();
     }
 
     if let Some(h) = leak_thread {
@@ -462,8 +512,10 @@ async fn run(
 
     // Cleanup: restores hw-management-tc autonomous mode (Mellanox).
     // Mirrors Python: `ThermalManager.stop()` then `.deinitialize()`.
-    if let Err(e) = platform.tm_deinitialize() {
-        log::warn!("ThermalManager deinitialize failed: {e}");
+    if monitor.policy_request.is_none() {
+        if let Err(e) = platform.tm_deinitialize() {
+            log::warn!("ThermalManager deinitialize failed: {e}");
+        }
     }
 
     // Rows this daemon owns go with it.  Mirrors the two Python destructors;
@@ -481,19 +533,57 @@ async fn run(
 ///
 /// Writes nothing to STATE_DB and holds nothing the poll loop needs, so it is
 /// free to take as long as the platform makes it take.
-fn tm_init_thread_main(which: PlatformImpl, ready: Arc<AtomicBool>) {
-    match platform_provider::open(SYSLOG_IDENTIFIER, which) {
-        Ok(mut platform) => tm_init_with(&mut platform, &ready),
+fn tm_policy_thread_main(
+    which: PlatformImpl,
+    ready: Arc<AtomicBool>,
+    request: Arc<AtomicBool>,
+    interval: Arc<std::sync::atomic::AtomicU64>,
+    shutdown: watch::Receiver<bool>,
+    stopped: &TmStopped,
+) {
+    let mut platform = match platform_provider::open(SYSLOG_IDENTIFIER, which) {
+        Ok(p) => p,
         Err(e) => {
             log::error!("thermal manager init: cannot initialise platform: {e}");
-            // Same reason as the one in `tm_init_with`: a handle that could
-            // not be opened is still a manager that will never come up.
-            ready.store(true, Ordering::Release);
+            return;
         }
+    };
+    tm_policy_with(
+        &mut platform,
+        &ready,
+        &request,
+        &interval,
+        shutdown,
+        stopped,
+    );
+}
+
+fn tm_policy_with(
+    platform: &mut dyn PlatformApi,
+    ready: &AtomicBool,
+    request: &AtomicBool,
+    interval: &std::sync::atomic::AtomicU64,
+    shutdown: watch::Receiver<bool>,
+    stopped: &TmStopped,
+) {
+    tm_init_with(platform, &AtomicBool::new(false));
+    let seconds = platform.tm_get_interval().ok().flatten().unwrap_or(60.0);
+    interval.store(seconds.to_bits(), Ordering::Release);
+    ready.store(true, Ordering::Release);
+    while !*shutdown.borrow() {
+        if request.swap(false, Ordering::AcqRel) {
+            if let Err(e) = platform.tm_run_policy() {
+                log::warn!("run_policy failed: {e}");
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
-    // No `finalize()` here: that runs Python's atexit handlers, which is a
-    // process-wide, once-only thing `main` does on the way out.  The leak
-    // thread leaves its handle alone for the same reason.
+    // A signal wakes this worker before run() has called tm_stop(). Wait for
+    // that call to complete, then deinitialize using the initialized handle.
+    stopped.wait();
+    if let Err(e) = platform.tm_deinitialize() {
+        log::warn!("ThermalManager deinitialize failed: {e}");
+    }
 }
 
 /// Start the manager, then release the policy -- whatever the manager said.
@@ -536,6 +626,7 @@ fn leak_thread_main(
         Ok(p) => p,
         Err(e) => {
             log::error!("leak updater: cannot initialise platform: {e}");
+            report_leak_exit(Some(ERR_DB_WRITE), &exit_code, &shutdown_tx);
             return;
         }
     };
@@ -549,6 +640,7 @@ fn leak_thread_main(
                 "leak updater: cannot open the leak tables, \
                          leak monitoring is off: {e:?}"
             );
+            report_leak_exit(Some(ERR_DB_WRITE), &exit_code, &shutdown_tx);
             return;
         }
     };
@@ -607,6 +699,35 @@ fn slot_or_dpu_id_of(info: &platform_api::ChassisInfo) -> Option<i64> {
     }
 }
 
+/// Match the Python MIN-N floor and whitespace handling, while warning once
+/// per invalid value rather than every 0.5-second sensor poll.
+fn major_minimum(value: Option<&str>, platform: usize, invalid: &mut Option<String>) -> usize {
+    let Some(value) = value else {
+        *invalid = None;
+        return if platform >= 2 { platform } else { 0 };
+    };
+    match value.trim().parse::<i128>() {
+        Ok(n) if n >= 2 && n <= usize::MAX as i128 => {
+            *invalid = None;
+            n as usize
+        }
+        parsed => {
+            if invalid.as_deref() != Some(value) {
+                match parsed {
+                    Ok(n) => log::warn!("system_major_leak_num_min_sensors must be >= 2; ignoring override value {n}"),
+                    Err(_) => log::warn!("Invalid system_major_leak_num_min_sensors value {:?} in LEAK_CONTROL_POLICY; ignoring override", value),
+                }
+                *invalid = Some(value.into());
+            }
+            if platform >= 2 {
+                platform
+            } else {
+                0
+            }
+        }
+    }
+}
+
 /// The leak thread's body, with the platform and the tables already opened.
 ///
 /// The two steps `leak_thread_main` takes first — building a `Platform` and
@@ -634,6 +755,18 @@ fn leak_loop(
     }
 
     let mut state = leak_updater::LeakState::new();
+    if let Err(e) = state.restore(tables) {
+        log::error!("Cannot restore leak state: {e}");
+        return Some(ERR_DB_WRITE);
+    }
+    let mut invalid_policy = None;
+    let platform_minimum = platform
+        .get_major_leak_num_min_sensors()
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+        .max(0) as usize;
+
     let mut events = event_log::BmcEventLogger::new(is_switch_bmc);
     // Logged once, then again only after a read succeeds: this loop runs every
     // half second on a liquid-cooled box, and a per-cycle error would bury the
@@ -658,9 +791,25 @@ fn leak_loop(
                     read,
                     "leak updater: cannot read leak sensors, leak detection is not running: {e}"
                 );
-                Vec::new()
+                std::thread::sleep(interval);
+                continue;
             }
         };
+        let configured = match tables.policy.as_ref().map(|t| t.get("policy")).transpose() {
+            Ok(row) => row.flatten().and_then(|row| {
+                row.into_iter()
+                    .find(|(k, _)| k == "system_major_leak_num_min_sensors")
+            }),
+            Err(e) => {
+                log::error!("Cannot read LEAK_CONTROL_POLICY: {e}");
+                return Some(ERR_DB_WRITE);
+            }
+        };
+        state.set_major_minimum(major_minimum(
+            configured.as_ref().map(|(_, value)| value.as_str()),
+            platform_minimum,
+            &mut invalid_policy,
+        ));
         let outcome = state.refresh(&sensors, &profiles, std::time::Instant::now(), &mut events);
         let unwritten = leak_updater::apply(tables, &outcome);
         // Forgotten before leaving, not instead of leaving: the cache has to
@@ -738,6 +887,25 @@ mod tests {
     /// `is_liquid_cooled` would read `false` and turn leak detection off, a
     /// slot would read `None` and publish under the wrong table.
     #[test]
+    fn major_minimum_matches_whitespace_floor_and_invalid_override_fallback() {
+        let log = pmon_common::logging::capture();
+        let mut invalid = None;
+        for (text, expected) in [("  +3  ", 3), ("2", 2), ("1", 4), ("-1", 4), ("bad", 4)] {
+            assert_eq!(major_minimum(Some(text), 4, &mut invalid), expected);
+        }
+        major_minimum(Some("bad"), 4, &mut invalid);
+        assert_eq!(
+            log.lines()
+                .iter()
+                .filter(|(_, text)| text.contains("Invalid system_major"))
+                .count(),
+            1
+        );
+        assert_eq!(major_minimum(None, 1, &mut invalid), 0);
+        assert_eq!(major_minimum(Some("2"), 0, &mut invalid), 2);
+    }
+
+    #[test]
     fn thermalctld_asks_for_every_chassis_column_it_reads() {
         use platform_api::ChassisInfoCol;
         for col in [
@@ -759,13 +927,25 @@ mod tests {
     /// liquid-cooled switch.  Either source alone has to be enough.
     #[test]
     fn either_the_flag_or_the_platform_turns_leak_detection_on() {
-        let cooled = ChassisInfo { is_liquid_cooled: true, ..Default::default() };
-        let plain = ChassisInfo { is_liquid_cooled: false, ..Default::default() };
+        let cooled = ChassisInfo {
+            is_liquid_cooled: true,
+            ..Default::default()
+        };
+        let plain = ChassisInfo {
+            is_liquid_cooled: false,
+            ..Default::default()
+        };
 
         assert!(leak_enabled(true, Some(&plain)), "the flag alone is enough");
-        assert!(leak_enabled(false, Some(&cooled)), "the platform alone is enough");
+        assert!(
+            leak_enabled(false, Some(&cooled)),
+            "the platform alone is enough"
+        );
         assert!(leak_enabled(true, Some(&cooled)));
-        assert!(leak_enabled(true, None), "the flag stands without a chassis");
+        assert!(
+            leak_enabled(true, None),
+            "the flag stands without a chassis"
+        );
 
         assert!(!leak_enabled(false, Some(&plain)), "neither source says so");
         assert!(!leak_enabled(false, None));
@@ -797,7 +977,12 @@ mod tests {
     #[test]
     fn clap_rejects_a_bad_interval_on_the_command_line() {
         use clap::Parser;
-        assert!(Args::try_parse_from(["thermalctld-rs", "--liquid_cooling_update_interval", "-0.5"]).is_err());
+        assert!(Args::try_parse_from([
+            "thermalctld-rs",
+            "--liquid_cooling_update_interval",
+            "-0.5"
+        ])
+        .is_err());
         let ok = Args::try_parse_from([
             "thermalctld-rs",
             "--liquid_cooling_update_interval",
@@ -813,6 +998,58 @@ mod tests {
     // ── The leak thread's body ────────────────────────────────────────────
 
     use crate::db::mock::MockLeak;
+
+    #[test]
+    fn a_failed_read_cannot_clear_the_previous_critical_leak() {
+        struct Reading {
+            calls: usize,
+            system: pmon_common::db::MockTable,
+            shutdown: watch::Sender<bool>,
+        }
+        impl PlatformApi for Reading {
+            fn get_leak_sensors(
+                &mut self,
+            ) -> Result<Vec<platform_api::LeakSensorInfo>, PlatformError> {
+                self.calls += 1;
+                if self.calls == 2 {
+                    return Err(PlatformError::Backend("i2c failure".into()));
+                }
+                if self.calls == 3 {
+                    assert_eq!(
+                        self.system.field("system", "device_leak_status").as_deref(),
+                        Some("CRITICAL")
+                    );
+                    self.shutdown.send(true).unwrap();
+                }
+                Ok(vec![platform_api::LeakSensorInfo {
+                    name: "a".into(),
+                    is_ok: Some(true),
+                    is_leak: Some(true),
+                    severity: Some(platform_api::LeakSeverity::Critical),
+                    ..Default::default()
+                }])
+            }
+        }
+        let tables = MockLeak::new();
+        let (shutdown, receiver) = watch::channel(false);
+        let mut platform = Reading {
+            calls: 0,
+            system: tables.system.clone(),
+            shutdown,
+        };
+        assert_eq!(
+            leak_loop(
+                &mut platform,
+                &tables.tables,
+                Duration::from_millis(1),
+                false,
+                receiver
+            ),
+            None
+        );
+        assert_eq!(platform.calls, 3);
+    }
+
     use platform_api::{
         ChassisInfo, ChassisInfoCols, DeviceKey, FanDrawerInfo, FanDrawerInfoCols, FanInfo,
         FanInfoCols, LeakProfile, LeakSensorInfo, PlatformError, ThermalInfo, ThermalInfoCols,
@@ -824,7 +1061,10 @@ mod tests {
     }
 
     impl platform_api::PlatformApi for FakePlatform {
-        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<ChassisInfo, PlatformError> {
+        fn get_chassis_info(
+            &mut self,
+            _cols: ChassisInfoCols,
+        ) -> Result<ChassisInfo, PlatformError> {
             Ok(ChassisInfo::default())
         }
         fn get_thermals(
@@ -834,13 +1074,24 @@ mod tests {
         ) -> Result<Vec<ThermalInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+        fn get_fan_drawers(
+            &mut self,
+            _cols: FanDrawerInfoCols,
+        ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn get_fans(&mut self, _cols: FanInfoCols, _absorb: bool) -> Result<Vec<FanInfo>, PlatformError> {
+        fn get_fans(
+            &mut self,
+            _cols: FanInfoCols,
+            _absorb: bool,
+        ) -> Result<Vec<FanInfo>, PlatformError> {
             Ok(Vec::new())
         }
-        fn set_fan_led(&mut self, _: &platform_api::DeviceKey, _: platform_api::LedColor) -> Result<Option<bool>, PlatformError> {
+        fn set_fan_led(
+            &mut self,
+            _: &platform_api::DeviceKey,
+            _: platform_api::LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
             Ok(Some(true))
         }
         fn get_leak_profiles(&mut self) -> Result<Vec<LeakProfile>, PlatformError> {
@@ -894,7 +1145,10 @@ mod tests {
             "a profile with no escalation timer publishes Python's inf"
         );
         assert!(m.system.wrote("system", "device_leak_status"));
-        assert!(m.sensor.writes().is_empty(), "the sensor rows wait for the first poll");
+        assert!(
+            m.sensor.writes().is_empty(),
+            "the sensor rows wait for the first poll"
+        );
     }
 
     /// Seeding happens *only* when the status is absent.  A daemon restarting
@@ -903,7 +1157,12 @@ mod tests {
     #[test]
     fn a_restart_does_not_clear_a_standing_leak_status() {
         let m = MockLeak::new();
-        crate::db::TableLike::set(&m.system, "system", &[("device_leak_status", "CRITICAL".to_string())]).unwrap();
+        crate::db::TableLike::set(
+            &m.system,
+            "system",
+            &[("device_leak_status", "CRITICAL".to_string())],
+        )
+        .unwrap();
 
         let mut p = FakePlatform {
             profiles: Vec::new(),
@@ -964,7 +1223,10 @@ mod tests {
     #[test]
     fn a_leak_table_that_refuses_a_write_stops_the_daemon() {
         let m = MockLeak::new();
-        let mut p = FakePlatform { profiles: Vec::new(), sensors: vec![sensor("leakage1", true)] };
+        let mut p = FakePlatform {
+            profiles: Vec::new(),
+            sensors: vec![sensor("leakage1", true)],
+        };
         m.sensor.fail_writes("redis is gone");
 
         // No shutdown is sent: the loop has to leave on the write failure
@@ -972,7 +1234,11 @@ mod tests {
         let (_tx, rx) = watch::channel(false);
         let code = leak_loop(&mut p, &m.tables, Duration::from_millis(1), false, rx);
 
-        assert_eq!(code, Some(ERR_DB_WRITE), "a lost STATE_DB is a non-zero exit");
+        assert_eq!(
+            code,
+            Some(ERR_DB_WRITE),
+            "a lost STATE_DB is a non-zero exit"
+        );
     }
 
     /// A seed read that fails is a STATE_DB this thread has lost, and it stops
@@ -981,7 +1247,10 @@ mod tests {
     #[test]
     fn an_unreadable_leak_status_stops_the_daemon_before_the_loop() {
         let m = MockLeak::new();
-        let mut p = FakePlatform { profiles: Vec::new(), sensors: vec![sensor("leakage1", true)] };
+        let mut p = FakePlatform {
+            profiles: Vec::new(),
+            sensors: vec![sensor("leakage1", true)],
+        };
         m.system.fail_reads("redis is gone");
         let (_tx, rx) = watch::channel(false);
         let code = leak_loop(&mut p, &m.tables, Duration::from_millis(1), false, rx);
@@ -1075,7 +1344,11 @@ mod tests {
         refuse: bool,
     ) -> impl Fn(Arc<AtomicBool>) -> std::io::Result<std::thread::JoinHandle<()>> {
         move |ready| {
-            let mut second = Tm { calls: std::sync::Arc::clone(&calls), refuse, ..Default::default() };
+            let mut second = Tm {
+                calls: std::sync::Arc::clone(&calls),
+                refuse,
+                ..Default::default()
+            };
             let _ = second.tm_initialize();
             ready.store(true, Ordering::Release);
             std::thread::Builder::new().spawn(|| {})
@@ -1150,10 +1423,17 @@ mod tests {
         let mut p = Tm::default();
         let calls = std::sync::Arc::clone(&p.calls);
         let m = MockDb::new(false);
-        m.temperature.set("ASIC", &[("temperature", "42".to_string())]).unwrap();
+        m.temperature
+            .set("ASIC", &[("temperature", "42".to_string())])
+            .unwrap();
 
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
 
         let start_tm = tm_init_sharing(std::sync::Arc::clone(&calls), false);
         run(
@@ -1170,10 +1450,82 @@ mod tests {
 
         // The middle two are Python's signal handlers, the vendor's and then
         // thermalctld's (`thermalctld:ThermalControlDaemon.signal_handler`).
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "notify", "stop", "deinitialize"]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["initialize", "notify", "stop", "deinitialize"]
+        );
         assert!(
             m.temperature.get("ASIC").unwrap().is_none(),
             "the rows this daemon owns go with it -- 60 were left behind on an SN5640 before"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_policy_worker_deinitializes_after_stop_on_its_own_handle() {
+        let mut platform = Tm::default();
+        let calls = Arc::clone(&platform.calls);
+        let worker_calls = Arc::clone(&calls);
+        let db = MockDb::new(false);
+        let stopped_signal = Arc::new(TmStopped::default());
+        let request = Arc::new(AtomicBool::new(false));
+        let mut monitor = Monitor::with_env(
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
+        monitor.policy_request = Some(Arc::clone(&request));
+        monitor.policy_stopped = Some(Arc::clone(&stopped_signal));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let started_tx = std::sync::Mutex::new(started_tx);
+        let start = |ready: Arc<AtomicBool>| {
+            let calls = Arc::clone(&worker_calls);
+            let request = Arc::clone(&request);
+            let stopped_signal = Arc::clone(&stopped_signal);
+            let started = started_tx.lock().unwrap().clone();
+            let thread = std::thread::spawn(move || {
+                let mut worker = Tm {
+                    calls,
+                    ..Default::default()
+                };
+                // The same worker path as production, with a pre-delivered
+                // shutdown to exercise the stop/deinitialize race.
+                started.send(()).unwrap();
+                tm_policy_with(
+                    &mut worker,
+                    &ready,
+                    &request,
+                    &std::sync::atomic::AtomicU64::new(0),
+                    stopped(),
+                    &stopped_signal,
+                );
+            });
+            started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            Ok(thread)
+        };
+        run(
+            &mut platform,
+            &db.db,
+            &mut monitor,
+            &args_from(&[]),
+            None,
+            &start,
+            &|_, _| panic!("leak detection is disabled"),
+            stopped(),
+        )
+        .await;
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls.iter().filter(|&&call| call == "deinitialize").count(),
+            1
+        );
+        assert!(
+            calls.iter().position(|&call| call == "stop").unwrap()
+                < calls
+                    .iter()
+                    .position(|&call| call == "deinitialize")
+                    .unwrap()
         );
     }
 
@@ -1199,11 +1551,25 @@ mod tests {
         assert!(!remote.is_empty());
 
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false)
-            .with_temperature_updater(TemperatureUpdater::with_mirror(Some(mirror)));
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        )
+        .with_temperature_updater(TemperatureUpdater::with_mirror(Some(mirror)));
 
-        run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &tm_up,
-            &|_i, _rx| panic!("leak detection is off"), stopped()).await;
+        run(
+            &mut p,
+            &m.db,
+            &mut monitor,
+            &args_from(&[]),
+            None,
+            &tm_up,
+            &|_i, _rx| panic!("leak detection is off"),
+            stopped(),
+        )
+        .await;
 
         assert!(remote.is_empty(), "the BMC's copy goes with the daemon");
     }
@@ -1213,18 +1579,40 @@ mod tests {
     /// them with no temperature or fan table at all.
     #[tokio::test]
     async fn a_platform_with_no_thermal_manager_still_polls_and_still_clears() {
-        let mut p = Tm { refuse: true, ..Default::default() };
+        let mut p = Tm {
+            refuse: true,
+            ..Default::default()
+        };
         let calls = std::sync::Arc::clone(&p.calls);
         let m = MockDb::new(false);
-        m.temperature.set("ASIC", &[("temperature", "42".to_string())]).unwrap();
+        m.temperature
+            .set("ASIC", &[("temperature", "42".to_string())])
+            .unwrap();
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
 
         let start_tm = tm_init_sharing(std::sync::Arc::clone(&calls), true);
-        run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &start_tm,
-            &|_i, _rx| panic!("leak detection is off"), stopped()).await;
+        run(
+            &mut p,
+            &m.db,
+            &mut monitor,
+            &args_from(&[]),
+            None,
+            &start_tm,
+            &|_i, _rx| panic!("leak detection is off"),
+            stopped(),
+        )
+        .await;
 
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "notify", "stop", "deinitialize"]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["initialize", "notify", "stop", "deinitialize"]
+        );
         assert!(m.temperature.get("ASIC").unwrap().is_none());
     }
 
@@ -1244,13 +1632,21 @@ mod tests {
         let calls = std::sync::Arc::clone(&p.calls);
         let m = MockDb::new(false);
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
 
         let joined = std::sync::Arc::new(AtomicBool::new(false));
         let did_join = std::sync::Arc::clone(&joined);
         let seen = std::sync::Arc::clone(&calls);
         let start_tm = move |ready: Arc<AtomicBool>| {
-            let mut second = Tm { calls: std::sync::Arc::clone(&seen), ..Default::default() };
+            let mut second = Tm {
+                calls: std::sync::Arc::clone(&seen),
+                ..Default::default()
+            };
             let f = std::sync::Arc::clone(&did_join);
             std::thread::Builder::new().spawn(move || {
                 let _ = second.tm_initialize();
@@ -1271,7 +1667,10 @@ mod tests {
         )
         .await;
 
-        assert!(joined.load(Ordering::SeqCst), "the init thread has to be joined");
+        assert!(
+            joined.load(Ordering::SeqCst),
+            "the init thread has to be joined"
+        );
         // Still paired, though the two calls were made on different handles:
         // `ThermalManager`'s methods are @classmethod, so both reach the same
         // Python class object.  Where `initialize` lands among the stop's
@@ -1296,14 +1695,24 @@ mod tests {
         let mut p = Tm::default();
         let calls = std::sync::Arc::clone(&p.calls);
         let m = MockDb::new(false);
-        m.temperature.set("ASIC", &[("temperature", "42".to_string())]).unwrap();
+        m.temperature
+            .set("ASIC", &[("temperature", "42".to_string())])
+            .unwrap();
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
 
         let seen = std::sync::Arc::clone(&calls);
         let shutdown = std::sync::Arc::clone(&p.shutdown);
         let start_tm = move |ready: Arc<AtomicBool>| {
-            let (calls, shutdown) = (std::sync::Arc::clone(&seen), std::sync::Arc::clone(&shutdown));
+            let (calls, shutdown) = (
+                std::sync::Arc::clone(&seen),
+                std::sync::Arc::clone(&shutdown),
+            );
             // Waiting before `run` goes on, so the stop finds it waiting.
             let (entered, waiting) = std::sync::mpsc::channel();
             let h = std::thread::Builder::new().spawn(move || {
@@ -1314,7 +1723,10 @@ mod tests {
                 let (told, _) = cv
                     .wait_timeout_while(told, Duration::from_secs(60), |told| !*told)
                     .unwrap();
-                calls.lock().unwrap().push(if *told { "aborted" } else { "timed out" });
+                calls
+                    .lock()
+                    .unwrap()
+                    .push(if *told { "aborted" } else { "timed out" });
                 ready.store(true, Ordering::Release);
             });
             waiting.recv().unwrap();
@@ -1322,14 +1734,30 @@ mod tests {
         };
 
         let begin = std::time::Instant::now();
-        run(&mut p, &m.db, &mut monitor, &args_from(&[]), None, &start_tm,
-            &|_i, _rx| panic!("leak detection is off"), stopped()).await;
+        run(
+            &mut p,
+            &m.db,
+            &mut monitor,
+            &args_from(&[]),
+            None,
+            &start_tm,
+            &|_i, _rx| panic!("leak detection is off"),
+            stopped(),
+        )
+        .await;
 
-        assert!(begin.elapsed() < Duration::from_secs(10), "took {:?}", begin.elapsed());
+        assert!(
+            begin.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            begin.elapsed()
+        );
         let calls = calls.lock().unwrap();
         let at = |c: &str| calls.iter().position(|x| *x == c);
         assert_eq!(calls.first(), Some(&"initialize"));
-        assert!(at("aborted").is_some(), "the wait has to have been ended: {calls:?}");
+        assert!(
+            at("aborted").is_some(),
+            "the wait has to have been ended: {calls:?}"
+        );
         assert!(at("notify") < at("aborted"), "{calls:?}");
         assert!(at("stop") < at("deinitialize"), "{calls:?}");
         assert_eq!(calls.last(), Some(&"deinitialize"), "{calls:?}");
@@ -1344,13 +1772,20 @@ mod tests {
     /// life of the process on every one of them.
     #[test]
     fn a_manager_that_refused_still_releases_the_policy() {
-        let mut refusing = Tm { refuse: true, ..Default::default() };
+        let mut refusing = Tm {
+            refuse: true,
+            ..Default::default()
+        };
         let calls = std::sync::Arc::clone(&refusing.calls);
         let ready = AtomicBool::new(false);
 
         tm_init_with(&mut refusing, &ready);
 
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize"], "it still has to be asked");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["initialize"],
+            "it still has to be asked"
+        );
         assert!(
             ready.load(Ordering::Acquire),
             "a manager that refused still has to let the policy run"
@@ -1363,7 +1798,10 @@ mod tests {
     #[test]
     fn a_refused_manager_is_logged_in_pythons_words() {
         let log = pmon_common::logging::capture();
-        let mut refusing = Tm { refuse: true, ..Default::default() };
+        let mut refusing = Tm {
+            refuse: true,
+            ..Default::default()
+        };
         tm_init_with(&mut refusing, &AtomicBool::new(false));
         assert!(log.logged(
             log::Level::Error,
@@ -1377,7 +1815,10 @@ mod tests {
             }
         }
         tm_init_with(&mut Unsupported, &AtomicBool::new(false));
-        assert!(log.logged(log::Level::Warn, "Thermal manager is not supported on this platform"));
+        assert!(log.logged(
+            log::Level::Warn,
+            "Thermal manager is not supported on this platform"
+        ));
     }
 
     /// And so does one that started.
@@ -1398,8 +1839,15 @@ mod tests {
         let log = pmon_common::logging::capture();
         let m = MockDb::new(false);
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
-        m.temperature.set("ASIC", &[("temperature", "42".to_string())]).unwrap();
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
+        m.temperature
+            .set("ASIC", &[("temperature", "42".to_string())])
+            .unwrap();
 
         run(
             &mut Tm::default(),
@@ -1414,7 +1862,10 @@ mod tests {
         .await;
 
         assert!(log.logged(log::Level::Error, "thermal manager init thread"));
-        assert!(m.temperature.get("ASIC").unwrap().is_none(), "the loop still ran and still cleared");
+        assert!(
+            m.temperature.get("ASIC").unwrap().is_none(),
+            "the loop still ran and still cleared"
+        );
     }
 
     /// The leak thread is started only where leak detection is on, it is
@@ -1430,13 +1881,22 @@ mod tests {
 
         let m = MockDb::new(false);
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
 
         run(
             &mut Tm::default(),
             &m.db,
             &mut monitor,
-            &args_from(&["--enable_liquid_cooling", "--liquid_cooling_update_interval", "0.25"]),
+            &args_from(&[
+                "--enable_liquid_cooling",
+                "--liquid_cooling_update_interval",
+                "0.25",
+            ]),
             None,
             &tm_up,
             &|interval, _rx| {
@@ -1451,7 +1911,10 @@ mod tests {
         .await;
 
         assert_eq!(*started.lock().unwrap(), vec![Duration::from_millis(250)]);
-        assert!(joined.load(std::sync::atomic::Ordering::SeqCst), "the thread must be joined");
+        assert!(
+            joined.load(std::sync::atomic::Ordering::SeqCst),
+            "the thread must be joined"
+        );
         // Python announces both at NOTICE and an operator reads the pair as
         // "leak detection is on"; saying only that it stopped leaves the far
         // more important half to be inferred from silence.
@@ -1469,7 +1932,12 @@ mod tests {
         let calls = std::sync::Arc::clone(&p.calls);
         let m = MockDb::new(false);
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
 
         run(
             &mut p,
@@ -1483,7 +1951,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(*calls.lock().unwrap(), vec!["initialize", "notify", "stop", "deinitialize"]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["initialize", "notify", "stop", "deinitialize"]
+        );
         assert!(
             log.logged(log::Level::Error, "leak monitoring is off"),
             "a safety function that did not start has to say so"
@@ -1500,8 +1971,16 @@ mod tests {
         let n = std::sync::Arc::clone(&started);
         let m = MockDb::new(false);
         let mut monitor = Monitor::with_env(
-            0.001, 0.001, 30.0, crate::polling::PollingIntervals::default(), false);
-        let cooled = ChassisInfo { is_liquid_cooled: true, ..Default::default() };
+            0.001,
+            0.001,
+            30.0,
+            crate::polling::PollingIntervals::default(),
+            false,
+        );
+        let cooled = ChassisInfo {
+            is_liquid_cooled: true,
+            ..Default::default()
+        };
 
         run(
             &mut Tm::default(),
@@ -1536,7 +2015,11 @@ mod tests {
             dpu_id: Some(9),
             ..Default::default()
         };
-        assert_eq!(slot_or_dpu_id_of(&chassis), Some(4), "a chassis is its slot");
+        assert_eq!(
+            slot_or_dpu_id_of(&chassis),
+            Some(4),
+            "a chassis is its slot"
+        );
 
         let dpu = ChassisInfo {
             is_smartswitch: true,
@@ -1548,7 +2031,11 @@ mod tests {
         assert_eq!(slot_or_dpu_id_of(&dpu), Some(3), "a DPU is its dpu id");
 
         // An NPU is a SmartSwitch but not a DPU, and a fixed switch is neither.
-        let npu = ChassisInfo { is_smartswitch: true, my_slot: Some(7), ..Default::default() };
+        let npu = ChassisInfo {
+            is_smartswitch: true,
+            my_slot: Some(7),
+            ..Default::default()
+        };
         assert_eq!(slot_or_dpu_id_of(&npu), None);
         assert_eq!(slot_or_dpu_id_of(&ChassisInfo::default()), None);
     }
@@ -1637,8 +2124,10 @@ mod tests {
             2,
             "one failed read, then one that recovered"
         );
-        assert!(log.logged(log::Level::Error, "cannot read leak profiles"),
-                "profiles that cannot be read disable the escalation timers, loudly");
+        assert!(
+            log.logged(log::Level::Error, "cannot read leak profiles"),
+            "profiles that cannot be read disable the escalation timers, loudly"
+        );
         assert!(log.logged(log::Level::Error, "leak detection is not running"));
         assert!(log.contains("sensor read recovered"));
     }
@@ -1653,8 +2142,14 @@ mod tests {
         let (tx, rx) = watch::channel(false);
         tx.send(true).unwrap();
         let began = std::time::Instant::now();
-        assert!(sleep_or_shutdown(Duration::from_secs(3600), &rx), "it stops, and says so");
-        assert!(began.elapsed() < Duration::from_secs(1), "and it does not wait an hour first");
+        assert!(
+            sleep_or_shutdown(Duration::from_secs(3600), &rx),
+            "it stops, and says so"
+        );
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "and it does not wait an hour first"
+        );
 
         // And with no shutdown asked for it sleeps the interval out and says
         // it did not stop.
@@ -1693,7 +2188,10 @@ mod tests {
             kind = &mut wait => panic!("a SIGHUP stopped the daemon ({kind:?})"),
             _ = tokio::time::sleep(Duration::from_millis(200)) => {}
         }
-        assert!(!log.contains("Caught signal 'SIGHUP'"), "and says nothing, as Python does");
+        assert!(
+            !log.contains("Caught signal 'SIGHUP'"),
+            "and says nothing, as Python does"
+        );
 
         raise("TERM");
         let kind = tokio::time::timeout(Duration::from_secs(10), wait)
@@ -1732,18 +2230,38 @@ mod tests {
         }))
         .unwrap();
 
-        sensor.set("leakage1", &[("leaking", "No".to_string())]).unwrap();
-        sensor.set("leakage2", &[("leaking", "No".to_string())]).unwrap();
-        system.set("system", &[("device_leak_status", "None".to_string())]).unwrap();
-        profile.set("rack", &[("type", "rack".to_string())]).unwrap();
+        sensor
+            .set("leakage1", &[("leaking", "No".to_string())])
+            .unwrap();
+        sensor
+            .set("leakage2", &[("leaking", "No".to_string())])
+            .unwrap();
+        system
+            .set("system", &[("device_leak_status", "None".to_string())])
+            .unwrap();
+        profile
+            .set("rack", &[("type", "rack".to_string())])
+            .unwrap();
 
         // A shutdown already asked for, so the loop leaves on its first check.
         let (tx, rx) = watch::channel(false);
         tx.send(true).unwrap();
-        leak_loop(&mut Leaky::default(), &tables, Duration::from_millis(1), false, rx);
+        leak_loop(
+            &mut Leaky::default(),
+            &tables,
+            Duration::from_millis(1),
+            false,
+            rx,
+        );
 
-        assert!(sensor.is_empty(), "LIQUID_COOLING_INFO must not outlive the thread");
-        assert!(system.is_empty(), "SYSTEM_LEAK_STATUS is what bmcctld cuts power on");
+        assert!(
+            sensor.is_empty(),
+            "LIQUID_COOLING_INFO must not outlive the thread"
+        );
+        assert!(
+            system.is_empty(),
+            "SYSTEM_LEAK_STATUS is what bmcctld cuts power on"
+        );
         assert!(profile.is_empty(), "LEAK_PROFILE goes with them");
     }
 }

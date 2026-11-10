@@ -13,8 +13,8 @@ resolver = "2"
 # sonic-swss and sonic-dash-ha take swss-common; Cargo.lock pins the commits.
 # sonic-buildimage builds against its own submodules instead (debian/rules).
 [workspace.dependencies]
-platform-api      = { git = "https://github.com/sonic-net/sonic-platform-common.git", branch = "master" }
-platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common.git", branch = "master" }
+platform-api      = { git = "https://github.com/sonic-net/sonic-platform-common.git", rev = "15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2" }
+platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common.git", rev = "15b0da6cc9453c6f4620f6bda7aee085d6c7a9f2" }
 swss-common       = { git = "https://github.com/sonic-net/sonic-swss-common.git", branch = "master" }
 
 # Profiles only take effect at the workspace root; cargo ignores them in a
