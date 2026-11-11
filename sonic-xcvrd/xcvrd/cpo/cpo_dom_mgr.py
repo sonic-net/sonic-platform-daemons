@@ -238,7 +238,7 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         """Called when a port change event is received
 
         A fault on a shared CPO device can flap every port it drives, and its flag
-        registers are clear-on-read, so reacting on a per-port basis would leave 
+        registers are clear-on-read, so reacting on a per-port basis would leave
         all but the first port reading already-cleared registers. Instead, queue
         one read-and-publish attempt per CPO device driving the flapped port, keyed by
         (device type, device id): the device's flags are then read once and

@@ -13,9 +13,7 @@ from xcvrd.cmis.cmis_manager_task import CmisManagerTask
 from xcvrd.cpo import cpo_state_task
 from xcvrd.cpo.cpo_manager_task import CpoManagerTask
 from xcvrd.cpo.cpo_state_task import CpoStateUpdateTask
-from xcvrd.cpo.db_utils import CPODOMDBUtils, CPOVDMDBUtils
 from xcvrd.cpo.cpo_dom_mgr import CpoDomInfoUpdateTask
-from xcvrd.cpo.xcvr_table_helper import CpoXcvrTableHelper
 from xcvrd.xcvrd import PHYSICAL_PORT_NOT_EXIST, SFP_EEPROM_NOT_READY
 from xcvrd.xcvrd_utilities import common, sfp_status_helper
 from xcvrd.xcvrd_utilities.port_event_helper import PortChangeEvent, PortMapping
