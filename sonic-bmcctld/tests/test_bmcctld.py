@@ -723,7 +723,7 @@ class TestSwitchHostController:
     )
     def test_gate_reread_at_the_commit_point_refuses_through_the_policy(
             self, action, method_name, chassis, controller, critical_event_checker):
-        """The under-lock re-read uses the real policy-aware predicate: a MAJOR
+        """The re-read before the platform call uses the real policy-aware predicate: a MAJOR
         Rack Manager alert whose configured action removes power refuses the raise,
         with nothing mocked on the checker."""
         critical_event_checker.policy_reader.get_leak_control_policy = MagicMock(
@@ -2088,8 +2088,6 @@ class TestGracefulShutdownOperation:
         assert outcome == (bmcctld.OP_RESULT_PREEMPTED, bmcctld.OP_REASON_PREEMPTED, False)
         graceful_shutdown.controller.power_off.assert_not_called()
 
-    # ---- I14: the HALT RPC cannot outlive the handshake deadline
-
     def test_classifier_exception_forces_the_leg_and_closes_the_requester(
             self, graceful_shutdown, chassis):
         operation, requester, factory = self._setup(graceful_shutdown, chassis)
@@ -2628,8 +2626,6 @@ class TestBmcEventHandlerRackMgrAlerts:
         if not queued:
             assert "Unknown action" in event_handler.log_warning.call_args.args[0]
 
-    # ---- I03: the abandoned flag alone keeps a woken handshake thread from sending the HALT
-
     def test_event_loop_stops_the_daemon_after_repeated_failures(self, event_handler, monkeypatch):
         monkeypatch.setattr(bmcctld, "EVENT_LOOP_FAILURE_LIMIT", 3)
         monkeypatch.setattr(bmcctld.time, "sleep", MagicMock())
@@ -3027,7 +3023,7 @@ class TestOpCancel:
 
 
 # --------------------------------------------------------------------------
-# Tests: BmcctldDaemon - dispatch, guard, records, supersession, startup drop
+# Tests: BmcctldDaemon - dispatch, guard, records, startup drop
 # --------------------------------------------------------------------------
 
 def _rm_table():
@@ -3140,8 +3136,6 @@ class TestBmcctldDaemonDispatch:
         assert daemon._event_log.log_notice.call_args.args[0].startswith(
             "STARTUP power_on dropped: its preconditions could not be read")
 
-    # ---- D19: a failed terminal record does not change what the requester is told
-
     def test_failed_terminal_record_still_reports_the_outcome(self, chassis):
         daemon = _make_daemon(chassis)
         daemon._event_log = MagicMock()
@@ -3152,8 +3146,6 @@ class TestBmcctldDaemonDispatch:
         callback.assert_called_once_with(True)
         assert any(c.args[0].startswith("OP_DONE action=power_on result=SUCCESS")
                    for c in daemon._event_log.log_notice.call_args_list)
-
-    # ---- B13: an unknown reading never skips a power-on either
 
     @pytest.mark.parametrize("action", [bmcctld.ACTION_POWER_OFF, bmcctld.ACTION_GRACEFUL_SHUTDOWN])
     def test_stale_powered_off_label_never_skips_a_removal_while_the_host_reads_on(
@@ -3166,8 +3158,6 @@ class TestBmcctldDaemonDispatch:
             return_value=(bmcctld.OP_RESULT_SUCCESS_FORCED, bmcctld.OP_REASON_TIMEOUT_ZERO, True))
         daemon._dispatch(_make_item(action, "leak"))
         assert daemon.controller.power_off.call_count + daemon.graceful_shutdown.execute.call_count == 1
-
-    # ---- A01: a cancel seen at entry reads and writes nothing
 
     def test_operation_start_reopens_the_record(self, chassis):
         daemon = _make_daemon(chassis)
@@ -3185,8 +3175,6 @@ class TestBmcctldDaemonDispatch:
         assert seen[bmcctld.FIELD_OP_TRIGGER] == "new"
         assert seen[bmcctld.FIELD_OP_REQUEST_ID] != TEST_UUID1
 
-    # ---- B14: the guard-skip detail of the OP_DONE line
-
     def test_guard_skip_is_logged_with_its_detail(self, chassis):
         chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
         daemon = _make_daemon(chassis)
@@ -3194,8 +3182,6 @@ class TestBmcctldDaemonDispatch:
         daemon._dispatch(_make_item(bmcctld.ACTION_POWER_ON, "dup-event"))
         assert daemon._event_log.log_notice.call_args.args[0].endswith(
             "trigger=dup-event detail=guard_skip")
-
-    # ---- A30: no Switch-Host module
 
     def test_failed_raise_reports_failure_to_the_requester(self, chassis):
         daemon = _make_daemon(chassis)
@@ -4138,8 +4124,7 @@ class TestGracefulThread:
         clock = FakeClock(auto_advance=0.01)
 
         def jump_past_the_hard_limit():
-            # deadline (1 s) + the join allowance + 1 s: the old limit added the 30 s RPC
-            # timeout on top and would not have ended the wait here
+            # deadline (1 s) + the join allowance + 1 s
             clock.advance(1 + bmcctld.HANDSHAKE_JOIN_SECS + 1)
 
         requester = WedgedRequester(release, on_first_poll=jump_past_the_hard_limit)
@@ -4201,8 +4186,6 @@ class TestGracefulThread:
             for thread in _graceful_threads():
                 thread.join(3)
         assert requester.halts == []
-
-    # ---- I06: the deadline rule applies to rpc_failure only
 
     def test_second_graceful_request_while_a_handshake_lingers_is_forced(self, chassis):
         daemon = _graceful_daemon(chassis)
@@ -4366,7 +4349,7 @@ class TestInlinePreemption:
         second_callback.assert_called_once_with(True)
 
     def test_power_call_lines_and_guard_detail_are_the_published_strings(self, chassis):
-        """The lab tests parse these; a change here changes them too."""
+        """System tests read these strings; a change here changes them too."""
         assert bmcctld.GUARD_SKIP_DETAIL == "guard_skip"
         daemon = _make_daemon(chassis)
         daemon.controller.init_host_state()
@@ -4797,7 +4780,7 @@ class TestOperationExceptionRecovery:
     )
     def test_confirmed_call_with_a_failing_final_label_write_records_success(
             self, action, initial_status, final_state, chassis):
-        """The label write after a confirmed call catches its own failure (I9): the
+        """The label write after a confirmed call catches its own failure: the
         physical result stands and the operation is SUCCESS."""
         daemon = self._make_daemon(chassis)
         chassis.switch_host.set_oper_status(initial_status)
@@ -5138,8 +5121,6 @@ class TestBmcctldDaemonInitialSequence:
             bmcctld.CMD_STATUS_FAILED, "ERROR")
         assert _rm_row(daemon, "CMD_NEW") == {bmcctld.FIELD_COMMAND: bmcctld.CMD_POWER_ON}
         assert daemon._rm_removal_recorded() is False
-
-    # ---- D16: an automatic raise whose preconditions cannot be read is not taken
 
     def test_rm_removal_recorded_is_false_on_an_empty_table(self, chassis):
         daemon = self._make_daemon(chassis)
