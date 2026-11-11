@@ -1421,6 +1421,9 @@ class TestLiquidCoolingUpdater(object):
         sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
         assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
         assert sys_fvs['test_leak'] == 'Disabled'
+        # The masked test CRITICAL is not logged or tracked
+        assert not self._event_logged(updater.event_logger.log_error, 'CRITICAL leak reported')
+        assert 'leakage1' not in updater.critical_sensors
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_reads_each_sensor_once(self, mock_try_get):
@@ -1456,6 +1459,8 @@ class TestLiquidCoolingUpdater(object):
         sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
         assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
         assert sys_fvs['test_leak'] == 'Disabled'
+        assert not self._event_logged(updater.event_logger.log_error, 'CRITICAL leak reported')
+        assert 'leakage2' not in updater.critical_sensors
         sensor_fvs = [c[0][1].fv_dict for c in updater.sensor_table.set.call_args_list
                       if c[0][0] == 'leakage2'][-1]
         assert sensor_fvs['test_leak'] == 'Enabled'

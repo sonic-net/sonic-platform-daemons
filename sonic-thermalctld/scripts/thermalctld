@@ -784,7 +784,14 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 status = None
                 concurrent_minor_leaks = 0
                 major_escalated = False
-            in_aggregate = not (sensor_is_test and physical_leak)
+
+            # sensor_is_test=0, physical_leak=0: in (a real leak sensor, the first one seen)
+            # sensor_is_test=1, physical_leak=0: in (test leaks alone)
+            # sensor_is_test=0, physical_leak=1: in (a real leak sensor)
+            # sensor_is_test=1, physical_leak=1: out (a test sensor while a real leak exists)
+
+            # leak_aggregate is 0 only for a test leak seen together with a real leak
+            leak_aggregate = not (sensor_is_test and physical_leak)
 
             now = datetime.now()
 
@@ -813,7 +820,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
                     # Count concurrent minor leaks (for the MIN-N MAJOR rule) and
                     # escalate a minor leak that persists beyond MAX-T to MAJOR.
-                    if sensor_leak_severity == LeakSeverity.MINOR and in_aggregate:
+                    if sensor_leak_severity == LeakSeverity.MINOR and leak_aggregate:
                         concurrent_minor_leaks += 1
                         leak_start_time = self.leaking_sensors[sensor_name]
                         profile = sensor.get_leak_profile()
@@ -823,7 +830,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         if 0 < max_minor_secs < inf:
                             max_minor = leak_start_time + timedelta(seconds=max_minor_secs)
                             if max_minor <= now:
-                                major_escalated = in_aggregate or major_escalated
+                                major_escalated = leak_aggregate or major_escalated
                                 if sensor_name not in self.escalated_sensors:
                                     self.event_logger.log_warning(
                                         'Leak on sensor {} escalated from MINOR to MAJOR after {}s'.format(
@@ -847,7 +854,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                                 sensor_name, new_severity))
 
                     # Log CRITICAL once per leak episode.
-                    if sensor_leak_severity == LeakSeverity.CRITICAL and sensor_name not in self.critical_sensors:
+                    if (leak_aggregate and sensor_leak_severity == LeakSeverity.CRITICAL
+                            and sensor_name not in self.critical_sensors):
                         msg = 'CRITICAL leak reported by sensor {}'.format(sensor_name)
                         self.event_logger.log_error(msg)
                         self.critical_sensors.add(sensor_name)
@@ -855,7 +863,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                     # System severity follows precedence CRITICAL > MINOR here; the
                     # MAJOR aggregate is applied after the loop from the minor count
                     # and time-based escalation.
-                    if not in_aggregate:
+                    if not leak_aggregate:
                         pass
                     elif sensor_leak_severity == LeakSeverity.CRITICAL:
                         status = SystemLeakStatus.CRITICAL
