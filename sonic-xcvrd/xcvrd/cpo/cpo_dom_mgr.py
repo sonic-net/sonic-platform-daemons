@@ -3,6 +3,7 @@
 import datetime
 
 try:
+    from swsscommon import swsscommon
     from ..dom.dom_mgr import DomInfoUpdateTask, PORT_UPDATE_EVENT_SELECT_TIMEOUT_FAST_MSECS
     from ..xcvrd_utilities import common
     from ..xcvrd_utilities import port_event_helper
@@ -84,8 +85,9 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         if firmware_info is None:
             self.log_warning("Failed to read {} for port {}, skipping publish".format(log_context, logical_port_name))
             return
+        fvs = swsscommon.FieldValuePairs([(k, str(v)) for k, v in firmware_info.items()])
         for lport in self.port_mapping.get_physical_to_logical(physical_port):
-            self.dom_db_utils.post_diagnostic_values_from_dict_to_db(lport, table, dict(firmware_info))
+            table.set(lport, fvs)
 
     def collect_and_publish_data(self, port_change_observer):
         # Module-scope (non-banked) data read so far in this polling pass, keyed
@@ -178,10 +180,6 @@ class CpoDomInfoUpdateTask(DomInfoUpdateTask):
         # remaining categories to the first subport's, matching the existing
         # DomInfoUpdateTask convention for breakout groups.
         # TODO: update this logic to publish to all logical interfaces per the CPO xcvrd HLD.
-        # Firmware info's dict is copied since publishing beautifies it in place,
-        # so subsequent publishes using this data would be affected. Other call-sites
-        # are unaffected by this since they implicitly create a copy through merging
-        # the banked and non-banked data into a single dict.
         self._publish_firmware_info(physical_port, logical_port_name,
                                     self.xcvr_table_helper.get_firmware_info_tbl(asic_index),
                                     "Firmware info", oe_module['firmware_info'])

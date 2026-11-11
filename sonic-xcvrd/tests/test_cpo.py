@@ -719,6 +719,11 @@ class TestCpoDomInfoUpdateTask:
         for call_args in task.dom_db_utils.post_flag_values_from_dict_to_db.call_args_list:
             logical_port, values, flag_tables = call_args.args[:3]
             published[(logical_port, flag_tables.flag_tbl)] = values
+        for table in (task.xcvr_table_helper.get_firmware_info_tbl(0),
+                      task.xcvr_table_helper.get_els_firmware_info_tbl(0)):
+            for call_args in table.set.call_args_list:
+                logical_port, fvs = call_args.args
+                published[(logical_port, table)] = dict(fvs)
         return published
 
     def test_collect_and_publish_data(self):
