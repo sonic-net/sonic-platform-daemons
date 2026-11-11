@@ -1058,10 +1058,32 @@ class TestXcvrdScript(object):
             clear_time_tbl=Table('STATE_DB', 'clear_time_tbl'),
         )
 
-        db_utils.post_flag_values_from_dict_to_db('Ethernet0', {'tx1fault': True}, flag_tables, 'DOM flags')
+        # Emulate first publish from the DOM polling, setting the baseline to False.
+        db_utils.post_flag_values_from_dict_to_db('Ethernet0', {'tx1fault': False}, flag_tables, 'DOM flags')
+        assert dict(flag_tables.flag_tbl.get('Ethernet0')[1])['tx1fault'] == 'False'
+        assert dict(flag_tables.change_count_tbl.get('Ethernet0')[1]) == {'tx1fault': '0'}
+        assert dict(flag_tables.set_time_tbl.get('Ethernet0')[1]) == {'tx1fault': db_utils.NEVER}
+        assert dict(flag_tables.clear_time_tbl.get('Ethernet0')[1]) == {'tx1fault': db_utils.NEVER}
+
+        # Test flag being set
+        set_time = 'Wed Nov 11 00:00:00 2026'
+        with patch.object(db_utils, 'get_current_time', return_value=set_time):
+            db_utils.post_flag_values_from_dict_to_db('Ethernet0', {'tx1fault': True}, flag_tables, 'DOM flags')
 
         assert dict(flag_tables.flag_tbl.get('Ethernet0')[1])['tx1fault'] == 'True'
-        assert dict(flag_tables.change_count_tbl.get('Ethernet0')[1]) == {'tx1fault': '0'}
+        assert dict(flag_tables.change_count_tbl.get('Ethernet0')[1]) == {'tx1fault': '1'}
+        assert dict(flag_tables.set_time_tbl.get('Ethernet0')[1]) == {'tx1fault': set_time}
+        assert dict(flag_tables.clear_time_tbl.get('Ethernet0')[1]) == {'tx1fault': db_utils.NEVER}
+
+        # Test flag being cleared
+        clear_time = 'Wed Nov 11 00:01:00 2026'
+        with patch.object(db_utils, 'get_current_time', return_value=clear_time):
+            db_utils.post_flag_values_from_dict_to_db('Ethernet0', {'tx1fault': False}, flag_tables, 'DOM flags')
+
+        assert dict(flag_tables.flag_tbl.get('Ethernet0')[1])['tx1fault'] == 'False'
+        assert dict(flag_tables.change_count_tbl.get('Ethernet0')[1]) == {'tx1fault': '2'}
+        assert dict(flag_tables.set_time_tbl.get('Ethernet0')[1]) == {'tx1fault': set_time}
+        assert dict(flag_tables.clear_time_tbl.get('Ethernet0')[1]) == {'tx1fault': clear_time}
 
     def test_post_port_dom_thresholds_to_db(self):
         def mock_get_transceiver_dom_thresholds(physical_port):
