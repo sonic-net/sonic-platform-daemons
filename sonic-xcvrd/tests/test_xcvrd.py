@@ -6547,52 +6547,6 @@ class TestXcvrdScript(object):
         logical_port_name_to_physical_port_list = MagicMock()
         get_asic_id_for_logical_port = MagicMock()
 
-    @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
-    @patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=MockPortMapping))
-    @patch('xcvrd.xcvrd.common.get_pluggable_obj_dict', MagicMock(return_value={}))
-    @patch('xcvrd.xcvrd.common.get_cpo_obj_dict', MagicMock(return_value={}))
-    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', '/tmp')))
-    @patch('swsscommon.swsscommon.WarmStart', MagicMock())
-    @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
-    @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
-    def test_DaemonXcvrd_init_deinit_fastboot_enabled(self, mock_del_port_sfp_dom_info_from_db):
-        xcvrd = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        with patch("subprocess.check_output") as mock_run:
-            mock_run.return_value = "true"
-            xcvrd.initialize_port_init_control_fields_in_port_table = MagicMock()
-            xcvrd.remove_stale_transceiver_info = MagicMock()
-
-            xcvrd.init()
-
-            status_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
-            status_sw_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=status_sw_tbl)
-            xcvrd.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=MagicMock)
-            xcvrd.xcvr_table_helper.get_dom_temperature_tbl = MagicMock(return_value=MagicMock)
-            xcvrd.xcvr_table_helper.get_dom_flag_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_dom_flag_change_count_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_dom_flag_set_time_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_dom_flag_clear_time_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_dom_threshold_tbl = MagicMock(return_value=MagicMock)
-            xcvrd.xcvr_table_helper.get_vdm_threshold_tbl = MagicMock(return_value=MagicMock)
-            xcvrd.xcvr_table_helper.get_vdm_real_value_tbl = MagicMock(return_value=MagicMock)
-            xcvrd.xcvr_table_helper.get_vdm_flag_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_vdm_flag_change_count_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_vdm_flag_set_time_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_vdm_flag_clear_time_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_status_flag_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_status_flag_change_count_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_status_flag_set_time_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_status_flag_clear_time_tbl = MagicMock()
-            xcvrd.xcvr_table_helper.get_pm_tbl = MagicMock(return_value=MagicMock)
-            xcvrd.xcvr_table_helper.get_firmware_info_tbl = MagicMock(return_value=MagicMock)
-
-            xcvrd.deinit()
-
-            assert (status_tbl, status_sw_tbl) not in mock_del_port_sfp_dom_info_from_db.call_args_list
-
-
     @pytest.mark.parametrize('cpo_obj_dict, expected_helper_type', [
         ({}, XcvrTableHelper),
         ({1: MagicMock()}, CpoXcvrTableHelper),
@@ -6614,53 +6568,48 @@ class TestXcvrdScript(object):
 
         assert type(xcvrdaemon.xcvr_table_helper) is expected_helper_type
 
-    @patch('xcvrd.xcvrd.DaemonXcvrd.load_platform_util', MagicMock())
-    @patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=MockPortMapping))
-    @patch('sonic_py_common.device_info.get_paths_to_platform_and_hwsku_dirs', MagicMock(return_value=('/tmp', '/tmp')))
-    @patch('xcvrd.xcvrd.DaemonXcvrd.wait_for_port_config_done', MagicMock())
-    @patch('xcvrd.xcvrd.common.get_pluggable_obj_dict', MagicMock(return_value={}))
-    @patch('xcvrd.xcvrd.common.get_cpo_obj_dict', MagicMock(return_value={}))
-    @patch('subprocess.check_output', MagicMock(return_value='false'))
-    @patch('xcvrd.xcvrd.common.is_syncd_warm_restore_complete', MagicMock(return_value=False))
+    DEINIT_NEVER_DELETED_TABLES = {'TRANSCEIVER_INFO', 'TRANSCEIVER_ELS_INFO'}
+    DEINIT_WARM_REBOOT_KEPT_TABLES = {'TRANSCEIVER_STATUS', 'TRANSCEIVER_STATUS_SW', 'TRANSCEIVER_ELS_STATUS'}
+
+    @pytest.mark.parametrize('helper_type', [XcvrTableHelper, CpoXcvrTableHelper])
+    @pytest.mark.parametrize('is_warm_reboot, is_fast_reboot, kept_tables', [
+        (False, False, DEINIT_NEVER_DELETED_TABLES),
+        (True, False, DEINIT_NEVER_DELETED_TABLES | DEINIT_WARM_REBOOT_KEPT_TABLES),
+        (False, True, DEINIT_NEVER_DELETED_TABLES | DEINIT_WARM_REBOOT_KEPT_TABLES),
+    ])
     @patch('xcvrd.xcvrd_utilities.common.del_port_sfp_dom_info_from_db')
-    def test_DaemonXcvrd_init_deinit_cold(self, mock_del_port_sfp_dom_info_from_db):
-        xcvrd.platform_chassis = MagicMock()
+    def test_DaemonXcvrd_deinit_deletes_tables(self, mock_del_port_sfp_dom_info_from_db,
+                                               is_warm_reboot, is_fast_reboot, kept_tables, helper_type):
+        logical_ports = ['Ethernet0', 'Ethernet8']
+        port_mapping = MagicMock()
+        port_mapping.logical_port_list = logical_ports
+        port_mapping.get_asic_id_for_logical_port.return_value = 0
 
+        created_tables = []
+
+        def create_table(db, table_name):
+            created_tables.append(table_name)
+            return table_name
+
+        sys.modules['xcvrd.xcvrd'].platform_chassis = MagicMock()
         xcvrdaemon = DaemonXcvrd(SYSLOG_IDENTIFIER)
-        with patch("subprocess.check_output") as mock_run:
-            mock_run.return_value = "false"
-            xcvrdaemon.initialize_port_init_control_fields_in_port_table = MagicMock()
-            xcvrdaemon.remove_stale_transceiver_info = MagicMock()
+        with patch('swsscommon.swsscommon.Table', side_effect=create_table):
+            xcvrdaemon.xcvr_table_helper = helper_type([''])
 
-            xcvrdaemon.init()
+        transceiver_tables = [name for name in created_tables if name.startswith('TRANSCEIVER_')]
+        expected_tables = sorted(name for name in transceiver_tables if name not in kept_tables)
+        assert expected_tables
 
-            status_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_status_tbl = MagicMock(return_value=status_tbl)
-            status_sw_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_status_sw_tbl = MagicMock(return_value=status_sw_tbl)
-            xcvrdaemon.xcvr_table_helper.get_dom_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_dom_temperature_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_dom_threshold_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_dom_flag_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_dom_flag_change_count_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_dom_flag_set_time_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_dom_flag_clear_time_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_vdm_threshold_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_vdm_real_value_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_vdm_flag_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_vdm_flag_change_count_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_vdm_flag_set_time_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_vdm_flag_clear_time_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_status_flag_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_status_flag_change_count_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_status_flag_set_time_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_status_flag_clear_time_tbl = MagicMock()
-            xcvrdaemon.xcvr_table_helper.get_pm_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_firmware_info_tbl = MagicMock(return_value=MagicMock)
-            xcvrdaemon.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=MagicMock)
-
+        with patch('xcvrd.xcvrd_utilities.port_event_helper.get_port_mapping', MagicMock(return_value=port_mapping)), \
+             patch('xcvrd.xcvrd.common.is_syncd_warm_restore_complete', MagicMock(return_value=is_warm_reboot)), \
+             patch('xcvrd.xcvrd.common.is_fast_reboot_enabled', MagicMock(return_value=is_fast_reboot)):
             xcvrdaemon.deinit()
-            assert mock_del_port_sfp_dom_info_from_db.call_any_with(status_tbl, status_sw_tbl)
+
+        calls = mock_del_port_sfp_dom_info_from_db.call_args_list
+        assert [call.args[0] for call in calls] == logical_ports
+        for call in calls:
+            assert call.args[1] is port_mapping
+            assert sorted(call.args[2]) == expected_tables
 
     def test_DaemonXcvrd_signal_handler(self):
         xcvrd.platform_chassis = MagicMock()
