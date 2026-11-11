@@ -802,6 +802,15 @@ class TestCpoDomInfoUpdateTask:
         assert published[('Ethernet16', task.xcvr_table_helper.get_els_status_flag_tbl(0))] == \
             {'lane_summary_fault': 'els_module1', 'fault_flag_lane1': 'els_lane1'}
 
+    def test_firmware_info_is_published_to_every_subport(self):
+        task = self.make_task(self.make_devices())
+        task.port_mapping.handle_port_change_event(PortChangeEvent('Ethernet4', 1, 0, PortChangeEvent.PORT_ADD))
+        published = self.run_collect_and_publish(task)
+
+        for table in (task.xcvr_table_helper.get_firmware_info_tbl(0),
+                      task.xcvr_table_helper.get_els_firmware_info_tbl(0)):
+            assert published[('Ethernet4', table)] == published[('Ethernet0', table)]
+
     @pytest.mark.parametrize('failed_read', [
         'get_non_banked_transceiver_dom_real_value',
         'get_banked_transceiver_dom_real_value',
