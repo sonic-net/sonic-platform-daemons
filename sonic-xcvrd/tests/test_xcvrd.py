@@ -1047,6 +1047,22 @@ class TestXcvrdScript(object):
                     assert field_value_pairs_to_dict(flag_change_count_table.set.call_args[0][1]) == {field_name: expected_change_count}
                     assert field_value_pairs_to_dict(flag_last_clear_time_table.set.call_args[0][1]) == {field_name: expected_clear_time}
 
+    def test_post_flag_values_from_dict_to_db(self):
+        port_mapping = PortMapping()
+        port_mapping.handle_port_change_event(PortChangeEvent('Ethernet0', 1, 0, PortChangeEvent.PORT_ADD))
+        db_utils = DBUtils({1: MagicMock()}, port_mapping, threading.Event(), MagicMock())
+        flag_tables = FlagTables(
+            flag_tbl=Table('STATE_DB', 'flag_tbl'),
+            change_count_tbl=Table('STATE_DB', 'change_count_tbl'),
+            set_time_tbl=Table('STATE_DB', 'set_time_tbl'),
+            clear_time_tbl=Table('STATE_DB', 'clear_time_tbl'),
+        )
+
+        db_utils.post_flag_values_from_dict_to_db('Ethernet0', {'tx1fault': True}, flag_tables, 'DOM flags')
+
+        assert dict(flag_tables.flag_tbl.get('Ethernet0')[1])['tx1fault'] == 'True'
+        assert dict(flag_tables.change_count_tbl.get('Ethernet0')[1]) == {'tx1fault': '0'}
+
     def test_post_port_dom_thresholds_to_db(self):
         def mock_get_transceiver_dom_thresholds(physical_port):
             return {
