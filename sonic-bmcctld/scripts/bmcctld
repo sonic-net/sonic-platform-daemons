@@ -1384,7 +1384,11 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         self.log_info("STARTUP: Switch-Host oper_status={}".format(oper_status))
 
         if str(oper_status).upper() != SWITCH_HOST_ONLINE:
-            self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
+            boot_uptime = time.clock_gettime(time.CLOCK_BOOTTIME)
+            self._event_log.log_notice(
+                "STARTUP: Switch-Host OFFLINE — issuing power_on, "
+                "boot_uptime={:.6f}s".format(boot_uptime)
+            )
             self.controller.power_on()
         else:
             self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
