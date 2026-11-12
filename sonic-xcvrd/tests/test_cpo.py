@@ -215,7 +215,8 @@ class TestCpoManager:
             port_mapping.handle_port_change_event(PortChangeEvent(lport, pport, 0, PortChangeEvent.PORT_ADD))
 
         with patch.object(cmis_manager_task, 'XcvrTableHelper'), \
-             patch.object(common, 'is_fast_reboot_enabled', return_value=False):
+             patch.object(common, 'is_fast_reboot_enabled', return_value=False), \
+             patch.object(common, 'is_syncd_warm_restore_complete', return_value=False):
             return CpoManagerTask(DEFAULT_NAMESPACE, port_mapping, port_obj_dict,
                                   threading.Event(), skip_cpo_mgr=skip_cpo_mgr)
 

@@ -1266,12 +1266,13 @@ class CmisManagerTask(threading.Thread):
 
                         if module_precoding:
                             if not self._api_supports_module_precoding(api):
-                                self.log_error("{}: module precoding {} configured but not supported "
-                                               "by the xcvr API".format(lport, module_precoding))
+                                self.log_notice("{}: module precoding {} configured but not supported "
+                                                "by the xcvr API".format(lport, module_precoding))
                             elif not api.set_module_precoding(module_precoding):
-                                # Not fatal: continue the datapath init without the configured precoding
                                 self.log_error("{}: failed to apply module precoding {}".format(
                                     lport, module_precoding))
+                                self.force_cmis_reinit(lport, retries + 1)
+                                return
                             else:
                                 self.log_notice("{}: applied module precoding settings {}".format(
                                     lport, module_precoding))

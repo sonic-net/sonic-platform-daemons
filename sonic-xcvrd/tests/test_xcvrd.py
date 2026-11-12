@@ -4048,13 +4048,15 @@ class TestXcvrdScript(object):
                                                           'scs_apply_datapath_init', 'set_application',
                                                           'get_manufacturer', 'get_model']))
         task = self._ap_conf_task(mock_xcvr_api)
+        task.log_notice = MagicMock()
         with patch('xcvrd.xcvrd_utilities.common.get_cmis_state_from_state_db', return_value=CMIS_STATE_AP_CONF), \
              patch('xcvrd.xcvrd_utilities.optics_si_parser.optics_si_present', return_value=True), \
              patch('xcvrd.xcvrd_utilities.optics_si_parser.fetch_optics_si_setting',
                    return_value={'ModulePrecoding': {'TP1': False}}):
             task.process_cmis_state_machine('Ethernet0')
 
-        assert any('not supported' in str(c) for c in task.log_error.call_args_list)
+        assert any('not supported' in str(c) for c in task.log_notice.call_args_list)
+        task.log_error.assert_not_called()
         mock_xcvr_api.stage_custom_si_settings.assert_not_called()
         mock_xcvr_api.set_application.assert_called_once_with(0x0f, 1, 0)
 
@@ -4111,7 +4113,7 @@ class TestXcvrdScript(object):
         task.update_port_transceiver_status_table_sw_cmis_state.assert_called_with('Ethernet0', CMIS_STATE_INSERTED)
         assert task.port_dict['Ethernet0']['cmis_retries'] == 1
 
-    def test_CmisManagerTask_ap_conf_module_precoding_failure_not_fatal(self):
+    def test_CmisManagerTask_ap_conf_module_precoding_failure(self):
         mock_xcvr_api = self._ap_conf_api()
         mock_xcvr_api.is_module_precoding_supported.return_value = True
         mock_xcvr_api.set_module_precoding.return_value = False
@@ -4124,9 +4126,9 @@ class TestXcvrdScript(object):
             task.process_cmis_state_machine('Ethernet0')
 
         assert any('failed to apply module precoding' in str(c) for c in task.log_error.call_args_list)
-        mock_xcvr_api.set_application.assert_called_once_with(0x0f, 1, 1)
-        task.update_port_transceiver_status_table_sw_cmis_state.assert_called_with('Ethernet0', CMIS_STATE_DP_INIT)
-        assert task.port_dict['Ethernet0']['cmis_retries'] == 0
+        mock_xcvr_api.set_application.assert_not_called()
+        task.update_port_transceiver_status_table_sw_cmis_state.assert_called_with('Ethernet0', CMIS_STATE_INSERTED)
+        assert task.port_dict['Ethernet0']['cmis_retries'] == 1
 
     @pytest.mark.parametrize("ifname, expected", [
         ('1.6TBASE-CR8 (Clause179)', 1600000),
