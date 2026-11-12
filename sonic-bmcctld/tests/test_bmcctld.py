@@ -855,9 +855,9 @@ class TestPolicyReader:
     def test_certificate_defaults_and_partial_overrides(self, field, policy_reader):
         table = Table("CONFIG_DB", "GNMI_CLIENT")
         expected = {
-            "ca_crt": "/etc/sonic/credential/gnmi_root.cer",
-            "client_crt": "/etc/sonic/credential/gnmi_client.cer",
-            "client_key": "/etc/sonic/credential/gnmi_client.key",
+            "ca_crt": "/etc/sonic/credentials/gnmi_root.cer",
+            "client_crt": "/etc/sonic/credentials/gnmi_client.cer",
+            "client_key": "/etc/sonic/credentials/gnmi_client.key",
         }
         if field:
             _set_table_entry(table, "certs", {field: "/etc/sonic/custom.pem"})

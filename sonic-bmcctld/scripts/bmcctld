@@ -364,9 +364,9 @@ DEFAULT_SWITCH_HOST_GNMI_PORT = 8080
 GNOI_SERVER_NAME = "switch-host.bmc-link.sonic"
 GNMI_CLIENT_TABLE = "GNMI_CLIENT"
 DEFAULT_GNOI_CERT_PATHS = {
-    "ca_crt": "/etc/sonic/credential/gnmi_root.cer",
-    "client_crt": "/etc/sonic/credential/gnmi_client.cer",
-    "client_key": "/etc/sonic/credential/gnmi_client.key",
+    "ca_crt": "/etc/sonic/credentials/gnmi_root.cer",
+    "client_crt": "/etc/sonic/credentials/gnmi_client.cer",
+    "client_key": "/etc/sonic/credentials/gnmi_client.key",
 }
 TAG_RE = r"\[bmc-req:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]"
 
@@ -1063,7 +1063,7 @@ class PolicyReader(EventLogger):
         return DEFAULT_SHUTDOWN_DELAY_SECS
 
     def get_gnoi_cert_paths(self):
-        """Client credential paths: CONFIG_DB GNMI_CLIENT|certs, else the /etc/sonic/credential defaults.
+        """Client credential paths: CONFIG_DB GNMI_CLIENT|certs, else the /etc/sonic/credentials defaults.
 
         Nothing else is consulted, so a BMC without link credentials is not_qualified.
         """
