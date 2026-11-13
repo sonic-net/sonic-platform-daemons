@@ -159,8 +159,9 @@ class TestDaemonStorage(object):
         mock_state_db = MagicMock()
         
         # First call returns STATE_DB successfully, second call fails for CONFIG_DB
-        def side_effect_fn(db_name, use_tcp=True):
+        def side_effect_fn(db_name, use_tcp=True, authenticate=False):
             assert use_tcp is False
+            assert authenticate == (db_name == "STATE_DB")
             if db_name == "STATE_DB":
                 return mock_state_db
             elif db_name == "CONFIG_DB":
@@ -182,8 +183,9 @@ class TestDaemonStorage(object):
         mock_state_db = MagicMock()
         
         # Only STATE_DB connection succeeds, CONFIG_DB fails
-        def side_effect_fn(db_name, use_tcp=True):
+        def side_effect_fn(db_name, use_tcp=True, authenticate=False):
             assert use_tcp is False
+            assert authenticate == (db_name == "STATE_DB")
             if db_name == "STATE_DB":
                 return mock_state_db
             elif db_name == "CONFIG_DB":
@@ -211,8 +213,9 @@ class TestDaemonStorage(object):
         mock_config_db = MagicMock()
         
         # Setup successful connection initially
-        def side_effect_fn(db_name, use_tcp=True):
+        def side_effect_fn(db_name, use_tcp=True, authenticate=False):
             assert use_tcp is False
+            assert authenticate == (db_name == "STATE_DB")
             if db_name == "STATE_DB":
                 return mock_state_db
             elif db_name == "CONFIG_DB":
