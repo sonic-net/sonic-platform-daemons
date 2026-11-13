@@ -43,6 +43,8 @@ pub struct Updater {
     first_run: bool,
     /// What has been published, so teardown can take it away again.
     published: BTreeSet<String>,
+    /// A first/presence-change fan read that must be retried with details.
+    pending_fan_details: BTreeSet<DeviceKey>,
 }
 
 /// Hand-written because a derived `Default` would start with `first_run:
@@ -54,6 +56,7 @@ impl Default for Updater {
             status: BTreeMap::new(),
             first_run: true,
             published: BTreeSet::new(),
+            pending_fan_details: BTreeSet::new(),
         }
     }
 }
@@ -61,11 +64,12 @@ impl Default for Updater {
 impl Updater {
     pub fn psu_needs_fan_details(&self, row: &PsuInfo) -> bool {
         row.presence
-            && self
-                .status
-                .get(&row.name)
-                .map(|s| s.presence != row.presence)
-                .unwrap_or(true)
+            && (self.pending_fan_details.contains(&row.key)
+                || self
+                    .status
+                    .get(&row.name)
+                    .map(|s| s.presence != row.presence)
+                    .unwrap_or(true))
     }
     pub fn needs_fan_details(&self, psus: &[PsuInfo]) -> bool {
         psus.iter().any(|row| self.psu_needs_fan_details(row))
@@ -83,6 +87,16 @@ impl Updater {
         psus: &[PsuInfo],
         fans: &[FanInfo],
         tables: &Tables<'_>,
+    ) -> Vec<LedWrite> {
+        self.refresh_with_unavailable_fans(psus, fans, tables, &BTreeSet::new())
+    }
+
+    pub fn refresh_with_unavailable_fans(
+        &mut self,
+        psus: &[PsuInfo],
+        fans: &[FanInfo],
+        tables: &Tables<'_>,
+        unavailable: &BTreeSet<DeviceKey>,
     ) -> Vec<LedWrite> {
         // Rebuilt every pass rather than kept: the keys can be removed by
         // something else -- thermalctld's own teardown does it -- and Python
@@ -114,7 +128,14 @@ impl Updater {
         // `psud:try_get`'s default, which swallows any exception, not only
         // NotImplementedError; nothing is logged, as nothing is in Python.
         for row in psus {
-            if let Some(led) = self.refresh_one(row, psus, fans, tables, &mut threshold_logged) {
+            if let Some(led) = self.refresh_one(
+                row,
+                psus,
+                fans,
+                tables,
+                !unavailable.contains(&row.key),
+                &mut threshold_logged,
+            ) {
                 leds.push(led);
             }
             self.published.insert(row.name.clone());
@@ -129,6 +150,7 @@ impl Updater {
         all: &[PsuInfo],
         fans: &[FanInfo],
         tables: &Tables<'_>,
+        fans_available: bool,
         threshold_logged: &mut bool,
     ) -> Option<LedWrite> {
         // The key PSU_INFO is written under.  For a device that will not name
@@ -185,8 +207,13 @@ impl Updater {
         //
         // Outside this call psud reads no fan of the PSU, so a failed fan
         // costs nothing on any other pass.
-        if presence_changed || first_run {
-            publish_psu_fans(name, present, fans, tables.fan);
+        if presence_changed || first_run || self.pending_fan_details.contains(&row.key) {
+            if fans_available {
+                publish_psu_fans(name, present, fans, tables.fan);
+                self.pending_fan_details.remove(&row.key);
+            } else {
+                self.pending_fan_details.insert(row.key.clone());
+            }
         }
 
         let power_good_changed = status.set_power_good(power_good);
@@ -424,6 +451,7 @@ impl Updater {
             let _ = tables.entity.del(&name);
         }
         self.status.clear();
+        self.pending_fan_details.clear();
     }
 }
 
@@ -511,6 +539,7 @@ pub(crate) mod tests {
             voltage_high_threshold: Some(Threshold::Float(13.0)),
             voltage_low_threshold: Some(Threshold::Float(11.0)),
             maximum_supplied_power: Some(Number::Float(1000.0)),
+            maximum_supplied_power_for_budget: Some(Number::Float(1000.0)),
             power_warning_suppress_threshold: None,
             power_critical_threshold: None,
         }

@@ -26,7 +26,7 @@ mod temp_updater;
 use clap::Parser;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(test)]
 use tokio::signal::unix::{signal, Signal, SignalKind};
 use tokio::sync::watch;
@@ -129,10 +129,7 @@ fn non_negative_secs(s: &str) -> Result<f64, String> {
 /// Flags mirror the Python daemon's argparse so the supervisord command line
 /// works unchanged.
 #[derive(Parser, Debug)]
-#[command(
-    name = "thermalctld-rs",
-    about = "SONiC thermal control daemon, in Rust"
-)]
+#[command(name = "thermalctld", about = "SONiC thermal control daemon, in Rust")]
 struct Args {
     /// Seconds before the first poll, and the fallback period when a cycle
     /// overruns its budget.
@@ -253,12 +250,10 @@ async fn main() {
     // closure has to own what it captures.
     let which = args.platform_api;
 
-    let policy_request = Arc::new(AtomicBool::new(false));
     monitor.shutdown_sender = Some(Arc::clone(&shutdown_tx));
-    monitor.policy_request = Some(Arc::clone(&policy_request));
+    monitor.policy_worker = true;
     let tm_stopped = Arc::new(TmStopped::default());
     monitor.policy_stopped = Some(Arc::clone(&tm_stopped));
-    let policy_interval = Arc::clone(&monitor.policy_interval);
     let policy_shutdown = shutdown_rx.clone();
     let monitor_shutdown = Arc::clone(&shutdown_tx);
     let leak_exit_code = Arc::clone(&exit_code);
@@ -275,22 +270,13 @@ async fn main() {
         // Either thread is half of this daemon, so a panic on one takes the
         // process down, as one on the poll loop does (`pmon_common::thread`).
         &|ready| {
-            let policy_request = Arc::clone(&policy_request);
-            let policy_interval = Arc::clone(&policy_interval);
             let policy_shutdown = policy_shutdown.clone();
             let tm_stopped = Arc::clone(&tm_stopped);
             std::thread::Builder::new()
                 .name("tm-init".into())
                 .spawn(move || {
                     pmon_common::thread::abort_on_panic("tm-init", || {
-                        tm_policy_thread_main(
-                            which,
-                            ready,
-                            Arc::clone(&policy_request),
-                            Arc::clone(&policy_interval),
-                            policy_shutdown.clone(),
-                            &tm_stopped,
-                        )
+                        tm_policy_thread_main(which, ready, policy_shutdown.clone(), &tm_stopped)
                     })
                 })
         },
@@ -512,7 +498,7 @@ async fn run(
 
     // Cleanup: restores hw-management-tc autonomous mode (Mellanox).
     // Mirrors Python: `ThermalManager.stop()` then `.deinitialize()`.
-    if monitor.policy_request.is_none() {
+    if !monitor.policy_worker {
         if let Err(e) = platform.tm_deinitialize() {
             log::warn!("ThermalManager deinitialize failed: {e}");
         }
@@ -536,8 +522,6 @@ async fn run(
 fn tm_policy_thread_main(
     which: PlatformImpl,
     ready: Arc<AtomicBool>,
-    request: Arc<AtomicBool>,
-    interval: Arc<std::sync::atomic::AtomicU64>,
     shutdown: watch::Receiver<bool>,
     stopped: &TmStopped,
 ) {
@@ -548,38 +532,81 @@ fn tm_policy_thread_main(
             return;
         }
     };
-    tm_policy_with(
-        &mut platform,
-        &ready,
-        &request,
-        &interval,
-        shutdown,
-        stopped,
-    );
+    tm_policy_with(&mut platform, &ready, shutdown, stopped);
+}
+
+fn manager_policy_interval(platform: &mut dyn PlatformApi) -> Duration {
+    let seconds = platform.tm_get_interval().ok().flatten().unwrap_or(60.0);
+    if seconds.is_finite() && seconds >= 0.0 && seconds <= u32::MAX as f64 {
+        Duration::from_secs_f64(seconds)
+    } else {
+        log::warn!("Invalid thermal policy interval {seconds}; using 60 seconds");
+        Duration::from_secs(60)
+    }
+}
+
+async fn wait_for_policy(shutdown: &mut watch::Receiver<bool>, delay: Duration) -> bool {
+    if *shutdown.borrow() {
+        return true;
+    }
+    let timer = tokio::time::sleep(delay);
+    tokio::pin!(timer);
+    loop {
+        tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return true;
+                }
+            }
+            _ = &mut timer => return false,
+        }
+    }
+}
+
+fn next_policy_delay(interval: Duration, elapsed: Duration) -> Duration {
+    if elapsed < interval {
+        interval - elapsed
+    } else {
+        // ThermalControlDaemon.FAST_START_INTERVAL, including a zero interval.
+        Duration::from_secs(15)
+    }
 }
 
 fn tm_policy_with(
     platform: &mut dyn PlatformApi,
     ready: &AtomicBool,
-    request: &AtomicBool,
-    interval: &std::sync::atomic::AtomicU64,
-    shutdown: watch::Receiver<bool>,
+    mut shutdown: watch::Receiver<bool>,
     stopped: &TmStopped,
 ) {
     tm_init_with(platform, &AtomicBool::new(false));
-    let seconds = platform.tm_get_interval().ok().flatten().unwrap_or(60.0);
-    interval.store(seconds.to_bits(), Ordering::Release);
+    let mut delay = manager_policy_interval(platform);
     ready.store(true, Ordering::Release);
-    while !*shutdown.borrow() {
-        if request.swap(false, Ordering::AcqRel) {
+    // One timer reactor on this existing thread; no polling or extra worker.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("thermal policy timer runtime");
+    runtime.block_on(async {
+        while !wait_for_policy(&mut shutdown, delay).await {
+            let begin = Instant::now();
             if let Err(e) = platform.tm_run_policy() {
                 log::warn!("run_policy failed: {e}");
             }
+            // Python rereads the manager's interval after every policy round.
+            // Telemetry owns another handle and cannot postpone this schedule.
+            let interval = manager_policy_interval(platform);
+            let elapsed = begin.elapsed();
+            delay = next_policy_delay(interval, elapsed);
+            if elapsed > Duration::from_secs(30) {
+                log::warn!(
+                    "Thermal policy execution took {} seconds, there might be performance risk.",
+                    elapsed.as_secs_f64()
+                );
+            }
         }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    // A signal wakes this worker before run() has called tm_stop(). Wait for
-    // that call to complete, then deinitialize using the initialized handle.
+    });
+    // Stop precedes deinitialize, on the same handle that initialized policy.
     stopped.wait();
     if let Err(e) = platform.tm_deinitialize() {
         log::warn!("ThermalManager deinitialize failed: {e}");
@@ -760,13 +787,6 @@ fn leak_loop(
         return Some(ERR_DB_WRITE);
     }
     let mut invalid_policy = None;
-    let platform_minimum = platform
-        .get_major_leak_num_min_sensors()
-        .ok()
-        .flatten()
-        .unwrap_or(0)
-        .max(0) as usize;
-
     let mut events = event_log::BmcEventLogger::new(is_switch_bmc);
     // Logged once, then again only after a read succeeds: this loop runs every
     // half second on a liquid-cooled box, and a per-cycle error would bury the
@@ -795,6 +815,14 @@ fn leak_loop(
                 continue;
             }
         };
+        // The platform default can change while this daemon is running.
+        // Resolve it each refresh before applying the current CLI override.
+        let platform_minimum = platform
+            .get_major_leak_num_min_sensors()
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+            .max(0) as usize;
         let configured = match tables.policy.as_ref().map(|t| t.get("policy")).transpose() {
             Ok(row) => row.flatten().and_then(|row| {
                 row.into_iter()
@@ -810,7 +838,7 @@ fn leak_loop(
             platform_minimum,
             &mut invalid_policy,
         ));
-        let outcome = state.refresh(&sensors, &profiles, std::time::Instant::now(), &mut events);
+        let outcome = state.refresh(&sensors, std::time::Instant::now(), &mut events);
         let unwritten = leak_updater::apply(tables, &outcome);
         // Forgotten before leaving, not instead of leaving: the cache has to
         // agree with what actually reached STATE_DB either way, and a future
@@ -977,14 +1005,12 @@ mod tests {
     #[test]
     fn clap_rejects_a_bad_interval_on_the_command_line() {
         use clap::Parser;
-        assert!(Args::try_parse_from([
-            "thermalctld-rs",
-            "--liquid_cooling_update_interval",
-            "-0.5"
-        ])
-        .is_err());
+        assert!(
+            Args::try_parse_from(["thermalctld", "--liquid_cooling_update_interval", "-0.5"])
+                .is_err()
+        );
         let ok = Args::try_parse_from([
-            "thermalctld-rs",
+            "thermalctld",
             "--liquid_cooling_update_interval",
             "0.5",
             "--thermal-monitor-update-interval",
@@ -998,6 +1024,109 @@ mod tests {
     // ── The leak thread's body ────────────────────────────────────────────
 
     use crate::db::mock::MockLeak;
+
+    fn check_live_major_minimum(minimums: &[i64], overrides: &[Option<&str>], expected: &[&str]) {
+        struct Changing {
+            minimums: Vec<i64>,
+            overrides: Vec<Option<String>>,
+            expected: Vec<String>,
+            cycle: usize,
+            reads: usize,
+            system: pmon_common::db::MockTable,
+            policy: pmon_common::db::MockTable,
+            shutdown: watch::Sender<bool>,
+        }
+        impl PlatformApi for Changing {
+            fn get_major_leak_num_min_sensors(&mut self) -> Result<Option<i64>, PlatformError> {
+                self.reads += 1;
+                Ok(Some(self.minimums[self.cycle - 1]))
+            }
+            fn get_leak_sensors(
+                &mut self,
+            ) -> Result<Vec<platform_api::LeakSensorInfo>, PlatformError> {
+                if self.cycle > 0 {
+                    assert_eq!(
+                        self.system.field("system", "device_leak_status").as_deref(),
+                        Some(self.expected[self.cycle - 1].as_str())
+                    );
+                }
+                if self.cycle == self.minimums.len() {
+                    self.shutdown.send(true).unwrap();
+                    return Err(PlatformError::Backend("test sequence complete".into()));
+                }
+                self.policy.del("policy").unwrap();
+                if let Some(value) = &self.overrides[self.cycle] {
+                    self.policy
+                        .set(
+                            "policy",
+                            &[("system_major_leak_num_min_sensors", value.clone())],
+                        )
+                        .unwrap();
+                }
+                self.cycle += 1;
+                Ok(["a", "b"]
+                    .into_iter()
+                    .map(|name| platform_api::LeakSensorInfo {
+                        name: name.into(),
+                        is_ok: Some(true),
+                        is_leak: Some(true),
+                        severity: Some(platform_api::LeakSeverity::Minor),
+                        ..Default::default()
+                    })
+                    .collect())
+            }
+        }
+        let mut tables = MockLeak::new();
+        let policy = pmon_common::db::MockTable::new();
+        tables.tables.policy = Some(Box::new(policy.clone()));
+        let (shutdown, receiver) = watch::channel(false);
+        let mut platform = Changing {
+            minimums: minimums.to_vec(),
+            overrides: overrides
+                .iter()
+                .map(|value| value.map(str::to_string))
+                .collect(),
+            expected: expected.iter().map(|value| value.to_string()).collect(),
+            cycle: 0,
+            reads: 0,
+            system: tables.system.clone(),
+            policy,
+            shutdown,
+        };
+        assert_eq!(
+            leak_loop(
+                &mut platform,
+                &tables.tables,
+                Duration::from_millis(1),
+                false,
+                receiver
+            ),
+            None
+        );
+        assert_eq!(
+            platform.reads,
+            minimums.len(),
+            "one platform default read per completed refresh"
+        );
+    }
+
+    #[test]
+    fn major_leak_count_uses_the_current_platform_default_each_refresh() {
+        check_live_major_minimum(
+            &[2, 3, 2],
+            &[None, None, None],
+            &["MAJOR", "MINOR", "MAJOR"],
+        );
+    }
+
+    #[test]
+    fn a_removed_major_leak_override_uses_the_current_platform_default() {
+        check_live_major_minimum(
+            &[2, 2, 3],
+            &[Some("3"), Some("2"), None],
+            &["MINOR", "MAJOR", "MINOR"],
+        );
+    }
 
     #[test]
     fn a_failed_read_cannot_clear_the_previous_critical_leak() {
@@ -1467,7 +1596,6 @@ mod tests {
         let worker_calls = Arc::clone(&calls);
         let db = MockDb::new(false);
         let stopped_signal = Arc::new(TmStopped::default());
-        let request = Arc::new(AtomicBool::new(false));
         let mut monitor = Monitor::with_env(
             0.001,
             0.001,
@@ -1475,13 +1603,12 @@ mod tests {
             crate::polling::PollingIntervals::default(),
             false,
         );
-        monitor.policy_request = Some(Arc::clone(&request));
+        monitor.policy_worker = true;
         monitor.policy_stopped = Some(Arc::clone(&stopped_signal));
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let started_tx = std::sync::Mutex::new(started_tx);
         let start = |ready: Arc<AtomicBool>| {
             let calls = Arc::clone(&worker_calls);
-            let request = Arc::clone(&request);
             let stopped_signal = Arc::clone(&stopped_signal);
             let started = started_tx.lock().unwrap().clone();
             let thread = std::thread::spawn(move || {
@@ -1492,14 +1619,7 @@ mod tests {
                 // The same worker path as production, with a pre-delivered
                 // shutdown to exercise the stop/deinitialize race.
                 started.send(()).unwrap();
-                tm_policy_with(
-                    &mut worker,
-                    &ready,
-                    &request,
-                    &std::sync::atomic::AtomicU64::new(0),
-                    stopped(),
-                    &stopped_signal,
-                );
+                tm_policy_with(&mut worker, &ready, stopped(), &stopped_signal);
             });
             started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
             Ok(thread)
@@ -2263,5 +2383,103 @@ mod tests {
             "SYSTEM_LEAK_STATUS is what bmcctld cuts power on"
         );
         assert!(profile.is_empty(), "LEAK_PROFILE goes with them");
+    }
+
+    #[test]
+    fn policy_worker_runs_without_telemetry_and_rereads_the_interval() {
+        struct Manager {
+            intervals: std::collections::VecDeque<f64>,
+            observed: Vec<f64>,
+            rounds: usize,
+            shutdown: watch::Sender<bool>,
+        }
+        impl PlatformApi for Manager {
+            fn tm_initialize(&mut self) -> Result<(), PlatformError> {
+                Ok(())
+            }
+            fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
+                let interval = self.intervals.pop_front().unwrap_or(60.0);
+                self.observed.push(interval);
+                Ok(Some(interval))
+            }
+            fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
+                self.rounds += 1;
+                if self.rounds == 3 {
+                    self.shutdown.send(true).unwrap();
+                }
+                Ok(())
+            }
+        }
+        let (shutdown, receiver) = watch::channel(false);
+        let watchdog_shutdown = shutdown.clone();
+        let (done, completion) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if completion.recv_timeout(Duration::from_secs(2)).is_err() {
+                let _ = watchdog_shutdown.send(true);
+            }
+        });
+        let mut manager = Manager {
+            intervals: [0.002, 0.005, 0.001, 0.003].into(),
+            observed: Vec::new(),
+            rounds: 0,
+            shutdown,
+        };
+        let stopped = TmStopped::default();
+        stopped.notify();
+        tm_policy_with(&mut manager, &AtomicBool::new(false), receiver, &stopped);
+        let _ = done.send(());
+        watchdog.join().unwrap();
+        assert_eq!(manager.rounds, 3, "no telemetry request should be needed");
+        assert_eq!(manager.observed, [0.002, 0.005, 0.001, 0.003]);
+    }
+
+    #[test]
+    fn policy_delay_matches_python_elapsed_and_fast_start_rules() {
+        assert_eq!(
+            next_policy_delay(Duration::from_secs(10), Duration::from_secs(3)),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            next_policy_delay(Duration::from_secs(10), Duration::from_secs(10)),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            next_policy_delay(Duration::ZERO, Duration::ZERO),
+            Duration::from_secs(15)
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_a_long_policy_wait() {
+        let (shutdown, mut receiver) = watch::channel(false);
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            entered.send(()).unwrap();
+            wait_for_policy(&mut receiver, Duration::from_secs(3600)).await
+        });
+        waiting.await.unwrap();
+        shutdown.send(true).unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_policy_wait_expires_without_requesting_shutdown() {
+        let (_shutdown, mut receiver) = watch::channel(false);
+        assert!(!wait_for_policy(&mut receiver, Duration::from_secs(60)).await);
+    }
+
+    #[tokio::test]
+    async fn a_closed_shutdown_channel_ends_a_policy_wait() {
+        let (shutdown, mut receiver) = watch::channel(false);
+        drop(shutdown);
+        assert!(tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_policy(&mut receiver, Duration::from_secs(3600))
+        )
+        .await
+        .unwrap());
     }
 }

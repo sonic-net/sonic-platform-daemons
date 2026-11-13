@@ -75,7 +75,11 @@ pub fn float(v: f64) -> String {
         return "nan".to_string();
     }
     if v.is_infinite() {
-        return if v > 0.0 { "inf".to_string() } else { "-inf".to_string() };
+        return if v > 0.0 {
+            "inf".to_string()
+        } else {
+            "-inf".to_string()
+        };
     }
     if v.fract() == 0.0 && v.abs() < 1e16 {
         format!("{v:.1}")
@@ -116,7 +120,8 @@ pub fn opt_bool(v: Option<bool>) -> String {
 
 /// Format an optional `u32` (fan speed %, target speed %).
 pub fn opt_u32(v: Option<u32>) -> String {
-    v.map(|n| n.to_string()).unwrap_or_else(|| NOT_AVAILABLE.to_string())
+    v.map(|n| n.to_string())
+        .unwrap_or_else(|| NOT_AVAILABLE.to_string())
 }
 
 /// Format a position, falling back to what the calling daemon would have used.

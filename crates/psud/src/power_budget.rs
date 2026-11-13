@@ -58,7 +58,8 @@ fn supplier(row: &PsuInfo) -> Entry {
     // `try_get(get_maximum_supplied_power, 0.0)`: the default is a float.
     Entry::Set(
         field,
-        row.maximum_supplied_power.unwrap_or(Number::Float(0.0)),
+        row.maximum_supplied_power_for_budget
+            .unwrap_or(Number::Float(0.0)),
     )
 }
 
@@ -96,17 +97,22 @@ impl PowerBudget {
                 value.is_finite() && value >= 0.0
             })
         };
-        if psus
+        if psus.iter().any(|row| {
+            row.presence
+                && row.power_good
+                && !valid(Some(
+                    row.maximum_supplied_power_for_budget
+                        .unwrap_or(Number::Float(0.0)),
+                ))
+        }) || drawers
             .iter()
-            .any(|row| row.presence && row.power_good && !valid(row.maximum_supplied_power))
-            || drawers
-                .iter()
-                .any(|row| row.presence && !valid(row.maximum_consumed_power))
+            .any(|row| row.presence && !valid(row.maximum_consumed_power))
             || modules
                 .iter()
                 .any(|row| row.presence && !valid(row.maximum_consumed_power))
         {
-            // A missing present consumer is unknown consumption, not zero.
+            // Missing supply uses Python's 0.0 W default; missing consumption
+            // remains unknown, so it cannot clear an over-budget warning.
             // Retain the last complete snapshot and make no new LED verdict.
             self.incomplete_read();
             return;
@@ -257,6 +263,7 @@ mod tests {
             voltage_high_threshold: None,
             voltage_low_threshold: None,
             maximum_supplied_power: supplied.map(Number::Float),
+            maximum_supplied_power_for_budget: supplied.map(Number::Float),
             power_warning_suppress_threshold: None,
             power_critical_threshold: None,
         }
@@ -269,6 +276,47 @@ mod tests {
             presence,
             maximum_consumed_power: consumed.map(Number::Float),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn missing_supplier_power_defaults_to_zero_and_replaces_the_previous_budget() {
+        for name in ["PSU 1", "PDB 1"] {
+            let table = MockTable::new();
+            let mut budget = PowerBudget::default();
+            let consumers = [drawer("drawer", true, Some(120.0))];
+            budget.run(
+                &[
+                    psu(name, true, true, Some(100.0)),
+                    psu("PSU 2", true, true, Some(100.0)),
+                ],
+                &consumers,
+                &[],
+                &table,
+            );
+            assert_eq!(budget.master_status(), Some(LedColor::Green));
+            budget.run(
+                &[
+                    psu(name, true, true, None),
+                    psu("PSU 2", true, true, Some(100.0)),
+                ],
+                &consumers,
+                &[],
+                &table,
+            );
+            assert_eq!(
+                table
+                    .field(CHASSIS_POWER_KEY, &format!("{SUPPLIER_FIELD} {name}"))
+                    .as_deref(),
+                Some("0.0")
+            );
+            assert_eq!(
+                table
+                    .field(CHASSIS_POWER_KEY, TOTAL_SUPPLIED_FIELD)
+                    .as_deref(),
+                Some("100.0")
+            );
+            assert_eq!(budget.master_status(), Some(LedColor::Red));
         }
     }
 

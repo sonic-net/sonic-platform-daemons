@@ -16,6 +16,7 @@ mod power_budget;
 mod status;
 mod updater;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use clap::Parser;
@@ -41,7 +42,7 @@ const SYSLOG_IDENTIFIER: &str = "psud";
 /// is which *implementation* of the platform API to open, because a platform
 /// with a native Rust one has to be able to say so without a new binary.
 #[derive(Parser, Debug)]
-#[command(name = "psud-rs", about = "SONiC PSU daemon, in Rust")]
+#[command(name = "psud", about = "SONiC PSU daemon, in Rust")]
 struct Args {
     /// Which platform API implementation to use: `pyo3` or `native`.
     ///
@@ -228,31 +229,100 @@ const FAN_LED_COLS: FanInfoCols = FanInfoCols::STATUS_LED;
 /// nothing -- Python asks only `get_status_led` of each PSU and PSU fan per
 /// cycle (`psud:DaemonPsud._update_led_color`), not the whole row.  The fan
 /// re-read is narrowed to that one column for the same reason.
+#[derive(Default)]
+struct FanReadState {
+    scoped: BTreeMap<platform_api::DeviceKey, Latch>,
+    fallback: Latch,
+    full_snapshot: bool,
+}
+
+#[derive(Default)]
+struct ReadState {
+    psu: Latch,
+    fans: FanReadState,
+}
+
+#[derive(Default)]
+struct FanSnapshot {
+    fans: Vec<platform_api::FanInfo>,
+    unavailable: BTreeSet<platform_api::DeviceKey>,
+}
+
+fn read_full_psu_fans(
+    platform: &mut dyn PlatformApi,
+    psus: &[platform_api::PsuInfo],
+    updater: Option<&Updater>,
+    failures: &mut FanReadState,
+) -> Result<FanSnapshot, PlatformError> {
+    let cols = if updater.is_some_and(|u| u.needs_fan_details(psus)) {
+        FAN_COLS
+    } else {
+        FAN_LED_COLS
+    };
+    // Replace scoped rows with one full snapshot. A failed full
+    // fallback remains an error; the caller still publishes PSUs.
+    match platform.get_fans(cols, true) {
+        Ok(fans) => {
+            pmon_common::recovered!(&mut failures.fallback, "PSU full fan read recovered");
+            for psu in psus {
+                if let Some(read) = failures.scoped.get_mut(&psu.key) {
+                    pmon_common::recovered!(read, "PSU fan read recovered for {}", psu.name);
+                }
+            }
+            failures.scoped.clear();
+            Ok(FanSnapshot {
+                fans,
+                unavailable: BTreeSet::new(),
+            })
+        }
+        Err(error) => {
+            pmon_common::fail_once_warn!(
+                &mut failures.fallback,
+                "Failed to read PSU fan data: {error}"
+            );
+            Err(error)
+        }
+    }
+}
+
 fn read_psu_fans(
     platform: &mut dyn PlatformApi,
     psus: &[platform_api::PsuInfo],
     updater: Option<&Updater>,
-) -> Vec<platform_api::FanInfo> {
-    let mut fans = Vec::new();
+    failures: &mut FanReadState,
+) -> Result<FanSnapshot, PlatformError> {
+    if failures.full_snapshot {
+        return read_full_psu_fans(platform, psus, updater, failures);
+    }
+    let mut snapshot = FanSnapshot::default();
+    failures
+        .scoped
+        .retain(|key, _| psus.iter().any(|psu| psu.key == *key));
     for psu in psus {
         let details = updater.is_some_and(|u| u.psu_needs_fan_details(psu));
         match platform.get_psu_fans(&psu.key, details) {
-            Ok(rows) => fans.extend(rows),
-            Err(PlatformError::NotSupported(_)) => {
-                let cols = if updater.is_some_and(|u| u.needs_fan_details(psus)) {
-                    FAN_COLS
-                } else {
-                    FAN_LED_COLS
-                };
-                return platform.get_fans(cols, true).unwrap_or_else(|e| {
-                    log::warn!("Failed to read PSU fan data: {e}");
-                    Vec::new()
-                });
+            Ok(rows) => {
+                let read = failures.scoped.entry(psu.key.clone()).or_default();
+                pmon_common::recovered!(read, "PSU fan read recovered for {}", psu.name);
+                snapshot.fans.extend(rows);
             }
-            Err(e) => log::warn!("Failed to read fan data for {}: {e}", psu.name),
+            Err(PlatformError::NotSupported(_)) => {
+                failures.full_snapshot = true;
+                return read_full_psu_fans(platform, psus, updater, failures);
+            }
+            Err(error) => {
+                let read = failures.scoped.entry(psu.key.clone()).or_default();
+                pmon_common::fail_once_warn!(
+                    read,
+                    "Failed to read fan data for {}: {error}",
+                    psu.name
+                );
+                snapshot.unavailable.insert(psu.key.clone());
+            }
         }
     }
-    fans
+    pmon_common::recovered!(&mut failures.fallback, "PSU fan read recovered");
+    Ok(snapshot)
 }
 
 fn one_pass(
@@ -262,24 +332,34 @@ fn one_pass(
     budget: &mut Budget,
     tables: &Tables<'_>,
     chassis_tbl: &dyn TableLike,
-    read: &mut Latch,
+    read: &mut ReadState,
 ) {
     // The fans absorbing every getter's exception, column by column, as
     // `psud:try_get` reads them; the PSUs are always read that way.
     let psus = match platform.get_psus() {
         Ok(p) => {
-            pmon_common::recovered!(read, "PSU read recovered");
+            pmon_common::recovered!(&mut read.psu, "PSU read recovered");
             p
         }
         Err(e) => {
-            pmon_common::fail_once_warn!(read, "Failed to update PSU data - {e}");
+            pmon_common::fail_once_warn!(&mut read.psu, "Failed to update PSU data - {e}");
             return;
         }
     };
-    let fans = read_psu_fans(platform, &psus, Some(updater));
+    let snapshot =
+        read_psu_fans(platform, &psus, Some(updater), &mut read.fans).unwrap_or_else(|_| {
+            FanSnapshot {
+                fans: Vec::new(),
+                unavailable: psus.iter().map(|psu| psu.key.clone()).collect(),
+            }
+        });
     counts.refresh(&psus, chassis_tbl);
 
-    let leds = updater.refresh(&psus, &fans, tables);
+    let leds = if snapshot.unavailable.is_empty() {
+        updater.refresh(&psus, &snapshot.fans, tables)
+    } else {
+        updater.refresh_with_unavailable_fans(&psus, &snapshot.fans, tables, &snapshot.unavailable)
+    };
     let wrote_led = !leds.is_empty();
     for led in leds {
         match platform.set_psu_led(&led.psu, led.color) {
@@ -300,13 +380,19 @@ fn one_pass(
             Ok(rows) => rows,
             Err(error) => {
                 log::warn!("Failed to read PSU LED state after update: {error}");
+                // Keep the pre-write colour for this cycle when read-back
+                // fails; the next successful cycle refreshes it.
                 psus.clone()
             }
         };
-        let fresh_fans = read_psu_fans(platform, &fresh_psus, None);
-        updater.update_led_color(&fresh_psus, &fresh_fans, tables);
+        let fresh = read_psu_fans(platform, &fresh_psus, None, &mut read.fans);
+        let fans = fresh
+            .as_ref()
+            .map_or(&[][..], |snapshot| snapshot.fans.as_slice());
+        // PSU LED publication does not depend on a fan read succeeding.
+        updater.update_led_color(&fresh_psus, fans, tables);
     } else {
-        updater.update_led_color(&psus, &fans, tables);
+        updater.update_led_color(&psus, &snapshot.fans, tables);
     }
 
     if let Some(budget) = budget.current(platform) {
@@ -349,7 +435,7 @@ async fn run(
     let mut updater = Updater::new();
     let mut budget = Budget::default();
     // Reported once rather than every three seconds.
-    let mut read = Latch::new();
+    let mut read = ReadState::default();
 
     // Before the first cycle, as Python publishes them from `__init__`: the
     // FRU MIB reads them as soon as the daemon is up.  A failed read publishes
@@ -563,6 +649,18 @@ mod tests {
             }
             Ok(self.psus.clone())
         }
+        // Model the facade's scoped read: validate against the already known
+        // device list without issuing another PSU hardware snapshot.
+        fn get_psu_fans(
+            &mut self,
+            key: &DeviceKey,
+            details: bool,
+        ) -> Result<Vec<FanInfo>, PlatformError> {
+            if !self.psus.iter().any(|psu| psu.key == *key) {
+                return Err(PlatformError::NotFound(key.to_string()));
+            }
+            self.get_fans(if details { FAN_COLS } else { FAN_LED_COLS }, true)
+        }
         fn get_chassis_info(
             &mut self,
             _cols: ChassisInfoCols,
@@ -620,6 +718,7 @@ mod tests {
             voltage: Some(platform_api::Number::Float(12.0)),
             temperature: Some(platform_api::Number::Float(40.0)),
             maximum_supplied_power: Some(platform_api::Number::Float(1000.0)),
+            maximum_supplied_power_for_budget: Some(platform_api::Number::Float(1000.0)),
             status_led: Some("green".to_string()),
             ..row(name, PowerEntityKind::Psu)
         }
@@ -881,7 +980,7 @@ mod tests {
             &mut Budget::default(),
             &db.tables(),
             &db.chassis,
-            &mut Latch::new(),
+            &mut ReadState::default(),
         );
         assert_eq!(p.leds, vec![(key_of("PSU 1"), LedColor::Green)]);
         assert_eq!(
@@ -912,7 +1011,7 @@ mod tests {
             &mut Budget::default(),
             &db.tables(),
             &db.chassis,
-            &mut Latch::new(),
+            &mut ReadState::default(),
         );
         assert_eq!(db.psu.field("PSU 1", "led_status").as_deref(), Some("red"));
         assert!(log.logged(
@@ -1004,7 +1103,7 @@ mod tests {
         };
         let mut updater = Updater::new();
         let (mut counts, mut budget, mut read) =
-            (Counts::default(), Budget::default(), Latch::new());
+            (Counts::default(), Budget::default(), ReadState::default());
         one_pass(
             &mut p,
             &mut updater,
@@ -1106,6 +1205,7 @@ mod tests {
             voltage_high_threshold: None,
             voltage_low_threshold: None,
             maximum_supplied_power: None,
+            maximum_supplied_power_for_budget: None,
             power_warning_suppress_threshold: None,
             power_critical_threshold: None,
         }
@@ -1227,6 +1327,7 @@ mod tests {
                 modular,
             };
             p.psus[0].maximum_supplied_power = Some(platform_api::Number::Float(1000.0));
+            p.psus[0].maximum_supplied_power_for_budget = Some(platform_api::Number::Float(1000.0));
             start(
                 &mut p,
                 &|d, t| o.open(d, t),
@@ -1244,5 +1345,306 @@ mod tests {
                 .any(|(k, _)| k == CHASSIS_POWER_KEY);
             assert_eq!(touched, modular, "modular={modular}");
         }
+    }
+    struct MixedFanProvider {
+        scoped: Vec<String>,
+        fallback_calls: usize,
+        fail_fallback: bool,
+    }
+    impl PlatformApi for MixedFanProvider {
+        fn get_psu_fans(
+            &mut self,
+            key: &DeviceKey,
+            _details: bool,
+        ) -> Result<Vec<platform_api::FanInfo>, PlatformError> {
+            self.scoped.push(key.to_string());
+            if key.as_str() == "psus[0]" {
+                Ok(vec![platform_api::FanInfo {
+                    key: "psus[0]/fans[0]".into(),
+                    ..platform_api::FanInfo::new(platform_api::FanKind::Psu)
+                }])
+            } else {
+                Err(PlatformError::NotSupported("scoped fans".into()))
+            }
+        }
+        fn get_fans(
+            &mut self,
+            _cols: FanInfoCols,
+            _absorb: bool,
+        ) -> Result<Vec<platform_api::FanInfo>, PlatformError> {
+            self.fallback_calls += 1;
+            if self.fail_fallback {
+                return Err(PlatformError::Backend("fan I/O".into()));
+            }
+            Ok((0..2)
+                .map(|index| platform_api::FanInfo {
+                    key: format!("psus[{index}]/fans[0]").into(),
+                    ..platform_api::FanInfo::new(platform_api::FanKind::Psu)
+                })
+                .collect())
+        }
+    }
+    #[test]
+    fn mixed_scoped_fans_use_one_complete_fallback_without_duplicates() {
+        let psus = (0..3)
+            .map(|index| platform_api::PsuInfo {
+                key: format!("psus[{index}]").into(),
+                ..platform_api::PsuInfo::new(PowerEntityKind::Psu)
+            })
+            .collect::<Vec<_>>();
+        let mut platform = MixedFanProvider {
+            scoped: vec![],
+            fallback_calls: 0,
+            fail_fallback: false,
+        };
+        let mut state = FanReadState::default();
+        let snapshot = read_psu_fans(&mut platform, &psus, None, &mut state).unwrap();
+        let fans = snapshot.fans;
+        assert_eq!(fans.len(), 2);
+        assert_ne!(fans[0].key, fans[1].key);
+        assert_eq!(platform.scoped, ["psus[0]", "psus[1]"]);
+        assert_eq!(platform.fallback_calls, 1);
+        let again = read_psu_fans(&mut platform, &psus, None, &mut state).unwrap();
+        assert_eq!(again.fans.len(), 2);
+        assert_eq!(platform.scoped, ["psus[0]", "psus[1]"]);
+        assert_eq!(platform.fallback_calls, 2);
+    }
+    #[test]
+    fn a_failed_full_fan_fallback_is_not_a_successful_empty_snapshot() {
+        let psus = vec![platform_api::PsuInfo {
+            key: "psus[1]".into(),
+            ..platform_api::PsuInfo::new(PowerEntityKind::Psu)
+        }];
+        let mut platform = MixedFanProvider {
+            scoped: vec![],
+            fallback_calls: 0,
+            fail_fallback: true,
+        };
+        assert!(matches!(
+            read_psu_fans(&mut platform, &psus, None, &mut FanReadState::default()),
+            Err(PlatformError::Backend(_))
+        ));
+        assert_eq!(platform.fallback_calls, 1);
+    }
+    struct FanFaultProvider {
+        psus: Vec<platform_api::PsuInfo>,
+        scoped_error: Option<PlatformError>,
+        use_fallback: bool,
+        fail_fallback: bool,
+        details: Vec<(DeviceKey, bool)>,
+    }
+    impl FanFaultProvider {
+        fn new() -> Self {
+            Self {
+                psus: vec![healthy("PSU 1"), healthy("PSU 2")],
+                scoped_error: None,
+                use_fallback: false,
+                fail_fallback: false,
+                details: Vec::new(),
+            }
+        }
+        fn fan(psu: &platform_api::PsuInfo) -> FanInfo {
+            FanInfo {
+                key: format!("{}/fans[0]", psu.key).into(),
+                name: format!("{} FAN 1", psu.name),
+                parent_name: psu.name.clone(),
+                parent_key: Some(psu.key.clone()),
+                direction: Some("exhaust".into()),
+                speed_pct: Some(platform_api::Number::Int(50)),
+                status_led: Some("green".into()),
+                ..FanInfo::new(platform_api::FanKind::Psu)
+            }
+        }
+    }
+    impl PlatformApi for FanFaultProvider {
+        fn get_psus(&mut self) -> Result<Vec<platform_api::PsuInfo>, PlatformError> {
+            Ok(self.psus.clone())
+        }
+        fn get_chassis_info(
+            &mut self,
+            _: ChassisInfoCols,
+        ) -> Result<platform_api::ChassisInfo, PlatformError> {
+            Ok(platform_api::ChassisInfo {
+                is_modular_chassis: true,
+                ..Default::default()
+            })
+        }
+        fn get_fan_drawers(
+            &mut self,
+            _: FanDrawerInfoCols,
+        ) -> Result<Vec<platform_api::FanDrawerInfo>, PlatformError> {
+            Ok(Vec::new())
+        }
+        fn get_modules(
+            &mut self,
+            _: ModuleInfoCols,
+        ) -> Result<Vec<platform_api::ModuleInfo>, PlatformError> {
+            Ok(Vec::new())
+        }
+        fn get_psu_fans(
+            &mut self,
+            key: &DeviceKey,
+            details: bool,
+        ) -> Result<Vec<FanInfo>, PlatformError> {
+            self.details.push((key.clone(), details));
+            if self.use_fallback {
+                return Err(PlatformError::NotSupported("scoped".into()));
+            }
+            if key == &self.psus[0].key {
+                if let Some(error) = &self.scoped_error {
+                    return Err(error.clone());
+                }
+            }
+            let psu = self.psus.iter().find(|psu| psu.key == *key).unwrap();
+            Ok(vec![Self::fan(psu)])
+        }
+        fn get_fans(&mut self, _: FanInfoCols, _: bool) -> Result<Vec<FanInfo>, PlatformError> {
+            if self.fail_fallback {
+                Err(PlatformError::Backend("full fan snapshot".into()))
+            } else {
+                Ok(self.psus.iter().map(Self::fan).collect())
+            }
+        }
+        fn set_psu_led(
+            &mut self,
+            _: &DeviceKey,
+            _: LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(true))
+        }
+        fn set_psu_master_led(
+            &mut self,
+            _: &DeviceKey,
+            _: LedColor,
+        ) -> Result<Option<bool>, PlatformError> {
+            Ok(Some(true))
+        }
+    }
+
+    #[test]
+    fn a_scoped_fan_error_preserves_other_psus_and_retries_missing_details() {
+        for error in [
+            PlatformError::Backend("fan I/O".into()),
+            PlatformError::NotFound("hot-swap".into()),
+        ] {
+            let log = pmon_common::logging::capture();
+            let db = Db::new();
+            db.fan
+                .set("PSU 1 FAN 1", &[("speed", "17".into())])
+                .unwrap();
+            let mut platform = FanFaultProvider::new();
+            platform.scoped_error = Some(error);
+            let mut updater = Updater::new();
+            let (mut counts, mut budget, mut read) =
+                (Counts::default(), Budget::default(), ReadState::default());
+            for _ in 0..2 {
+                one_pass(
+                    &mut platform,
+                    &mut updater,
+                    &mut counts,
+                    &mut budget,
+                    &db.tables(),
+                    &db.chassis,
+                    &mut read,
+                );
+            }
+            assert!(db.psu.field("PSU 1", "temp").is_some());
+            assert!(db.psu.field("PSU 2", "temp").is_some());
+            assert_eq!(
+                db.chassis.field(CHASSIS_INFO_KEY, "psu_num").as_deref(),
+                Some("2")
+            );
+            assert_eq!(db.fan.field("PSU 1 FAN 1", "speed").as_deref(), Some("17"));
+            assert_eq!(db.fan.field("PSU 2 FAN 1", "speed").as_deref(), Some("50"));
+            assert_eq!(
+                db.chassis
+                    .field(CHASSIS_POWER_KEY, "Total Supplied Power")
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap(),
+                2000.0
+            );
+            assert_eq!(
+                log.lines()
+                    .iter()
+                    .filter(|(_, text)| text.contains("Failed to read fan data for PSU 1:"))
+                    .count(),
+                1
+            );
+            platform.scoped_error = None;
+            platform.details.clear();
+            one_pass(
+                &mut platform,
+                &mut updater,
+                &mut counts,
+                &mut budget,
+                &db.tables(),
+                &db.chassis,
+                &mut read,
+            );
+            assert!(platform
+                .details
+                .iter()
+                .any(|(key, details)| key == &platform.psus[0].key && *details));
+            assert_eq!(db.fan.field("PSU 1 FAN 1", "speed").as_deref(), Some("50"));
+            assert!(log.logged(log::Level::Info, "PSU fan read recovered for PSU 1"));
+        }
+    }
+
+    #[test]
+    fn a_failed_full_fan_snapshot_keeps_psu_and_budget_publication_alive() {
+        let log = pmon_common::logging::capture();
+        let db = Db::new();
+        let mut platform = FanFaultProvider::new();
+        platform.use_fallback = true;
+        platform.fail_fallback = true;
+        let mut updater = Updater::new();
+        let (mut counts, mut budget, mut read) =
+            (Counts::default(), Budget::default(), ReadState::default());
+        for _ in 0..2 {
+            one_pass(
+                &mut platform,
+                &mut updater,
+                &mut counts,
+                &mut budget,
+                &db.tables(),
+                &db.chassis,
+                &mut read,
+            );
+        }
+        assert_eq!(
+            db.chassis.field(CHASSIS_INFO_KEY, "psu_num").as_deref(),
+            Some("2")
+        );
+        for name in ["PSU 1", "PSU 2"] {
+            assert!(db.psu.field(name, "temp").is_some());
+            assert!(db.psu.field(name, "led_status").is_some());
+        }
+        assert!(db.fan.is_empty());
+        assert!(db
+            .chassis
+            .field(CHASSIS_POWER_KEY, "Total Supplied Power")
+            .is_some());
+        assert_eq!(
+            log.lines()
+                .iter()
+                .filter(|(_, text)| text.contains("Failed to read PSU fan data:"))
+                .count(),
+            1
+        );
+        platform.fail_fallback = false;
+        one_pass(
+            &mut platform,
+            &mut updater,
+            &mut counts,
+            &mut budget,
+            &db.tables(),
+            &db.chassis,
+            &mut read,
+        );
+        for name in ["PSU 1 FAN 1", "PSU 2 FAN 1"] {
+            assert_eq!(db.fan.field(name, "speed").as_deref(), Some("50"));
+        }
+        assert!(log.logged(log::Level::Info, "PSU full fan read recovered"));
     }
 }

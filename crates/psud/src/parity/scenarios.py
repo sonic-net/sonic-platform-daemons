@@ -155,7 +155,37 @@ def unsupported_modular_power_getter():
     return make, steps
 
 
-SCENARIOS = [modular_budget, unsupported_modular_power_getter, healthy, unnamed_devices, psu_raises, presence_changes, psu_fan_raises,
+def unsupported_psu_maximum_power_getter():
+    build, steps = modular_budget()
+    def make():
+        c = build()
+        def unsupported():
+            raise NotImplementedError()
+        c._psu_list[0].get_maximum_supplied_power = unsupported
+        return c
+    return make, steps
+
+
+def missing_psu_maximum_power_value():
+    build, steps = modular_budget()
+    def make():
+        c = build()
+        c._psu_list[0].get_maximum_supplied_power = lambda: None
+        return c
+    return make, steps
+
+
+def failed_psu_maximum_power_getter():
+    build, steps = modular_budget()
+    def make():
+        c = build()
+        raising_in(c._psu_list[0], 'get_maximum_supplied_power')
+        return c
+    return make, steps
+
+
+SCENARIOS = [missing_psu_maximum_power_value, failed_psu_maximum_power_getter,
+             unsupported_psu_maximum_power_getter, modular_budget, unsupported_modular_power_getter, healthy, unnamed_devices, psu_raises, presence_changes, psu_fan_raises,
              psu_fan_absent, pdb_without_presence, out_of_range]
 
 

@@ -79,7 +79,12 @@ impl PsuStatus {
     }
 
     /// Temperature against its limit, with the same treatment of a missing one.
-    pub fn set_temperature(&mut self, name: &str, temperature: Option<f64>, high: Option<f64>) -> bool {
+    pub fn set_temperature(
+        &mut self,
+        name: &str,
+        temperature: Option<f64>,
+        high: Option<f64>,
+    ) -> bool {
         let (Some(t), Some(hi)) = (temperature, high) else {
             if !self.temperature_good {
                 log::warn!(
@@ -166,8 +171,14 @@ mod tests {
         let mut s = PsuStatus::default();
         s.set_voltage("PSU 1", Some(14.0), Some(13.0), Some(11.0));
         assert!(!s.voltage_good);
-        assert!(!s.set_voltage("PSU 1", None, Some(13.0), Some(11.0)), "no recovery is claimed");
-        assert!(s.voltage_good, "but nothing is being reported as wrong either");
+        assert!(
+            !s.set_voltage("PSU 1", None, Some(13.0), Some(11.0)),
+            "no recovery is claimed"
+        );
+        assert!(
+            s.voltage_good,
+            "but nothing is being reported as wrong either"
+        );
 
         let mut s = PsuStatus::default();
         s.set_temperature("PSU 1", Some(80.0), Some(60.0));
