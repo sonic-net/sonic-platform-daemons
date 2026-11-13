@@ -345,7 +345,8 @@ impl Reconciler {
 /// Healthy disks advance independently. Failed disks retain their previous
 /// counters and original boot identity; an unknown baseline is marked invalid.
 /// With no fresh disk, the previous file survives unchanged. The legacy Python
-/// loader ignores the additive metadata and still receives numeric fields.
+/// loader ignores additive metadata, so unknown counter fields must be null:
+/// it rejects null counters before using a baseline.
 #[cfg(test)]
 pub fn sync_document(
     disks: &[String],
@@ -441,10 +442,10 @@ fn compose_snapshot(
                     snapshot_boot(&saved, disk).map_or(serde_json::Value::Null, |id| id.into()),
                 );
             } else {
-                // Numeric neutral fields keep the legacy Python loader usable.
-                // The validity marker prevents Rust from treating them as data.
+                // Python does not inspect baseline_valid. Null counters make
+                // its unchanged loader reject this unknown baseline too.
                 for field in SYNC_FIELDS {
-                    fields.insert(field.into(), "0".into());
+                    fields.insert(field.into(), serde_json::Value::Null);
                 }
                 fields.insert("baseline_valid".into(), false.into());
                 fields.insert("boot_id".into(), serde_json::Value::Null);
@@ -744,6 +745,9 @@ mod tests {
         let doc = compose_snapshot(&disks, &table, "now", "boot", None).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&doc).unwrap();
         assert_eq!(saved["sdb"]["baseline_valid"], false);
+        for field in SYNC_FIELDS {
+            assert!(saved["sdb"][field].is_null(), "unknown {field} is not zero");
+        }
         let loaded =
             Reconciler::load_in_boot(&disks, &disks, Some(&doc), &MockTable::new(), Some("boot"));
         assert_eq!(loaded.baseline(), Baseline::Mixed);

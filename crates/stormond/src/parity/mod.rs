@@ -165,6 +165,27 @@ fn new_json_boot_metadata_is_accepted_by_the_unchanged_python_loader() {
     });
 }
 
+#[test]
+fn an_unknown_baseline_is_rejected_by_the_unchanged_python_loader() {
+    parity::with_harness(|py, harness| {
+        let scenarios = parity::module(py, "stormond_unknown_baseline", SCENARIOS);
+        scenarios.call_method1("setup", (harness, ROOT)).unwrap();
+        let table = pmon_common::db::MockTable::new();
+        for field in fsio::SYNC_FIELDS {
+            table.set("sda", &[(field, "100".into())]).unwrap();
+        }
+        let document = fsio::sync_document(&["sda".into(), "sdb".into()], &table, "now").unwrap();
+        let result = scenarios
+            .call_method1("load_new_json_document", (document, vec!["sda", "sdb"]))
+            .unwrap();
+        let loaded: bool = result.get_item(0).unwrap().extract().unwrap();
+        assert!(
+            !loaded,
+            "Python must not accept unknown counters as a zero baseline"
+        );
+    });
+}
+
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
 const KNOWN: &[parity::Known] = &[

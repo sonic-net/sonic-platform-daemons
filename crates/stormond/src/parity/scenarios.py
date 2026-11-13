@@ -42,11 +42,11 @@ def json_path():
     return JSON
 
 
-def load_new_json_document(document):
+def load_new_json_document(document, disks=('sda',)):
     """The unchanged Python loader must accept the additive boot identity."""
     del ALIVE[:]
     H.reset()
-    platform({'sda': Disk()})
+    platform({disk: Disk() for disk in disks})
     with open(JSON, 'w') as stream:
         stream.write(document)
     daemon = SM.DaemonStorage('stormond')
