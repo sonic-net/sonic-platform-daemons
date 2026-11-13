@@ -612,6 +612,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         self.critical_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
+        # Publish test_leak on the first refresh, including after a restart.
+        self.last_test_leak = None
         self.last_sensor_fvs: Dict[str, tuple] = {}
 
         state_db = daemon_base.db_connect("STATE_DB")
@@ -655,11 +657,21 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
     def _refresh_leak_status(self):
         status = None
+        # Read each sensor once so physical leaks take precedence over injected
+        # leaks regardless of sensor order, using one consistent poll snapshot.
+        readings = []
         for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
             sensor_name = try_get(sensor.get_name, 'leakage{}'.format(index))
             sensor_is_ok = sensor.is_leak_sensor_ok()
             sensor_is_leak = sensor.is_leak()
             sensor_leak_severity = sensor.get_leak_severity()
+            sensor_is_test = sensor_is_ok and sensor_is_leak and sensor.is_test_leak() is True
+            readings.append((sensor, sensor_name, sensor_is_ok, sensor_is_leak,
+                             sensor_leak_severity, sensor_is_test))
+        physical_leak = any(r[2] and r[3] and not r[5] for r in readings)
+        for (sensor, sensor_name, sensor_is_ok, sensor_is_leak,
+             sensor_leak_severity, sensor_is_test) in readings:
+            leak_aggregate = not (sensor_is_test and physical_leak)
 
             now = datetime.now()
 
@@ -674,13 +686,19 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
             if sensor_is_ok:
                 if sensor_is_leak:
+                    # A change of source starts a new episode, so a physical
+                    # leak cannot inherit a test injection's escalation timer.
+                    was_test = dict(self.last_sensor_fvs.get(sensor_name, ())).get('test_leak') == 'Enabled'
+                    if sensor_name in self.leaking_sensors and was_test != sensor_is_test:
+                        del self.leaking_sensors[sensor_name]
+                        self.critical_sensors.discard(sensor_name)
                     if sensor_name not in self.leaking_sensors:
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
 
                     # Upgrade minor leaks to critical if the time threshold has been exceeded.
                     escalated_to_critical = False
-                    if sensor_leak_severity == LeakSeverity.MINOR:
+                    if sensor_leak_severity == LeakSeverity.MINOR and leak_aggregate:
                         leak_start_time = self.leaking_sensors[sensor_name]
                         profile = sensor.get_leak_profile()
                         max_minor_secs = profile.get_leak_max_minor_duration_sec() if profile else inf
@@ -704,7 +722,8 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                     # Log CRITICAL once per leak episode, regardless of how the sensor reached
                     # CRITICAL severity: reported directly by the platform, or escalated by us
                     # from MINOR after the max-minor duration was exceeded.
-                    if sensor_leak_severity == LeakSeverity.CRITICAL and sensor_name not in self.critical_sensors:
+                    if (leak_aggregate and sensor_leak_severity == LeakSeverity.CRITICAL
+                            and sensor_name not in self.critical_sensors):
                         if escalated_to_critical:
                             msg = 'Leak on sensor {} escalated from MINOR to CRITICAL after {}s'.format(
                                 sensor_name, max_minor_secs)
@@ -713,7 +732,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                         self.event_logger.log_error(msg)
                         self.critical_sensors.add(sensor_name)
 
-                    if status is not None:
+                    if not leak_aggregate:
+                        pass
+                    elif status is not None:
                         # Multiple leaks (any severity) are critical.
                         status = LeakSeverity.CRITICAL
                     else:
@@ -743,10 +764,17 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('type', str(sensor_type)),
                 ('location', str(sensor_location)),
                 ('leak_severity', str(sensor_leak_severity)),
+                ('test_leak', 'Enabled' if sensor_is_test else 'Disabled'),
+                ('test_leak_severity',
+                 sensor_leak_severity.value if sensor_is_test and sensor_leak_severity is not None else 'None'),
+                ('leak_source', 'test' if sensor_is_test else 'physical' if sensor_is_ok and sensor_is_leak else 'none'),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
                 self.sensor_table.set(sensor_name, swsscommon.FieldValuePairs(list(fvs_tuple)))
                 self.last_sensor_fvs[sensor_name] = fvs_tuple
+
+        # Any physical leak keeps normal policy enforcement enabled.
+        test_active = status is not None and not physical_leak
 
         if status == LeakSeverity.CRITICAL and self.last_leak_status != LeakSeverity.CRITICAL:
             leaking_names = ', '.join(sorted(self.leaking_sensors.keys())) or 'unknown'
@@ -759,15 +787,17 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
         # Only write SYSTEM_LEAK_STATUS on actual transitions to avoid
         # subscriber spam from per-cycle timestamp updates.
-        if status != self.last_leak_status:
+        if status != self.last_leak_status or test_active != self.last_test_leak:
             status_str = status.value if status is not None else 'None'
             fvs = swsscommon.FieldValuePairs([
                 ('device_leak_status', status_str),
+                ('test_leak', 'Enabled' if test_active else 'Disabled'),
                 ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
             ])
             self.system_table.set('system', fvs)
 
         self.last_leak_status = status
+        self.last_test_leak = test_active
 
     def update(self):
         self._refresh_leak_status()
