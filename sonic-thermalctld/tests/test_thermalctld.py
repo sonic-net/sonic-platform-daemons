@@ -609,6 +609,23 @@ class TestLiquidCoolingUpdater(object):
         # Dedup cache seeded so the unchanged row is not rewritten on first refresh.
         assert 'leakage1' in updater.last_sensor_fvs
 
+    def test_restore_state_ignores_persisted_test_leak(self):
+        """A persisted test leak must not seed the CRITICAL latch or the escalation clock."""
+        updater = thermalctld.LiquidCoolingUpdater(MockChassis(), 0.5)
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_severity', 'CRITICAL'),
+            ('test_leak', 'Enabled'), ('timestamp', '20250101 00:05:00'),
+        ]))
+        updater.leaking_sensors = {}
+        updater.critical_sensors = set()
+        updater.latched_critical_sensors = set()
+
+        updater._restore_state_from_db()
+
+        assert 'leakage1' not in updater.leaking_sensors
+        assert 'leakage1' not in updater.critical_sensors
+        assert 'leakage1' not in updater.latched_critical_sensors
+
     @mock.patch('thermalctld.try_get')
     def test_restart_latches_critical_even_if_platform_reads_minor(self, mock_try_get):
         """A restored CRITICAL stays CRITICAL after restart even if the platform reads MINOR."""
@@ -1343,6 +1360,156 @@ class TestLiquidCoolingUpdater(object):
         return any(needle in call[0][0] for call in event_logger_method.call_args_list)
 
     @mock.patch('thermalctld.try_get')
+    def test_refresh_status_test_leak_flagged_then_cleared(self, mock_try_get):
+        """A test-injected leak is published with test_leak=Enabled and cleared when withdrawn."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        lc.leakage_sensors[0].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.CRITICAL
+        assert sys_fvs['test_leak'] == 'Enabled'
+        sensor_fvs = [c[0][1].fv_dict for c in updater.sensor_table.set.call_args_list
+                      if c[0][0] == 'leakage1'][-1]
+        assert sensor_fvs['test_leak'] == 'Enabled'
+        assert sensor_fvs['test_leak_severity'] == 'CRITICAL'
+        assert sensor_fvs['leak_source'] == 'test'
+
+        lc.make_sensor_no_leak(0)
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.NONE
+        assert sys_fvs['test_leak'] == 'Disabled'
+        sensor_fvs = [c[0][1].fv_dict for c in updater.sensor_table.set.call_args_list
+                      if c[0][0] == 'leakage1'][-1]
+        assert sensor_fvs['test_leak_severity'] == 'None'
+        assert sensor_fvs['leak_source'] == 'none'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_physical_leak_overrides_test_flag(self, mock_try_get):
+        """A real leak alongside a test leak keeps test_leak=Disabled so policy still applies."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.leakage_sensors[0].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['test_leak'] == 'Disabled'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_injected_critical_ignored_with_physical_minor(self, mock_try_get):
+        """An injected CRITICAL leak does not raise the aggregate above the physical MINOR."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.MINOR)
+        lc.leakage_sensors[0].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
+        assert sys_fvs['test_leak'] == 'Disabled'
+        # The masked test CRITICAL is not logged or tracked
+        assert not self._event_logged(updater.event_logger.log_error, 'CRITICAL leak reported')
+        assert 'leakage1' not in updater.critical_sensors
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_reads_each_sensor_once(self, mock_try_get):
+        """Each sensor is read once per cycle, so a leak appearing mid-cycle cannot mix two readings."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        lc.leakage_sensors[0].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+        # Second sensor starts leaking only on its second read
+        lc.leakage_sensors[1].is_leak = mock.MagicMock(side_effect=[False, True])
+        lc.leakage_sensors[1].get_leak_severity = mock.MagicMock(return_value=LeakSeverity.CRITICAL)
+
+        updater._refresh_leak_status()
+        assert lc.leakage_sensors[1].is_leak.call_count == 1
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['test_leak'] == 'Enabled'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_physical_first_then_injected_critical(self, mock_try_get):
+        """Order does not matter: a real MINOR seen before an injected CRITICAL still wins."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        self._set_sensor(lc.leakage_sensors[1], LeakSeverity.CRITICAL)
+        lc.leakage_sensors[1].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+        lc.make_sensor_leak(1)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
+        assert sys_fvs['test_leak'] == 'Disabled'
+        assert not self._event_logged(updater.event_logger.log_error, 'CRITICAL leak reported')
+        assert 'leakage2' not in updater.critical_sensors
+        sensor_fvs = [c[0][1].fv_dict for c in updater.sensor_table.set.call_args_list
+                      if c[0][0] == 'leakage2'][-1]
+        assert sensor_fvs['test_leak'] == 'Enabled'
+        assert sensor_fvs['leak_source'] == 'test'
+
+    @mock.patch('thermalctld.try_get')
+    def test_restart_with_persisted_test_critical_then_physical_minor(self, mock_try_get):
+        """After a restart, a real MINOR replacing a persisted test CRITICAL is not promoted to CRITICAL."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)
+        updater.sensor_table.set('leakage1', thermalctld.swsscommon.FieldValuePairs([
+            ('name', 'leakage1'), ('leaking', 'Yes'), ('leak_severity', 'CRITICAL'),
+            ('test_leak', 'Enabled'), ('timestamp', '20250101 00:05:00'),
+        ]))
+        updater._restore_state_from_db()
+        updater.log_error = mock.MagicMock()
+        updater.log_notice = mock.MagicMock()
+        updater.event_logger = mock.MagicMock()
+        updater.sensor_table = mock.MagicMock()
+        updater.system_table = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR)
+        lc.make_sensor_leak(0)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
+        assert sys_fvs['test_leak'] == 'Disabled'
+        sensor_fvs = [c[0][1].fv_dict for c in updater.sensor_table.set.call_args_list
+                      if c[0][0] == 'leakage1'][-1]
+        assert sensor_fvs['leak_severity'] == 'MINOR'
+        assert sensor_fvs['leak_source'] == 'physical'
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_stale_test_leak_republished(self, mock_try_get):
+        """The first refresh publishes test_leak even if the status matches a restored one."""
+        mock_chassis = MockChassis()
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+        updater.last_leak_status = thermalctld.SystemLeakStatus.CRITICAL
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.CRITICAL)
+        lc.make_sensor_leak(0)
+
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['test_leak'] == 'Disabled'
+
+    @mock.patch('thermalctld.try_get')
     def test_refresh_status_critical_precedence_over_major(self, mock_try_get):
         """CRITICAL wins over the MAJOR aggregate: a CRITICAL sensor alongside a
         minor leak that has escalated past MAX-T stays CRITICAL, and no MAJOR
@@ -1551,6 +1718,33 @@ class TestLiquidCoolingUpdater(object):
                           if 'MAJOR system leak detected' in c[0][0]]
         assert len(major_detected) == 1
         assert updater.system_table.set.call_count == writes_after_escalation
+
+    @mock.patch('thermalctld.try_get')
+    def test_refresh_status_physical_replacing_test_leak_restarts_timer(self, mock_try_get):
+        """A physical MINOR replacing an expired test MINOR on the same sensor, without a
+        clear poll, does not inherit the test's start time or escalation."""
+        mock_chassis = MockChassis()
+        mock_chassis._liquid_cooling = MockLiquidCooling(num_sensors=1)
+        lc = mock_chassis.get_liquid_cooling()
+        updater = self._make_updater(mock_chassis, mock_try_get)
+
+        self._set_sensor(lc.leakage_sensors[0], LeakSeverity.MINOR, max_minor=1)
+        lc.leakage_sensors[0].is_test_leak = lambda: True
+        lc.make_sensor_leak(0)
+        updater._refresh_leak_status()
+        time.sleep(2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
+
+        lc.leakage_sensors[0].is_test_leak = lambda: False
+        updater._refresh_leak_status()
+        sys_fvs = updater.system_table.set.call_args[0][1].fv_dict
+        assert sys_fvs['device_leak_status'] == thermalctld.SystemLeakStatus.MINOR
+        assert sys_fvs['test_leak'] == 'Disabled'
+
+        time.sleep(2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == thermalctld.SystemLeakStatus.MAJOR
 
     @mock.patch('thermalctld.try_get')
     def test_refresh_status_major_both_triggers(self, mock_try_get):
