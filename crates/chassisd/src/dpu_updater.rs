@@ -24,11 +24,17 @@ struct PublishingCycler<'a> {
     error: Option<String>,
 }
 impl PowerCycler for PublishingCycler<'_> {
-    fn transition_in_progress(&mut self, key: &platform_api::DeviceKey) -> Result<Option<bool>, PlatformError> {
+    fn transition_in_progress(
+        &mut self,
+        key: &platform_api::DeviceKey,
+    ) -> Result<Option<bool>, PlatformError> {
         self.inner.transition_in_progress(key)
     }
 
-    fn midplane_down_reason(&mut self, key: &platform_api::DeviceKey) -> Result<platform_api::ModuleMidplaneDownReason, PlatformError> {
+    fn midplane_down_reason(
+        &mut self,
+        key: &platform_api::DeviceKey,
+    ) -> Result<platform_api::ModuleMidplaneDownReason, PlatformError> {
         self.inner.midplane_down_reason(key)
     }
     fn flush_effects(&mut self, name: &str, effects: &mut Vec<Effect>) -> bool {
@@ -180,7 +186,12 @@ impl DpuUpdater {
                 continue;
             }
 
-            let status = m.oper_status_text.as_deref().unwrap_or("N/A");
+            // Python's SmartSwitch _get_module_info defaults missing status
+            // to Offline. Recovery reads this same published status.
+            let status = m
+                .oper_status_text
+                .as_deref()
+                .unwrap_or(ModuleStatus::Offline.as_str());
             let fvs = [
                 (DESC_FIELD, fmt::opt_str(&m.description)),
                 // A DPU has no slot, and Python publishes the sentinel rather
@@ -770,6 +781,83 @@ pub(crate) mod tests {
 
     fn updater(modules: &[ModuleInfo], root: &Path) -> DpuUpdater {
         DpuUpdater::new(modules, Thresholds::default(), true, root, Instant::now())
+    }
+
+    #[test]
+    fn missing_oper_status_uses_python_offline_defaults_through_recovery() {
+        for (initial, admin, planned, automatic, expected, cycles) in [
+            (DpuState::Ready, true, false, true, DpuState::PowerCycle, 1),
+            (
+                DpuState::Ready,
+                true,
+                false,
+                false,
+                DpuState::ManualIntervention,
+                0,
+            ),
+            (DpuState::Ready, true, true, true, DpuState::Ready, 0),
+            (DpuState::Ready, false, false, true, DpuState::AdminDown, 0),
+            (DpuState::AdminDown, true, false, true, DpuState::Booting, 0),
+            (DpuState::Booting, true, false, true, DpuState::Ready, 0),
+            (
+                DpuState::Unrecoverable,
+                true,
+                false,
+                true,
+                DpuState::Unrecoverable,
+                0,
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Db::new();
+            if admin {
+                db.admin_up("DPU0");
+            }
+            db.device_metadata
+                .set(
+                    "localhost",
+                    &[(
+                        DPU_AUTO_RECOVERY_FIELD,
+                        if automatic {
+                            "enable".into()
+                        } else {
+                            "disable".into()
+                        },
+                    )],
+                )
+                .unwrap();
+            db.dpu_state
+                .set(
+                    "DPU0",
+                    &[
+                        (MP_STATE, "up".into()),
+                        (CP_STATE, "up".into()),
+                        (DP_STATE, "up".into()),
+                    ],
+                )
+                .unwrap();
+            let mut modules = [dpu("DPU0", ModuleStatus::Online)];
+            modules[0].oper_status = None;
+            modules[0].oper_status_text = None;
+            modules[0].state_transition = Some(planned);
+            let mut updater = updater(&modules, root.path());
+            updater.recovery.get_mut("DPU0").unwrap().state = initial;
+            updater.refresh(&modules, &db.tables()).unwrap();
+            assert_eq!(
+                db.module.field("DPU0", OPERSTATUS_FIELD).as_deref(),
+                Some("Offline")
+            );
+            let mut hardware = Hw(Vec::new());
+            updater
+                .update_recovery(&modules, &db.tables(), &mut hardware, Instant::now())
+                .unwrap();
+            assert_eq!(
+                updater.state_of("DPU0"),
+                Some(expected),
+                "{initial:?}, admin={admin}, planned={planned}, automatic={automatic}"
+            );
+            assert_eq!(hardware.0.len(), cycles);
+        }
     }
 
     #[test]

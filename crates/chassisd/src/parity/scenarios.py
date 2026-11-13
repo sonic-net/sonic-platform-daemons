@@ -15,6 +15,8 @@ too.  On a SmartSwitch a pass is `module_db_update()` and
 `check_midplane_reachability()` -- the recovery machine runs on timers and is
 left to the unit tests -- and ('boot', name, boot_id) is one boot_id the
 reboot-cause subscriber hands `dpu_boot_id_update`.
+On a modular chassis, ('stop',) calls the real updater's clean-shutdown
+cleanup, including its accesses to the shared CHASSIS_STATE_DB ASIC table.
 """
 
 import glob as real_glob
@@ -107,6 +109,21 @@ def line_card_without_hostname():
     return (lambda: chassis(1, cards())), [('pass',)], 'chassis'
 
 
+def line_card_shutdown_keeps_peer_asics():
+    def build():
+        # Limit this ownership scenario to a supervisor and two line cards.
+        modules = cards()[:3]
+        from sonic_platform_base.module_base import ModuleBase
+        modules[2] = card(2, 'LINE-CARD1', ModuleBase.MODULE_TYPE_LINE, 2,
+                          asics=[('8', '0000:08:00.0')])
+        # The other card's daemon already published into the shared table.
+        H.Table(H.Db('CHASSIS_STATE_DB'), 'CHASSIS_ASIC_TABLE').set(
+            'LINE-CARD1|asic8', [('asic_pci_address', '0000:08:00.0'),
+                                ('name', 'LINE-CARD1'), ('asic_id_in_module', '0')])
+        return chassis(1, modules, hostname='lc0-host')
+    return build, [('pass',), ('stop',)], 'chassis'
+
+
 def config_events():
     return (lambda: chassis(SUPERVISOR_SLOT, cards())), \
         [('pass',),
@@ -185,7 +202,27 @@ def smartswitch_reboot_causes():
          ('boot', 'DPU9', 'boot-9'), ('boot', 'DPU0', 'boot-2'), ('pass',)], 'smartswitch'
 
 
-SCENARIOS = [supervisor, line_card, line_card_without_hostname, config_events,
+def smartswitch_missing_oper_status():
+    def build():
+        modules = dpus(1)
+        modules[0].get_oper_status = lambda: None
+        return smartswitch_chassis(modules)
+    return build, [('pass',), ('pass',)], 'smartswitch'
+
+
+def smartswitch_unsupported_oper_status():
+    def build():
+        modules = dpus(1)
+        def unsupported():
+            raise NotImplementedError()
+        modules[0].get_oper_status = unsupported
+        return smartswitch_chassis(modules)
+    return build, [('pass',), ('pass',)], 'smartswitch'
+
+
+SCENARIOS = [smartswitch_missing_oper_status, smartswitch_unsupported_oper_status,
+             supervisor, line_card, line_card_without_hostname,
+             line_card_shutdown_keeps_peer_asics, config_events,
              midplane_down_at_start, smartswitch_midplane, smartswitch_reboot_causes]
 
 
@@ -227,6 +264,8 @@ def run_python(name):
                 updater.module_down_chassis_db_cleanup()
         elif step[0] == 'boot':
             updater.dpu_boot_id_update(step[1], step[2])
+        elif step[0] == 'stop':
+            updater.deinit()
         elif step[0] == 'config':
             config.module_config_update(step[1], CD.MODULE_ADMIN_DOWN if step[2] == 'SET'
                                         else CD.MODULE_ADMIN_UP)

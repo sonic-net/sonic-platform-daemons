@@ -132,7 +132,10 @@ fn py_dict(m: &HashMap<String, f64>) -> String {
     }
     let mut keys: Vec<&String> = m.keys().collect();
     keys.sort();
-    let body: Vec<String> = keys.iter().map(|k| format!("'{k}': {}", float(m[*k]))).collect();
+    let body: Vec<String> = keys
+        .iter()
+        .map(|k| format!("'{k}': {}", float(m[*k])))
+        .collect();
     format!("{{{}}}", body.join(", "))
 }
 
@@ -362,7 +365,10 @@ mod tests {
     #[test]
     fn malformed_json_throttles_nothing() {
         let f = write("{ not json");
-        assert_eq!(PollingIntervals::load_from(f.path()), PollingIntervals::default());
+        assert_eq!(
+            PollingIntervals::load_from(f.path()),
+            PollingIntervals::default()
+        );
     }
 
     #[test]
@@ -403,7 +409,9 @@ mod tests {
     #[test]
     fn a_non_finite_or_absurd_interval_is_unset() {
         for bad in ["inf", "-inf", "NaN", "1e30"] {
-            let body = format!(r#"{{"chassis": {{"thermals": [{{"name": "ASIC", "polling_interval": "{bad}"}}]}}}}"#);
+            let body = format!(
+                r#"{{"chassis": {{"thermals": [{{"name": "ASIC", "polling_interval": "{bad}"}}]}}}}"#
+            );
             let f = write(&body);
             assert!(
                 PollingIntervals::load_from(f.path()).thermals.is_empty(),
@@ -421,7 +429,10 @@ mod tests {
     #[test]
     fn a_flattened_file_still_works() {
         let f = write(r#"{"thermals": [{"name": "ASIC", "polling_interval": 4}]}"#);
-        assert_eq!(PollingIntervals::load_from(f.path()).thermals.get("ASIC"), Some(&4.0));
+        assert_eq!(
+            PollingIntervals::load_from(f.path()).thermals.get("ASIC"),
+            Some(&4.0)
+        );
     }
 
     #[test]
@@ -436,7 +447,10 @@ mod tests {
     fn a_throttled_component_is_due_once_per_interval() {
         let mut gate = PollingGate::new();
         let t0 = Instant::now();
-        assert!(gate.is_due("ASIC", Some(10.0), t0), "first sight is always due");
+        assert!(
+            gate.is_due("ASIC", Some(10.0), t0),
+            "first sight is always due"
+        );
         assert!(!gate.is_due("ASIC", Some(10.0), t0 + Duration::from_secs(9)));
         assert!(gate.is_due("ASIC", Some(10.0), t0 + Duration::from_secs(10)));
         assert!(!gate.is_due("ASIC", Some(10.0), t0 + Duration::from_secs(19)));

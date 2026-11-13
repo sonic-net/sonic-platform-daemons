@@ -101,7 +101,8 @@ pub fn cleanup(down_key: &str, slot: i64, tables: &Tables<'_>) -> bool {
     );
     if host.is_empty() {
         pmon_common::notice!(
-            "Host name is not available for Module {module}. Chassis db clean up not done!");
+            "Host name is not available for Module {module}. Chassis db clean up not done!"
+        );
         return true;
     }
 
@@ -119,9 +120,11 @@ pub fn cleanup(down_key: &str, slot: i64, tables: &Tables<'_>) -> bool {
     for asic in asics {
         match run_script(host, &asic) {
             Ok(()) => pmon_common::notice!(
-                "Cleaned up chassis app db entries for {module}({host})/{asic}"),
+                "Cleaned up chassis app db entries for {module}({host})/{asic}"
+            ),
             Err(e) => log::error!(
-                "Failed to clean up chassis app db entries for {module}({host})/{asic}: {e}"),
+                "Failed to clean up chassis app db entries for {module}({host})/{asic}: {e}"
+            ),
         }
     }
     true
@@ -157,17 +160,25 @@ fn asics_of(module: &str, tables: &Tables<'_>) -> Result<Vec<String>, String> {
 fn run_script(host: &str, asic: &str) -> std::io::Result<()> {
     let out = Command::new("redis-cli")
         .args([
-            "-h", "redis_chassis.server",
-            "-p", "6380",
-            "-n", "12",
-            "EVAL", CLEANUP_SCRIPT,
-            "0", host, asic,
+            "-h",
+            "redis_chassis.server",
+            "-p",
+            "6380",
+            "-n",
+            "12",
+            "EVAL",
+            CLEANUP_SCRIPT,
+            "0",
+            host,
+            asic,
         ])
         .output()?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).trim().to_string()))
+        Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
     }
 }
 
@@ -211,7 +222,10 @@ mod tests {
     }
 
     fn table(entries: &[(&str, DownModule)]) -> BTreeMap<String, DownModule> {
-        entries.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     /// The half hour is what separates a reboot from a removal.  Cleaning up
@@ -221,7 +235,10 @@ mod tests {
     fn a_card_is_left_alone_until_it_has_been_gone_for_half_an_hour() {
         let d = table(&[("LINE-CARD0|lc1", down(false))]);
         assert!(due(true, d.iter(), at(29)).is_empty());
-        assert_eq!(due(true, d.iter(), at(30)), vec!["LINE-CARD0|lc1".to_string()]);
+        assert_eq!(
+            due(true, d.iter(), at(30)),
+            vec!["LINE-CARD0|lc1".to_string()]
+        );
     }
 
     /// Once only: the flag is what stops the supervisor re-running a LAG-id
@@ -271,12 +288,19 @@ mod tests {
         let tables = tables(&t);
         assert!(asics_of("LINE-CARD0", &tables).unwrap().is_empty());
 
-        t.set("LINE-CARD0", &[(NUM_ASICS_FIELD, "2".to_string())]).unwrap();
-        assert_eq!(asics_of("LINE-CARD0", &tables).unwrap(),
-                   vec!["asic0".to_string(), "asic1".to_string()]);
+        t.set("LINE-CARD0", &[(NUM_ASICS_FIELD, "2".to_string())])
+            .unwrap();
+        assert_eq!(
+            asics_of("LINE-CARD0", &tables).unwrap(),
+            vec!["asic0".to_string(), "asic1".to_string()]
+        );
 
-        t.set("LINE-CARD0", &[(NUM_ASICS_FIELD, "many".to_string())]).unwrap();
-        assert!(asics_of("LINE-CARD0", &tables).unwrap().is_empty(), "an unreadable count is none");
+        t.set("LINE-CARD0", &[(NUM_ASICS_FIELD, "many".to_string())])
+            .unwrap();
+        assert!(
+            asics_of("LINE-CARD0", &tables).unwrap().is_empty(),
+            "an unreadable count is none"
+        );
     }
 
     /// Without a hostname there is nothing to address the cleanup to: the
@@ -288,7 +312,10 @@ mod tests {
         let log = pmon_common::logging::capture();
         let t = MockTable::new();
         t.fail_reads("the empty hostname should have stopped this read");
-        assert!(cleanup("LINE-CARD0|", 1, &tables(&t)), "marked, so it is not retried");
+        assert!(
+            cleanup("LINE-CARD0|", 1, &tables(&t)),
+            "marked, so it is not retried"
+        );
         assert!(log.logged(
             log::Level::Info,
             "Module LINE-CARD0| (Slot 1) is down for long time. Initiating chassis app db clean up"
@@ -300,7 +327,8 @@ mod tests {
     #[test]
     fn a_card_with_no_asics_is_marked_without_running_anything() {
         let t = MockTable::new();
-        t.set("LINE-CARD0", &[(HOSTNAME_FIELD, "lc0".to_string())]).unwrap();
+        t.set("LINE-CARD0", &[(HOSTNAME_FIELD, "lc0".to_string())])
+            .unwrap();
         assert!(cleanup("LINE-CARD0|lc0", 1, &tables(&t)));
     }
 
@@ -317,7 +345,10 @@ mod tests {
         let t = MockTable::new();
         t.fail_reads("redis is gone");
         let tables = tables(&t);
-        assert!(!cleanup("LINE-CARD0|lc0", 1, &tables), "not marked: it has to be retried");
+        assert!(
+            !cleanup("LINE-CARD0|lc0", 1, &tables),
+            "not marked: it has to be retried"
+        );
         assert!(asics_of("LINE-CARD0", &tables).is_err());
     }
 }

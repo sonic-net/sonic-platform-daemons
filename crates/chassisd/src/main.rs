@@ -52,7 +52,7 @@ const SYSLOG_IDENTIFIER: &str = "chassisd";
 /// is which *implementation* of the platform API to open, because a platform
 /// with a native Rust one has to be able to say so without a new binary.
 #[derive(Parser, Debug)]
-#[command(name = "chassisd-rs", about = "SONiC chassis daemon, in Rust")]
+#[command(name = "chassisd", about = "SONiC chassis daemon, in Rust")]
 struct Args {
     /// Which platform API implementation to use: `pyo3` or `native`.
     ///
@@ -5099,6 +5099,15 @@ mod tests {
             MockTable::new(),
         );
         config_ports.fail_reads("connection reset");
+        t.set(
+            "DPU0",
+            &[
+                (dpu_updater::DP_STATE, "up".to_string()),
+                (dpu_updater::CP_STATE, "up".to_string()),
+            ],
+        )
+        .unwrap();
+        let writes_before = t.writes().len();
         let sources = Sources {
             config_ports: Some(&config_ports),
             port_table: Some(&port_table),
@@ -5114,16 +5123,17 @@ mod tests {
             log::Level::Error,
             "Failed to read the DPU's plane state: connection reset"
         ));
-        // The shutdown row is still written on the way out: the process is
-        // going, and that part the NPU must hear.  It is the only write.
-        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), None);
+        // A read failure is an error exit, so the last published plane state
+        // remains intact. Only clean shutdown synthesizes down publication.
         assert_eq!(
-            t.writes()
-                .iter()
-                .filter(|(_, f)| f == dpu_updater::DP_STATE)
-                .count(),
-            0
+            t.field("DPU0", dpu_updater::DP_STATE).as_deref(),
+            Some("up")
         );
+        assert_eq!(
+            t.field("DPU0", dpu_updater::CP_STATE).as_deref(),
+            Some("up")
+        );
+        assert_eq!(t.writes().len(), writes_before);
     }
 
     /// A plane read that fails is answered from the databases rather than

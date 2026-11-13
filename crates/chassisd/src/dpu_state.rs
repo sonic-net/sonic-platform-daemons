@@ -78,7 +78,11 @@ pub fn control_plane_from_system_ready(system_ready: &dyn TableLike) -> Result<b
 }
 
 fn word(up: bool) -> &'static str {
-    if up { "up" } else { "down" }
+    if up {
+        "up"
+    } else {
+        "down"
+    }
 }
 
 /// Publish whichever of the two planes changed, and the boot_id if it did.
@@ -109,7 +113,10 @@ pub fn publish(
         if current(state_field) == Some(want) {
             continue;
         }
-        let fvs = [(state_field, want.to_string()), (time_field, formatted_time())];
+        let fvs = [
+            (state_field, want.to_string()),
+            (time_field, formatted_time()),
+        ];
         table
             .set(name, &fvs)
             .map_err(|e| format!("Failed to publish {state_field} for {name}: {e}"))?;
@@ -136,7 +143,15 @@ pub fn publish(
 pub fn shutdown(name: &str, table: &dyn TableLike) {
     // Logged, not propagated: this runs on the way out, where there is no
     // connection left to recover by leaving again.
-    if let Err(e) = publish(name, &Planes { data: false, control: false }, None, table) {
+    if let Err(e) = publish(
+        name,
+        &Planes {
+            data: false,
+            control: false,
+        },
+        None,
+        table,
+    ) {
         log::warn!("{e}");
     }
 }
@@ -149,7 +164,8 @@ mod tests {
     fn port_tables(states: &[(&str, &str)]) -> (MockTable, MockTable) {
         let (cfg, app) = (MockTable::new(), MockTable::new());
         for (name, oper) in states {
-            cfg.set(name, &[("admin_status", "up".to_string())]).unwrap();
+            cfg.set(name, &[("admin_status", "up".to_string())])
+                .unwrap();
             app.set(name, &[("oper_status", oper.to_string())]).unwrap();
         }
         (cfg, app)
@@ -169,7 +185,8 @@ mod tests {
     #[test]
     fn a_port_with_no_state_yet_is_not_up() {
         let cfg = MockTable::new();
-        cfg.set("Ethernet0", &[("admin_status", "up".to_string())]).unwrap();
+        cfg.set("Ethernet0", &[("admin_status", "up".to_string())])
+            .unwrap();
         assert!(!data_plane_from_ports(&cfg, &MockTable::new()).unwrap());
     }
 
@@ -184,9 +201,11 @@ mod tests {
     fn the_control_plane_follows_system_ready() {
         let t = MockTable::new();
         assert!(!control_plane_from_system_ready(&t).unwrap());
-        t.set("SYSTEM_STATE", &[("Status", "DOWN".to_string())]).unwrap();
+        t.set("SYSTEM_STATE", &[("Status", "DOWN".to_string())])
+            .unwrap();
         assert!(!control_plane_from_system_ready(&t).unwrap());
-        t.set("SYSTEM_STATE", &[("Status", "UP".to_string())]).unwrap();
+        t.set("SYSTEM_STATE", &[("Status", "UP".to_string())])
+            .unwrap();
         assert!(
             control_plane_from_system_ready(&t).unwrap(),
             "the case is the platform's business"
@@ -199,11 +218,29 @@ mod tests {
     #[test]
     fn a_state_that_did_not_change_is_not_rewritten() {
         let t = MockTable::new();
-        publish("DPU0", &Planes { data: true, control: true }, None, &t).unwrap();
+        publish(
+            "DPU0",
+            &Planes {
+                data: true,
+                control: true,
+            },
+            None,
+            &t,
+        )
+        .unwrap();
         let stamp = t.field("DPU0", DP_UPDATE_TIME);
         assert_eq!(t.field("DPU0", DP_STATE).as_deref(), Some("up"));
 
-        publish("DPU0", &Planes { data: true, control: true }, None, &t).unwrap();
+        publish(
+            "DPU0",
+            &Planes {
+                data: true,
+                control: true,
+            },
+            None,
+            &t,
+        )
+        .unwrap();
         assert_eq!(t.field("DPU0", DP_UPDATE_TIME), stamp);
     }
 
@@ -212,10 +249,28 @@ mod tests {
     #[test]
     fn the_two_planes_are_published_independently() {
         let t = MockTable::new();
-        publish("DPU0", &Planes { data: true, control: true }, None, &t).unwrap();
+        publish(
+            "DPU0",
+            &Planes {
+                data: true,
+                control: true,
+            },
+            None,
+            &t,
+        )
+        .unwrap();
         let cp_stamp = t.field("DPU0", CP_UPDATE_TIME);
 
-        publish("DPU0", &Planes { data: false, control: true }, None, &t).unwrap();
+        publish(
+            "DPU0",
+            &Planes {
+                data: false,
+                control: true,
+            },
+            None,
+            &t,
+        )
+        .unwrap();
         assert_eq!(t.field("DPU0", DP_STATE).as_deref(), Some("down"));
         assert_eq!(t.field("DPU0", CP_STATE).as_deref(), Some("up"));
         assert_eq!(t.field("DPU0", CP_UPDATE_TIME), cp_stamp, "not restamped");
@@ -226,7 +281,16 @@ mod tests {
     #[test]
     fn shutdown_reports_both_planes_down() {
         let t = MockTable::new();
-        publish("DPU0", &Planes { data: true, control: true }, None, &t).unwrap();
+        publish(
+            "DPU0",
+            &Planes {
+                data: true,
+                control: true,
+            },
+            None,
+            &t,
+        )
+        .unwrap();
         shutdown("DPU0", &t);
         assert_eq!(t.field("DPU0", DP_STATE).as_deref(), Some("down"));
         assert_eq!(t.field("DPU0", CP_STATE).as_deref(), Some("down"));
@@ -244,13 +308,19 @@ mod tests {
 
         let cfg = MockTable::new();
         cfg.fail_reads("redis is gone");
-        assert!(data_plane_from_ports(&cfg, &MockTable::new()).is_err(), "the port list");
+        assert!(
+            data_plane_from_ports(&cfg, &MockTable::new()).is_err(),
+            "the port list"
+        );
 
         let cfg = MockTable::new();
         cfg.set("Ethernet0", &[]).unwrap();
         let app = MockTable::new();
         app.fail_reads("redis is gone");
-        assert!(data_plane_from_ports(&cfg, &app).is_err(), "and a port's state");
+        assert!(
+            data_plane_from_ports(&cfg, &app).is_err(),
+            "and a port's state"
+        );
     }
 
     /// A publish the table refuses is reported, naming the plane, and the
@@ -259,8 +329,16 @@ mod tests {
     fn a_refused_publish_is_reported() {
         let t = MockTable::new();
         t.fail_writes("redis is gone");
-        let e = publish("DPU0", &Planes { data: true, control: true }, None, &t)
-            .expect_err("a table that will not take the state has to be reported");
+        let e = publish(
+            "DPU0",
+            &Planes {
+                data: true,
+                control: true,
+            },
+            None,
+            &t,
+        )
+        .expect_err("a table that will not take the state has to be reported");
         assert!(e.contains(DP_STATE) && e.contains("DPU0"), "{e}");
     }
 
@@ -279,7 +357,10 @@ mod tests {
     #[test]
     fn a_new_boot_id_is_published_once() {
         let t = MockTable::new();
-        let planes = Planes { data: true, control: true };
+        let planes = Planes {
+            data: true,
+            control: true,
+        };
         publish("DPU0", &planes, Some("b-1"), &t).unwrap();
         assert_eq!(t.field("DPU0", BOOT_ID).as_deref(), Some("b-1"));
         let before = t.writes().len();
@@ -297,7 +378,10 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("boot_id");
         std::fs::write(&path, "0b8e4f6c-1d2e-4a3b-9c8d-7e6f5a4b3c2d\n").unwrap();
-        assert_eq!(read_boot_id(&path).as_deref(), Some("0b8e4f6c-1d2e-4a3b-9c8d-7e6f5a4b3c2d"));
+        assert_eq!(
+            read_boot_id(&path).as_deref(),
+            Some("0b8e4f6c-1d2e-4a3b-9c8d-7e6f5a4b3c2d")
+        );
         assert_eq!(read_boot_id(&d.path().join("missing")), None);
         assert!(log.logged(log::Level::Warn, "Failed to read boot_id from"));
     }
