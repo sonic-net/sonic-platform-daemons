@@ -18,9 +18,8 @@ use crate::ERR_DB_WRITE;
 
 pub struct Monitor {
     pub shutdown_sender: Option<Arc<watch::Sender<bool>>>,
-    pub policy_request: Option<Arc<AtomicBool>>,
+    pub policy_worker: bool,
     pub policy_stopped: Option<Arc<crate::TmStopped>>,
-    pub policy_interval: Arc<std::sync::atomic::AtomicU64>,
     initial_interval: f64,
     update_interval: f64,
     update_elapsed_threshold: f64,
@@ -84,9 +83,8 @@ impl Monitor {
         }
         Self {
             shutdown_sender: None,
-            policy_request: None,
+            policy_worker: false,
             policy_stopped: None,
-            policy_interval: Arc::new(std::sync::atomic::AtomicU64::new(60.0f64.to_bits())),
             initial_interval,
             update_interval,
             update_elapsed_threshold,
@@ -104,8 +102,7 @@ impl Monitor {
         &self,
         platform: &mut dyn PlatformApi,
     ) -> Result<(), platform_api::PlatformError> {
-        if let Some(request) = &self.policy_request {
-            request.store(true, Ordering::Release);
+        if self.policy_worker {
             Ok(())
         } else {
             platform.tm_run_policy()
@@ -134,8 +131,8 @@ impl Monitor {
     /// populated soon after boot; subsequent waits absorb the cycle's own
     /// duration to keep a steady period.
     ///
-    /// Calls `tm_run_policy()` on each cycle (Mellanox: no-op; other platforms
-    /// may implement fan-speed policy logic here).
+    /// An independent policy worker owns policy scheduling in the daemon.
+    /// Without a worker, policy can also be exercised inline on its interval.
     ///
     /// The manager is reached through the platform rather than held as an
     /// object: what the base class answers is a class, not an instance, and
@@ -244,7 +241,7 @@ impl Monitor {
             // thread now, and a policy round against a half-started manager is
             // a call Python never makes: there the policy loop *is* the main
             // thread, which has already returned from `initialize()`.
-            if tm_ready.load(Ordering::Acquire) {
+            if tm_ready.load(Ordering::Acquire) && !self.policy_worker {
                 match policy_interval {
                     // First cycle with a manager: learn the cadence and seed
                     // the gate.  Python's policy loop waits a full interval
@@ -253,11 +250,7 @@ impl Monitor {
                     // reproduces that.  60 is the base class default, and what
                     // a platform whose thermal_policy.json omits the key gets.
                     None => {
-                        let v = if self.policy_request.is_some() {
-                            f64::from_bits(self.policy_interval.load(Ordering::Acquire))
-                        } else {
-                            platform.tm_get_interval().ok().flatten().unwrap_or(60.0)
-                        };
+                        let v = platform.tm_get_interval().ok().flatten().unwrap_or(60.0);
                         let v = if v.is_finite() && v >= 0.0 && v <= u32::MAX as f64 {
                             v
                         } else {

@@ -178,7 +178,7 @@ fn stop_while_starting(waiting: Py<PyAny>) -> (Published, Vec<Line>, f64) {
     let (tx, rx) = watch::channel(false);
     let (fan, temperature) = (db.fan.clone(), db.temperature.clone());
     let signal = std::thread::spawn(move || {
-        let waited = Python::with_gil(|py| {
+        let waited = Python::attach(|py| {
             waiting
                 .bind(py)
                 .call_method1("wait", (PROMPT,))
@@ -198,11 +198,9 @@ fn stop_while_starting(waiting: Py<PyAny>) -> (Published, Vec<Line>, f64) {
         sent
     });
 
-    let policy_request = Arc::new(AtomicBool::new(false));
-    monitor.policy_request = Some(Arc::clone(&policy_request));
+    monitor.policy_worker = true;
     let stopped = Arc::new(crate::TmStopped::default());
     monitor.policy_stopped = Some(Arc::clone(&stopped));
-    let policy_interval = Arc::clone(&monitor.policy_interval);
     let policy_shutdown = rx.clone();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -215,21 +213,12 @@ fn stop_while_starting(waiting: Py<PyAny>) -> (Published, Vec<Line>, f64) {
         &args,
         chassis.as_ref(),
         &|ready: Arc<AtomicBool>| {
-            let request = Arc::clone(&policy_request);
-            let interval = Arc::clone(&policy_interval);
             let shutdown = policy_shutdown.clone();
             let stopped = Arc::clone(&stopped);
             std::thread::Builder::new()
                 .name("tm-init".into())
                 .spawn(move || {
-                    crate::tm_policy_thread_main(
-                        PlatformImpl::Pyo3,
-                        ready,
-                        request,
-                        interval,
-                        shutdown,
-                        &stopped,
-                    )
+                    crate::tm_policy_thread_main(PlatformImpl::Pyo3, ready, shutdown, &stopped)
                 })
         },
         &|_interval, _rx| panic!("leak detection is off on this chassis"),
@@ -277,7 +266,7 @@ fn thermalctld_stops_while_starting_as_the_python_daemon_does() {
             .unbind();
         let rust = std::thread::spawn(move || stop_while_starting(waiting));
         let (tables, mut lines, secs) = py
-            .allow_threads(|| rust.join())
+            .detach(|| rust.join())
             .unwrap_or_else(|_| panic!("Rust thermalctld panicked"));
         took.1 = secs;
         // The vendor's own lines, logged from Python while the Rust daemon ran.
@@ -312,6 +301,7 @@ import threading
 started = threading.Event()
 release = threading.Event()
 initialized = []
+constructed = []
 policies = []
 stopped = []
 class Manager:
@@ -334,7 +324,10 @@ class Manager:
 class Chassis:
     def get_thermal_manager(self): return Manager
 class Platform:
-    def get_chassis(self): return Chassis()
+    def get_chassis(self):
+        chassis = Chassis()
+        constructed.append(id(chassis))
+        return chassis
 "#,
         )
         .unwrap();
@@ -345,29 +338,25 @@ class Platform:
             .set_item("sonic_platform.platform", &module)
             .unwrap();
         let state = module.unbind();
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut main_handle =
                 platform_provider::open("policy-regression", PlatformImpl::Pyo3).unwrap();
             let ready = Arc::new(AtomicBool::new(false));
-            let request = Arc::new(AtomicBool::new(false));
             let (shutdown, receiver) = watch::channel(false);
             let mut monitor = crate::monitor::Monitor::new(0.01, 1.0, 30.0);
-            monitor.policy_request = Some(Arc::clone(&request));
+            monitor.policy_worker = true;
             let stopped = Arc::new(crate::TmStopped::default());
             let worker_stopped = Arc::clone(&stopped);
-            let interval = Arc::clone(&monitor.policy_interval);
             let worker_ready = Arc::clone(&ready);
             let worker = std::thread::spawn(move || {
                 crate::tm_policy_thread_main(
                     PlatformImpl::Pyo3,
                     worker_ready,
-                    request,
-                    interval,
                     receiver,
                     &worker_stopped,
                 )
             });
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 assert!(state
                     .bind(py)
                     .getattr("started")
@@ -396,7 +385,7 @@ class Platform:
             }
             monitor.run_policy(&mut main_handle).unwrap();
             loop {
-                let completed = Python::with_gil(|py| {
+                let completed = Python::attach(|py| {
                     state.bind(py).getattr("policies").unwrap().len().unwrap() == 1
                 });
                 if completed {
@@ -409,8 +398,13 @@ class Platform:
             main_handle.tm_stop().unwrap();
             stopped.notify();
             worker.join().unwrap();
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let state = state.bind(py);
+                assert_eq!(
+                    state.getattr("constructed").unwrap().len().unwrap(),
+                    2,
+                    "one chassis for each of the main and policy open calls"
+                );
                 assert_eq!(
                     state
                         .getattr("initialized")
@@ -423,10 +417,16 @@ class Platform:
                         .extract::<Vec<usize>>()
                         .unwrap()
                 );
-                assert_eq!(state.getattr("stopped").unwrap().extract::<Vec<String>>().unwrap(),
+                assert_eq!(
+                    state
+                        .getattr("stopped")
+                        .unwrap()
+                        .extract::<Vec<String>>()
+                        .unwrap(),
                     // The facade's tm_deinitialize also calls stop, matching
                     // Python's signal handler followed by its deinit path.
-                    ["stop", "stop", "deinitialize"]);
+                    ["stop", "stop", "deinitialize"]
+                );
             });
         });
         modules
@@ -442,7 +442,7 @@ fn pyo3_name() -> &'static std::ffi::CStr {
 #[test]
 fn leak_aggregation_and_restart_match_the_current_python_daemon() {
     use crate::leak_updater::{apply, LeakState};
-    use platform_api::{LeakProfile, LeakSensorInfo, LeakSeverity};
+    use platform_api::{LeakSensorInfo, LeakSeverity};
     parity::with_harness(|py, harness| {
         let scenarios = parity::module(py, "leak_parity", SCENARIOS);
         scenarios.call_method1("setup", (harness, ROOT)).unwrap();
@@ -455,16 +455,13 @@ fn leak_aggregation_and_restart_match_the_current_python_daemon() {
             let tables = crate::db::mock::MockLeak::new();
             let mut state = LeakState::new();
             state.set_major_minimum(2);
-            let profiles = [LeakProfile {
-                r#type: "p".into(),
-                max_minor_duration_sec: Some(if case == "zero_limit" { 0 } else { 10 }),
-            }];
             let sensor = |name: &str, severity| LeakSensorInfo {
                 name: name.into(),
                 is_ok: Some(true),
                 is_leak: Some(true),
                 severity: Some(severity),
                 profile_type: Some("p".into()),
+                profile_max_minor_duration_sec: Some(if case == "zero_limit" { 0 } else { 10 }),
                 ..Default::default()
             };
             let critical = matches!(case, "restart" | "read_failure");
@@ -482,7 +479,7 @@ fn leak_aggregation_and_restart_match_the_current_python_daemon() {
             let mut events = crate::event_log::BmcEventLogger::new(false);
             let _ = apply(
                 &tables.tables,
-                &state.refresh(&sensors, &profiles, Instant::now(), &mut events),
+                &state.refresh(&sensors, Instant::now(), &mut events),
             );
             if case == "restart" {
                 state = LeakState::new();
@@ -491,7 +488,7 @@ fn leak_aggregation_and_restart_match_the_current_python_daemon() {
                 sensors[0].severity = Some(LeakSeverity::Minor);
                 let _ = apply(
                     &tables.tables,
-                    &state.refresh(&sensors, &profiles, Instant::now(), &mut events),
+                    &state.refresh(&sensors, Instant::now(), &mut events),
                 );
             }
             assert_eq!(

@@ -49,7 +49,10 @@ pub fn value(key: &str) -> Option<String> {
 
 /// The same, against a given file.
 pub fn value_in(path: &Path, key: &str) -> Option<String> {
-    entries(path).into_iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    entries(path)
+        .into_iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
 }
 
 /// The `key=value` lines, both sides trimmed.
@@ -99,7 +102,10 @@ mod tests {
         let f = conf("sensormond_warning_time = 45\n");
         assert_eq!(value_in(f.path(), "SENSORMOND_WARNING_TIME"), None);
         let f = conf("SENSORMOND_WARNING_TIME = 45\n");
-        assert_eq!(value_in(f.path(), "SENSORMOND_WARNING_TIME").as_deref(), Some("45"));
+        assert_eq!(
+            value_in(f.path(), "SENSORMOND_WARNING_TIME").as_deref(),
+            Some("45")
+        );
     }
 
     #[test]
@@ -117,6 +123,9 @@ mod tests {
     #[test]
     fn a_line_without_a_separator_does_not_stop_the_scan() {
         let f = conf("# a comment\n\nSENSORMOND_WARNING_TIME=45\n");
-        assert_eq!(value_in(f.path(), "SENSORMOND_WARNING_TIME").as_deref(), Some("45"));
+        assert_eq!(
+            value_in(f.path(), "SENSORMOND_WARNING_TIME").as_deref(),
+            Some("45")
+        );
     }
 }
