@@ -1706,6 +1706,9 @@ class BmcEventHandler(EventLogger):
                 SystemLeakStatus.MINOR: policy.get("system_minor_leak_action",
                                                    DEFAULT_SYSTEM_MINOR_LEAK_ACTION),
             }.get(leak_status, "none")
+            if leak_status == SystemLeakStatus.CRITICAL and would_be == ACTION_GRACEFUL_SHUTDOWN:
+                # A critical leak dispatches graceful_shutdown as power_off.
+                would_be = ACTION_POWER_OFF
             self.log_notice("TEST SYSTEM LEAK (status={}); action={} not dispatched".format(
                 leak_status, would_be))
             return
