@@ -622,8 +622,13 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         # Sensors whose CRITICAL was restored across a restart; latched CRITICAL while
         # still leaking so a lower live severity does not transiently downgrade them.
         self.latched_critical_sensors: set = set()
+        # Sensors currently reporting an injected test leak (is_test_leak()).
+        # A test leak is published but never drives mitigation, so it is kept
+        # out of every set above and out of device_leak_status.
+        self.test_leak_sensors: set = set()
         self.interval = liquid_cooling_update_interval
         self.last_leak_status = None
+        self.last_test_leak_status = None
         self.last_sensor_fvs: Dict[str, tuple] = {}
 
         state_db = daemon_base.db_connect("STATE_DB")
@@ -650,6 +655,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         if not (existing and existing[0]):
             self.system_table.set('system', swsscommon.FieldValuePairs([
                 ('device_leak_status', 'None'),
+                ('test_leak_status', 'None'),
                 ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
             ]))
 
@@ -679,10 +685,17 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 self.last_leak_status = stored_status
             else:
                 self.last_leak_status = None
+            stored_test_status = existing.get('test_leak_status')
+            if stored_test_status in (SystemLeakStatus.CRITICAL, SystemLeakStatus.MINOR):
+                self.last_test_leak_status = stored_test_status
 
         for sensor_name in self.sensor_table.getKeys():
             fields = self._row_to_dict(self.sensor_table.get(sensor_name))
             if not fields or fields.get('leaking') != 'Yes':
+                continue
+            # A test leak never drove mitigation; do not restore it as a leak
+            # episode. The next refresh re-reads it from the platform.
+            if fields.get('test_leak') == 'Yes':
                 continue
             # Resume the escalation countdown from the recorded leak timestamp.
             try:
@@ -702,6 +715,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('type', fields.get('type', '')),
                 ('location', fields.get('location', '')),
                 ('leak_severity', fields.get('leak_severity', '')),
+                ('test_leak', fields.get('test_leak', '')),
             )
 
     def __del__(self):
@@ -761,6 +775,9 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
         major_leak_min = self._resolve_major_leak_min()
         major_by_min_leaks_enabled = major_leak_min > 0
         status = None
+        # Aggregate of injected test leaks alone, published separately from
+        # device_leak_status so it is observable but never mitigated.
+        test_status = None
         concurrent_minor_leaks = 0
         major_escalated = False
         for index, sensor in enumerate(self.liquid_cooling.leakage_sensors, start = 1):
@@ -768,6 +785,11 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
             sensor_is_ok = sensor.is_leak_sensor_ok()
             sensor_is_leak = sensor.is_leak()
             sensor_leak_severity = sensor.get_leak_severity()
+            # Test provenance from the same poll. A platform reports a hardware
+            # leak as a real leak even while an injection is present, so only a
+            # leak the platform flags as injected is held back from mitigation.
+            sensor_is_test = bool(sensor_is_ok and sensor_is_leak
+                                  and try_get(sensor.is_test_leak, False) is True)
 
             now = datetime.now()
 
@@ -780,8 +802,28 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                     del self.faulty_sensors[sensor_name]
                     self.event_logger.log_notice('Liquid cooling leaking sensor {} recovered from fault'.format(sensor_name))
 
+            if sensor_is_test:
+                if sensor_name not in self.test_leak_sensors:
+                    self.test_leak_sensors.add(sensor_name)
+                    self.log_notice(
+                        'Liquid cooling leakage sensor {} reported test leak (severity {}); '
+                        'no mitigation is taken for a test leak'.format(
+                            sensor_name,
+                            sensor_leak_severity.value if sensor_leak_severity is not None else 'None'))
+                if sensor_leak_severity == LeakSeverity.CRITICAL:
+                    test_status = SystemLeakStatus.CRITICAL
+                elif test_status != SystemLeakStatus.CRITICAL:
+                    test_status = SystemLeakStatus.MINOR
+            elif sensor_name in self.test_leak_sensors:
+                self.test_leak_sensors.discard(sensor_name)
+                self.log_notice('Liquid cooling leakage sensor {} test leak cleared'.format(sensor_name))
+
             if sensor_is_ok:
-                if sensor_is_leak:
+                # A test leak takes the no-leak path: it ends any tracked
+                # episode (the platform only flags a leak as a test leak while
+                # the hardware reads dry) and contributes nothing to the system
+                # status that drives mitigation.
+                if sensor_is_leak and not sensor_is_test:
                     if sensor_name not in self.leaking_sensors:
                         self.leaking_sensors[sensor_name] = now
                         self.log_error('Liquid cooling leakage sensor {} reported leaking'.format(sensor_name))
@@ -863,6 +905,7 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
                 ('type', str(sensor_type)),
                 ('location', str(sensor_location)),
                 ('leak_severity', sensor_leak_severity.value if sensor_leak_severity is not None else 'None'),
+                ('test_leak', 'Yes' if sensor_is_test else 'No'),
             )
             if self.last_sensor_fvs.get(sensor_name) != fvs_tuple:
                 # Stamp the leak-start time (when leaking went No->Yes) rather than the
@@ -905,15 +948,18 @@ class LiquidCoolingUpdater(threading.Thread, logger.Logger):
 
         # Only write SYSTEM_LEAK_STATUS on actual transitions to avoid
         # subscriber spam from per-cycle timestamp updates.
-        if status != self.last_leak_status:
+        if status != self.last_leak_status or test_status != self.last_test_leak_status:
             status_str = status if status is not None else SystemLeakStatus.NONE
+            test_status_str = test_status if test_status is not None else SystemLeakStatus.NONE
             fvs = swsscommon.FieldValuePairs([
                 ('device_leak_status', status_str),
+                ('test_leak_status', test_status_str),
                 ('timestamp', datetime.now().strftime('%Y%m%d %H:%M:%S')),
             ])
             self.system_table.set('system', fvs)
 
         self.last_leak_status = status
+        self.last_test_leak_status = test_status
 
     def update(self):
         self._refresh_leak_status()

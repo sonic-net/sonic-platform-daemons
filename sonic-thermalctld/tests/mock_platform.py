@@ -218,6 +218,13 @@ class MockLiquidCoolingSensor(liquid_cooling_base.LeakageSensorBase):
         # self.leaking rather than calling is_leak() again.
         self.leaking = leak_status
 
+    def set_test_leak(self, severity=liquid_cooling_base.LeakSeverity.MINOR):
+        """Helper method for testing: report an injected test leak on dry
+        hardware, the way a platform implementing the leak test API does."""
+        self.set_leak(True)
+        self.test_leak = True
+        self.leak_severity = severity
+
     def get_leak_profile(self):
         class MockProfile(liquid_cooling_base.LeakSensorProfileBase):
             def get_type(self):
