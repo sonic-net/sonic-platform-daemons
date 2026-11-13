@@ -81,6 +81,7 @@ class XcvrTableHelper:
         self.vdm_flag_change_count_tbl = {f'vdm_{t}_flag_change_count_tbl': {} for t in VDM_THRESHOLD_TYPES}
         self.vdm_flag_set_time_tbl = {f'vdm_{t}_flag_set_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
         self.vdm_flag_clear_time_tbl = {f'vdm_{t}_flag_clear_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
+        self._gearbox_line_lanes_dict = None
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
@@ -341,12 +342,15 @@ class XcvrTableHelper:
 
     def get_gearbox_line_lanes_dict(self):
         """
-        Retrieves the gearbox line lanes dictionary from APPL_DB
+        Retrieves the gearbox line lanes dictionary
 
-        This method scans all ASICs for gearbox interface configurations and extracts
-        the line_lanes count for each logical port. The line_lanes represent the
-        number of lanes on the line side (towards the optical module) which is the
-        correct count to use for CMIS host lane configuration.
+        The line_lanes represent the number of lanes on the line side (towards the
+        optical module) which is the correct count to use for CMIS host lane
+        configuration.
+
+        Gearbox line lanes are static configuration published once by gearsyncd, so
+        the result is cached after gearsyncd has finished (GearboxConfigDone). Until
+        then, APPL_DB is read on every call and the result is not cached.
 
         Returns:
             dict: A dictionary where:
@@ -355,6 +359,28 @@ class XcvrTableHelper:
 
         Example:
             {"Ethernet0": 2, "Ethernet200": 4}
+
+        Note:
+            - Returns empty dict if no gearbox configuration is found
+            - Returns None if the read fails, so callers can retry
+        """
+        if self._gearbox_line_lanes_dict is None:
+            config_done = self.is_gearbox_config_done()
+            lanes = self._read_gearbox_line_lanes_dict()
+            if not config_done or lanes is None:
+                return lanes
+            self._gearbox_line_lanes_dict = lanes
+        return self._gearbox_line_lanes_dict
+
+    def _read_gearbox_line_lanes_dict(self):
+        """
+        Reads the gearbox line lanes dictionary from APPL_DB
+
+        This method scans all ASICs for gearbox interface configurations and extracts
+        the line_lanes count for each logical port.
+
+        Returns:
+            dict: logical port name -> number of line-side lanes, or None if the read fails
 
         Note:
             - Returns empty dict if no gearbox configuration is found
@@ -384,6 +410,31 @@ class XcvrTableHelper:
                                     helper_logger.log_debug("get_gearbox_line_lanes_dict: ASIC {}: Interface {} has empty 'line_lanes' field".format(asic_id, interface_name))
         except Exception as e:
             helper_logger.log_error("Error in get_gearbox_line_lanes_dict: {}".format(str(e)))
-            return gearbox_line_lanes_dict
+            return None
 
         return gearbox_line_lanes_dict
+
+    def is_gearbox_config_done(self):
+        """
+        Checks whether gearsyncd has finished publishing gearbox configuration.
+
+        gearsyncd writes _GEARBOX_TABLE:GearboxConfigDone last (after all phy and
+        interface entries), so its presence indicates the gearbox line lanes data
+        in APPL_DB is complete. GearboxConfigDone is set on every platform
+        (including non-gearbox ones), so this returns True once init completes.
+
+        Returns:
+            bool: True if GearboxConfigDone is present for all ASICs, else False
+        """
+        try:
+            for asic_id in self.appl_db:
+                appl_db = self.appl_db[asic_id]
+                gearbox_table = swsscommon.Table(appl_db, "_GEARBOX_TABLE")
+                (found, _) = gearbox_table.get("GearboxConfigDone")
+                if not found:
+                    return False
+        except Exception as e:
+            helper_logger.log_error("Error in is_gearbox_config_done: {}".format(str(e)))
+            return False
+
+        return True
