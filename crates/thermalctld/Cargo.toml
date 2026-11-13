@@ -1,0 +1,54 @@
+[package]
+name = "sonic-thermalctld-rs"
+version = "1.0.0"
+edition = "2021"
+authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
+description = "SONiC thermal control daemon in Rust"
+license = "Apache-2.0"
+homepage = "https://github.com/sonic-net/sonic-platform-daemons"
+repository = "https://github.com/sonic-net/sonic-platform-daemons"
+keywords = ["sonic", "thermal", "networking"]
+
+[[bin]]
+name = "thermalctld"
+path = "src/main.rs"
+
+[dependencies]
+# The platform API, generated from sonic_platform_api/facade.pyi.
+platform-api    = { workspace = true }
+# Every implementation of that trait, behind one type.  This daemon names
+# none of them: which one it opens is the `--platform-api` switch, and a new
+# implementation arriving changes nothing here.
+platform-provider = { workspace = true }
+swss-common     = { workspace = true }
+# STATE_DB tables and syslog, shared with the other ported daemons.
+pmon-common     = { path = "../pmon-common" }
+# "rt", not "rt-multi-thread": one worker thread is plenty at ~0.4 polls/s, and
+# the thread count is part of what this daemon exists to measure.
+tokio   = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
+# Cargo.lock retains the validated graph; current master uses cargo-auditable 0.7.6.
+clap    = { version = "4", features = ["derive"] }
+chrono  = "0.4"
+serde_json = "1"
+log     = "0.4"
+syslog  = "6.0"
+
+[dev-dependencies]
+# `logging::capture` and `Cycles::Fixed` are test scaffolding, asked for here
+# rather than carried by the shipped binary, as every daemon in the workspace
+# does.
+pmon-common = { path = "../pmon-common", features = ["testing"] }
+# Retain the older dev-dependency graph for the same release-builder compatibility.
+tempfile = ">=3, <3.15"
+# "test-util" gives the tests `tokio::time::pause()`, which makes the polling
+# loop's wait arithmetic observable without any test sleeping.  It is a
+# dev-only feature: the shipped binary keeps the four features above.
+tokio = { version = "1", features = ["test-util"] }
+
+[features]
+# The Python daemon run against this one (`src/parity`, harness in
+# `pmon_common::parity`).  Off by default: it embeds Python and imports
+# sonic_py_common, sonic_platform_base and the Python daemon's own imports,
+# none of which the deb build's `cargo test` (debian/rules) has.  The repo's
+# CI turns it on; with it on, a module that cannot be imported fails the test.
+parity = ["pmon-common/parity"]
