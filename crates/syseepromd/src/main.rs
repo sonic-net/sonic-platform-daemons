@@ -30,7 +30,7 @@ const SYSLOG_IDENTIFIER: &str = "syseepromd";
 /// is which *implementation* of the platform API to open, because a platform
 /// with a native Rust one has to be able to say so without a new binary.
 #[derive(Parser, Debug)]
-#[command(name = "syseepromd-rs", about = "SONiC system EEPROM daemon, in Rust")]
+#[command(name = "syseepromd", about = "SONiC system EEPROM daemon, in Rust")]
 struct Args {
     /// Which platform API implementation to use: `pyo3` or `native`.
     ///
@@ -161,28 +161,6 @@ fn publish_attempt(
             Ok(None)
         }
     }
-}
-
-/// Rewrite the table if it is no longer the one this daemon published.
-///
-/// Returns whether it rewrote.  The comparison is against the key set the
-/// platform's own writer produced, which is the only way to tell "somebody
-/// cleared this" from "the platform reports fewer TLVs than it used to".
-#[cfg(test)]
-fn republish_if_changed(
-    plat: &mut dyn PlatformApi,
-    table: &dyn TableLike,
-    published: &mut BTreeSet<String>,
-) -> Result<bool, String> {
-    if snapshot(table)? == *published {
-        return Ok(false);
-    }
-    log::info!("System EEPROM table was changed, needs update");
-    clear(table)?;
-    if let Some(keys) = publish(plat, table, REPOST_FAILED)? {
-        *published = keys;
-    }
-    Ok(true)
 }
 
 /// A failed write stays pending until a later pass succeeds, even when the
@@ -566,16 +544,13 @@ mod tests {
     fn a_table_someone_emptied_is_rewritten() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21"]);
-        let mut published = publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
+        let mut publication = Publication::start(&mut p, &t).unwrap();
 
-        assert!(
-            !republish_if_changed(&mut p, &t, &mut published).unwrap(),
-            "nothing changed"
-        );
+        publication.step(&mut p, &t).unwrap();
         assert_eq!(p.calls, 1);
 
         t.del("0x21").unwrap();
-        assert!(republish_if_changed(&mut p, &t, &mut published).unwrap());
+        publication.step(&mut p, &t).unwrap();
         assert_eq!(p.calls, 2);
         assert_eq!(t.keys(), vec!["0x21".to_string(), "TlvHeader".to_string()]);
     }
@@ -588,11 +563,11 @@ mod tests {
         let log = pmon_common::logging::capture();
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
-        let mut published = publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
+        let mut publication = Publication::start(&mut p, &t).unwrap();
 
         p.answer = EepromUpdate::ReadFailed;
         t.del("0x21").unwrap();
-        assert!(republish_if_changed(&mut p, &t, &mut published).unwrap());
+        publication.step(&mut p, &t).unwrap();
         assert!(log.logged(log::Level::Error, "Failed to read EEPROM"));
         assert!(log.logged(log::Level::Error, REPOST_FAILED));
         assert!(!log.logged(log::Level::Error, POST_FAILED));
@@ -606,15 +581,17 @@ mod tests {
     fn a_platform_that_reports_fewer_tlvs_settles_on_the_new_set() {
         let t = MockTable::new();
         let mut p = FakePlatform::new(t.clone(), vec!["TlvHeader", "0x21"]);
-        let mut published = publish(&mut p, &t, POST_FAILED).unwrap().unwrap();
+        let mut publication = Publication::start(&mut p, &t).unwrap();
 
         p.rows = vec!["TlvHeader"];
         t.del("0x21").unwrap();
-        assert!(republish_if_changed(&mut p, &t, &mut published).unwrap());
-        assert_eq!(published, ["TlvHeader".to_string()].into());
-        assert!(
-            !republish_if_changed(&mut p, &t, &mut published).unwrap(),
-            "and settles"
+        publication.step(&mut p, &t).unwrap();
+        assert_eq!(publication.keys, Some(["TlvHeader".to_string()].into()));
+        assert_eq!(p.calls, 2);
+        publication.step(&mut p, &t).unwrap();
+        assert_eq!(
+            p.calls, 2,
+            "the new key set settles without a further write"
         );
     }
 
@@ -768,10 +745,11 @@ mod tests {
     #[test]
     fn an_unreadable_table_is_not_an_unchanged_one() {
         let t = MockTable::new();
-        let mut p = FakePlatform::new(t.clone(), vec!["0x21"]);
-        let mut published = BTreeSet::new();
+        let mut p = FakePlatform::new(t.clone(), vec![]);
+        let mut publication = Publication::start(&mut p, &t).unwrap();
         t.fail_reads("redis is gone");
-        republish_if_changed(&mut p, &t, &mut published)
+        publication
+            .step(&mut p, &t)
             .expect_err("a table that cannot be read has not been checked");
     }
 

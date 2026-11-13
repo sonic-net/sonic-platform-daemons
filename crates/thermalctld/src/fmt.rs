@@ -7,6 +7,6 @@
 //! string.
 
 pub use pmon_common::fmt::{
-    bool, event_timestamp, float, number, opt_bool, opt_str, position, threshold,
-    timestamp, NOT_AVAILABLE,
+    bool, event_timestamp, float, number, opt_bool, opt_str, position, threshold, timestamp,
+    NOT_AVAILABLE,
 };

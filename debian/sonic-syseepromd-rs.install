@@ -1,1 +1,1 @@
-target/release/syseepromd-rs usr/bin
+target/release/syseepromd usr/bin
