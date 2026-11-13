@@ -34,7 +34,7 @@ const SYSLOG_IDENTIFIER: &str = "pcied";
 /// is which *implementation* of the platform API to open, because a platform
 /// with a native Rust one has to be able to say so without a new binary.
 #[derive(Parser, Debug)]
-#[command(name = "pcied-rs", about = "SONiC PCIe daemon, in Rust")]
+#[command(name = "pcied", about = "SONiC PCIe daemon, in Rust")]
 struct Args {
     /// Which platform API implementation to use: `pyo3` or `native`.
     ///
@@ -71,6 +71,8 @@ const PCIEUTIL_LOAD_ERROR: i32 = 2;
 /// `autorestart=unexpected` reads, and a restart is the only way back --
 /// `DBConnector` does not reconnect.
 const ERR_DB_READ: i32 = 1;
+/// Withdrawals that cannot reach STATE_DB must restart the process.
+const ERR_DB_WRITE: i32 = 3;
 
 /// `bb:dd.f`, which is the PCIE_DEVICE key and the sysfs directory name.
 ///
@@ -97,6 +99,7 @@ fn read_id_in(root: &Path, key: &str) -> Option<String> {
         Ok(value) => Some(value.trim().to_string()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
+            // Preserve Python's AER wording for the device-id write as well.
             log::error!("Exception while checking AER attributes for {key}: {e}");
             None
         }
@@ -214,28 +217,28 @@ fn one_pass(
     sysfs: &Path,
     tables: &Tables<'_>,
     read: &mut Latch,
-) -> Result<(), String> {
+) -> Result<(), (i32, String)> {
     let devices = match platform.get_pcie_devices() {
         Ok(d) => {
             pmon_common::recovered!(read, "PCIe device check recovered");
             d
         }
         Err(e) => {
-            // Python does not catch this: an exception out of `get_pcie_check`
-            // ends that daemon (`pcied:DaemonPcied.check_pcie_devices` is
-            // unwrapped) and supervisord starts it again.  Here the failure is
-            // said once and the check retried every pass, which is the restart
-            // without the churn.  What must not outlive it is the last
-            // verdict: a PASSED left standing while nothing is being checked
-            // is the stale state `run` clears on the way out, so it is
-            // withdrawn on the first failure, and the next pass that checks
-            // publishes a new one.
-            if pmon_common::fail_once!(read, "Failed to check PCIe devices: {e}") {
-                if let Err(e) = clear(tables.status) {
-                    log::error!("Exception while updating PCIe device status to STATE_DB: {e}");
-                }
+            // Logging is latched; status withdrawal is attempted on every
+            // failure, including after a previous database outage. A real
+            // inventory error exits so a constructor failure cannot leave
+            // supervisord reporting RUNNING without any checks.
+            pmon_common::fail_once!(read, "Failed to check PCIe devices: {e}");
+            clear(tables.status).map_err(|error| {
+                (
+                    ERR_DB_WRITE,
+                    format!("Failed to withdraw PCIe device status: {error}"),
+                )
+            })?;
+            if matches!(e, PlatformError::NotSupported(_)) {
+                return Ok(());
             }
-            return Ok(());
+            return Err((PCIEUTIL_LOAD_ERROR, format!("PCIe inventory failed: {e}")));
         }
     };
     // An empty parts list has nothing to check, and saying PASSED about it
@@ -247,8 +250,8 @@ fn one_pass(
     // (`pcied:DaemonPcied.check_pcie_devices`); the facade answers both as
     // empty, and neither is a check that ran.
     if devices.is_empty() {
-        clear(tables.device)?;
-        clear(tables.status)?;
+        clear(tables.device).map_err(|e| (ERR_DB_WRITE, e))?;
+        clear(tables.status).map_err(|e| (ERR_DB_WRITE, e))?;
         return Ok(());
     }
 
@@ -260,7 +263,7 @@ fn one_pass(
     // deliberately.
     let detaching = if devices.iter().any(|d| !d.present) {
         detach::Detaching::read(tables.detach)
-            .map_err(|e| format!("Failed to read the detach table: {e}"))?
+            .map_err(|e| (ERR_DB_READ, format!("Failed to read the detach table: {e}")))?
     } else {
         detach::Detaching::default()
     };
@@ -329,9 +332,9 @@ async fn run(
             Tick::Exit(code) => break code,
             Tick::Cycle => {}
         }
-        if let Err(e) = one_pass(platform, sysfs, tables, &mut read) {
-            log::error!("{e}");
-            break ERR_DB_READ;
+        if let Err((code, error)) = one_pass(platform, sysfs, tables, &mut read) {
+            log::error!("{error}");
+            break code;
         }
     };
 
@@ -393,9 +396,8 @@ async fn main() {
 /// Open the tables, decide what this platform needs, and run.
 ///
 /// Separated from `main` for the same reason as everywhere else here: `main`
-/// embeds an interpreter and opens a redis, and this is where the decisions
-/// are.  The SmartSwitch question is one of them -- the detach table is empty
-/// on everything else, and looking in it would be a scan per absent device.
+/// embeds an interpreter and opens a redis. Detach state is checked on every
+/// platform when an expected device is missing.
 async fn start(
     platform: &mut dyn PlatformApi,
     open: db::Opener<'_>,
@@ -411,9 +413,6 @@ async fn start(
     };
     let (device_table, status_table, detach_table) =
         (handles.device, handles.status, handles.detach);
-
-    // Only a SmartSwitch has DPUs to detach; elsewhere the table is empty and
-    // the lookup would be a scan per absent device for nothing.
 
     let tables = Tables {
         device: device_table.as_ref(),
@@ -814,7 +813,7 @@ mod tests {
     }
 
     /// A check that starts failing withdraws the verdict it had published,
-    /// once, and the next check that runs publishes a new one.  A PASSED left
+    /// on every failure, and the next check that runs publishes a new one.  A PASSED left
     /// standing would say the devices were checked when nothing is checking.
     #[test]
     fn a_failing_check_withdraws_the_last_verdict() {
@@ -825,28 +824,92 @@ mod tests {
             ..FakePlatform::new()
         };
         let mut read = Latch::new();
-        let mut pass = |p: &mut FakePlatform| {
-            one_pass(p, fs.path(), &db.tables(), &mut read).unwrap();
-        };
+        let mut pass = |p: &mut FakePlatform| one_pass(p, fs.path(), &db.tables(), &mut read);
 
-        pass(&mut p);
+        pass(&mut p).unwrap();
         assert_eq!(
             db.status.field("status", "status").as_deref(),
             Some("PASSED")
         );
 
         p.fail = true;
-        pass(&mut p);
+        assert_eq!(pass(&mut p).unwrap_err().0, PCIEUTIL_LOAD_ERROR);
         assert!(db.status.is_empty(), "the verdict is withdrawn");
         let scans = db.status.scans();
-        pass(&mut p);
-        assert_eq!(db.status.scans(), scans, "and only on the first failure");
+        assert_eq!(pass(&mut p).unwrap_err().0, PCIEUTIL_LOAD_ERROR);
+        assert_eq!(
+            db.status.scans(),
+            scans + 1,
+            "every failure withdraws status"
+        );
 
         p.fail = false;
-        pass(&mut p);
+        pass(&mut p).unwrap();
         assert_eq!(
             db.status.field("status", "status").as_deref(),
             Some("PASSED")
+        );
+    }
+
+    #[test]
+    fn inventory_failure_retries_withdrawal_after_database_recovery() {
+        let db = Db::new();
+        db.status
+            .set("status", &[("status", "PASSED".into())])
+            .unwrap();
+        db.status.fail_writes("connection reset");
+        let mut platform = FakePlatform {
+            fail: true,
+            ..FakePlatform::new()
+        };
+        let mut read = Latch::new();
+        let fs = sysfs(&[]);
+        assert_eq!(
+            one_pass(&mut platform, fs.path(), &db.tables(), &mut read)
+                .unwrap_err()
+                .0,
+            ERR_DB_WRITE
+        );
+        assert_eq!(
+            db.status.field("status", "status").as_deref(),
+            Some("PASSED")
+        );
+        db.status.allow_writes();
+        assert_eq!(
+            one_pass(&mut platform, fs.path(), &db.tables(), &mut read)
+                .unwrap_err()
+                .0,
+            PCIEUTIL_LOAD_ERROR
+        );
+        assert!(db.status.is_empty());
+        platform.fail = false;
+        platform.devices = vec![device("NIC", 3, 0, 0, true)];
+        one_pass(&mut platform, fs.path(), &db.tables(), &mut read).unwrap();
+        assert_eq!(
+            db.status.field("status", "status").as_deref(),
+            Some("PASSED")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_withdrawal_exits_instead_of_reporting_a_running_checker() {
+        let db = Db::new();
+        db.status
+            .set("status", &[("status", "PASSED".into())])
+            .unwrap();
+        db.status.fail_writes("read-only replica");
+        let mut platform = FakePlatform {
+            fail: true,
+            ..FakePlatform::new()
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 0,
+        };
+        let fs = sysfs(&[]);
+        assert_eq!(
+            run(&mut platform, fs.path(), &db.tables(), &mut cycles).await,
+            ERR_DB_WRITE
         );
     }
 

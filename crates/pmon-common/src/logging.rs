@@ -437,7 +437,7 @@ mod tests {
     }
 
     /// INFO stays in the process, as a Python daemon's `log_info` does --
-    /// a `psud-rs` that announced "Starting up..." would be saying something
+    /// a `psud` that announced "Starting up..." would be saying something
     /// psud never has -- except the lines of a logger Python set to INFO.
     #[test]
     fn info_is_sent_only_for_the_info_logger() {
