@@ -129,7 +129,8 @@ jobs:
         sudo dpkg -i libswsscommon_1.0.0_amd64.deb
         sudo dpkg -i python3-swsscommon_1.0.0_amd64.deb
         sudo apt-get update
-        sudo apt-get install -y diff-cover
+        # redis-server, python3-pytest-timeout: ycabled's black-box tests
+        sudo apt-get install -y diff-cover redis-server python3-pytest-timeout
       workingDirectory: $(Build.ArtifactStagingDirectory)/download/target/debs/trixie/
       displayName: 'Install Debian dependencies'
 
@@ -168,6 +169,12 @@ jobs:
                   echo "$missing_init_files"
                   exit 1
                 fi
+            fi
+            # Run ycabled's black-box tests (sonic-ycabled/blackbox) with its unit
+            # tests. They take over /dev/log, /var/run/redis*, /etc/sonic and
+            # /usr/share/sonic, which is fine in this throwaway container.
+            if [ "${{ project.name }}" == "ycabled" ]; then
+                export BB_ENABLE=1
             fi
             pip3 install ".[testing]"
             pip3 uninstall --yes sonic-platform-daemons
