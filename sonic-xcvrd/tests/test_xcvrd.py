@@ -1636,7 +1636,9 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api')
-    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
+    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis, monkeypatch):
+        mock_chassis.get_cpo.return_value = None
+        monkeypatch.setattr(common, "platform_chassis", mock_chassis)
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         mock_api = MagicMock()
@@ -1878,6 +1880,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_is_copper_exception(self, mock_chassis):
+        mock_chassis.get_cpo.return_value = None
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
         result = common.is_copper(0)
@@ -6207,7 +6210,9 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
-    def test_wrapper_get_transceiver_info(self, mock_sfputil, mock_chassis):
+    def test_wrapper_get_transceiver_info(self, mock_sfputil, mock_chassis, monkeypatch):
+        mock_chassis.get_cpo.return_value = None
+        monkeypatch.setattr(common, "platform_chassis", mock_chassis)
         mock_object = MagicMock()
         mock_object.get_transceiver_info = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6346,6 +6351,7 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.platform_sfputil')
     def test_wrapper_get_transceiver_firmware_info(self, mock_sfputil, mock_chassis):
+        mock_chassis.get_cpo.return_value = None
         mock_object = MagicMock()
         mock_object.get_transceiver_dom_real_value = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6435,6 +6441,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_get_transceiver_pm(self, mock_chassis):
+        mock_chassis.get_cpo.return_value = None
         mock_object = MagicMock()
         mock_object.get_transceiver_pm = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6490,6 +6497,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory(self, mock_chassis):
+        mock_chassis.get_cpo.return_value = None
         mock_api = MagicMock()
         mock_api.is_flat_memory = MagicMock(return_value=True)
         mock_object = MagicMock()
@@ -6504,6 +6512,7 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory_no_xcvr_api(self, mock_chassis):
+        mock_chassis.get_cpo.return_value = None
         mock_object = MagicMock()
         mock_object.get_xcvr_api = MagicMock(return_value=None)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
