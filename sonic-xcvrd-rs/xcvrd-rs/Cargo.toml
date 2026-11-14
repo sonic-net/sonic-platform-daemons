@@ -1,0 +1,41 @@
+[package]
+name = "xcvrd-rs"
+version = "0.1.0"
+edition = "2021"
+
+# Rust xcvrd daemon and its mockable HAL/DB library. Examples demonstrate the
+# platform and STATE_DB bindings; they are not part of the deployed daemon.
+
+[lib]
+name = "xcvrd_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xcvrd-rs"
+path = "src/main.rs"
+
+[dependencies]
+platform-api = { git = "https://github.com/sonic-net/sonic-platform-common", rev = "608be693d782cfcaf25a6b4012a6b89389a14991" }
+platform-provider = { git = "https://github.com/sonic-net/sonic-platform-common", rev = "608be693d782cfcaf25a6b4012a6b89389a14991" }
+# Keep in sync with SWSS_COMMON_REV in Dockerfile and Dockerfile.bookworm;
+# that checkout supplies the C API headers bindgen parses.
+swss-common = { git = "https://github.com/sonic-net/sonic-swss-common", rev = "7faca59cd30367692a8c5406ad5d7c0b5341c7ef" }
+# `preserve_order` keeps parsed JSON objects in insertion order (IndexMap), matching
+# Python dict semantics the media/optics SI parsers rely on: `is_si_per_speed_supported`
+# inspects the FIRST key, `get_media_settings_for_speed`/medium-lane matching return the
+# FIRST regex-matching key, and `CustomMediaSettingsParser.to_db_value` serialises the
+# custom attrs in file order (the golden `custom_serdes_attrs` JSON string is order-sensitive).
+serde_json = { version = "1", features = ["preserve_order"] }
+# Python-compatible regex (backtracking engine w/ lookaround) for the media/optics SI key
+# matching (`re.match`/`re.fullmatch` over vendor/media/lane-speed patterns — some
+# media_settings.json keys use negative lookahead, which the plain `regex` crate rejects).
+fancy-regex = "0.13"
+# The Rust swss-common binding exposes no `swsscommon.Select` (only per-table
+# `read_data`), but does expose each `SubscriberStateTable`'s fd via `get_fd()`.
+# `MultiPortChangeObserver` uses `libc::poll` over every subscriber fd to reproduce
+# the reference `Select` semantics (wake on ANY watched table). Already in the tree
+# transitively (pyo3 / swss-common); Cargo unifies to the resolved version.
+libc = "0.2"
+# Non-platform SONiC utilities (DB configuration, namespaces and device_info).
+# Keep aligned with platform-common's platform-pyo3 to share one interpreter.
+pyo3 = { version = "0.25", features = ["auto-initialize"] }
