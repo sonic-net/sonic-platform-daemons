@@ -34,9 +34,9 @@
       BmcEventHandler        Runs on the "bmcctld-events" thread.  Subscribes to
                              STATE_DB and enqueues ActionItems for the main thread.
       BmcctldDaemon          Main daemon.  Starts the event thread, runs the
-                             boot-delay sequence (liquid-cooled) or immediate
-                             power-on (non-liquid-cooled), then processes the
-                             action queue with idempotency enforcement.
+                             boot-delay sequence for OFFLINE hosts of either
+                             cooling type, then processes the action queue
+                             with idempotency enforcement.
 """
 
 try:
@@ -253,9 +253,8 @@ DEFAULT_RACK_MGR_MAJOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 DEFAULT_RACK_MGR_MINOR_ALERT_ACTION = ACTION_SYSLOG_ONLY
 
 # Default timing values (seconds)
-DEFAULT_POWER_ON_DELAY_SECS = 300   # liquid-cooled: allow Rack Manager time to verify liquid flow
-                                    # before bmcctld auto-powers Switch-Host. Unused on air-cooled
-                                    # (startup path skips _initial_power_on_sequence).
+DEFAULT_POWER_ON_DELAY_SECS = 300   # allow liquid-flow verification or air-cooled stabilisation
+                                    # before bmcctld auto-powers Switch-Host after power loss
 DEFAULT_SHUTDOWN_DELAY_SECS = 0     # default 0 until real GNOI graceful shutdown is supported;
                                     # operator may override via CHASSIS_MODULE|SWITCH-HOST/graceful_shutdown_timeout
 
@@ -518,7 +517,7 @@ class SwitchHostController(EventLogger):
         """Populate CHASSIS_MODULE|SWITCH-HOST in both CONFIG_DB and STATE_DB at daemon startup.
 
         CONFIG_DB|CHASSIS_MODULE|SWITCH-HOST is seeded with the supplied admin_status
-        and default timings (power_on_delay=0, graceful_shutdown_timeout=0) only when
+        and default timings (power_on_delay=300, graceful_shutdown_timeout=0) only when
         no entry exists, so any operator override persisted from a prior boot is preserved.
         STATE_DB|CHASSIS_MODULE_TABLE|SWITCH-HOST is always (re)populated with module
         identity, current oper_status, and the supplied admin_status.
@@ -602,7 +601,7 @@ class PolicyReader(EventLogger):
         return self._get_chassis_module_entry().get(FIELD_ADMIN_STATUS, default)
 
     def get_power_on_delay(self):
-        """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 0)."""
+        """Return power_on_delay in seconds from CHASSIS_MODULE|SWITCH-HOST (default: 300)."""
         raw = self._get_chassis_module_entry().get(FIELD_POWER_ON_DELAY)
         if raw is not None:
             try:
@@ -1251,9 +1250,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         # Populate CHASSIS_MODULE_INFO_TABLE at startup with module identity and status.
         # Air-cooled boxes default to admin_status=up (no liquid-flow gate); liquid-cooled
         # boxes default to admin_status=down and require explicit admin-up to power on.
-        default_admin_status = ADMIN_DOWN if self.chassis.is_liquid_cooled() else ADMIN_UP
+        self._default_admin_status = ADMIN_DOWN if self.chassis.is_liquid_cooled() else ADMIN_UP
 
-        admin_status = self.policy_reader.get_switch_host_admin_status(default=default_admin_status)
+        admin_status = self.policy_reader.get_switch_host_admin_status(default=self._default_admin_status)
         self.controller.initialize_chassis_module(admin_status)
 
         for signum in self.FATAL_SIGNALS + self.NONFATAL_SIGNALS:
@@ -1298,8 +1297,9 @@ class BmcctldDaemon(daemon_base.DaemonBase):
     def _initial_power_on_sequence(self):
         """
         BMC startup flow
-          1. Check CHASSIS_MODULE admin_status for SWITCH-HOST. If 'down' (the default),
-             Switch-Host stays powered off — exit immediately. The operator must run
+          1. Check CHASSIS_MODULE admin_status for SWITCH-HOST (default up for
+             air-cooled, down for liquid-cooled). If not 'up', exit immediately;
+             the operator must run
              'config chassis modules startup SWITCH-HOST' to bring it up.
           2. Sleep SWITCH_HOST_POWER_ON_DELAY seconds to allow Rack Manager to come
              up and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
@@ -1308,13 +1308,13 @@ class BmcctldDaemon(daemon_base.DaemonBase):
           3. After the delay, check if Rack Manager issued an explicit POWER_ON,
              POWER_OFF, or GRACEFUL_SHUT command (CMD_STATUS_IN_PROGRESS or DONE in
              RACK_MANAGER_COMMAND table). If so, skip automatic power-on.
-          4. Check for CRITICAL leaks/alerts.
+          4. Recheck shutdown, admin_status, and CRITICAL leaks/alerts.
           5. If none found and Switch-Host is OFFLINE, power it ON.
           6. Update HOST_STATE.
         """
-        admin_status = self.policy_reader.get_switch_host_admin_status()
+        admin_status = self.policy_reader.get_switch_host_admin_status(default=self._default_admin_status)
         if admin_status != ADMIN_UP:
-            self._event_log.log_notice("STARTUP: SWITCH-HOST admin_status='{}' (default=down); "
+            self._event_log.log_notice("STARTUP: SWITCH-HOST admin_status='{}'; "
                                        "Switch-Host will remain powered off. "
                                        "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(admin_status))
             return
@@ -1365,6 +1365,16 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             except queue.Empty:
                 continue
 
+        if self.stop_event.is_set():
+            return
+
+        admin_status = self.policy_reader.get_switch_host_admin_status(default=self._default_admin_status)
+        if admin_status != ADMIN_UP:
+            self._event_log.log_notice(
+                "STARTUP: SWITCH-HOST admin_status='{}' after boot delay; "
+                "skipping automatic power-on".format(admin_status))
+            return
+
         # After the boot delay, check whether a Rack Manager POWER_ON or POWER_OFF
         # command was executed. We detect this by scanning the RACK_MANAGER_COMMAND
         # table for any entry whose command is POWER_ON/POWER_OFF and whose status
@@ -1383,12 +1393,15 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         oper_status = self.controller.get_oper_status()
         self.log_info("STARTUP: Switch-Host oper_status={}".format(oper_status))
 
-        if str(oper_status).upper() != SWITCH_HOST_ONLINE:
+        if oper_status == SWITCH_HOST_OFFLINE:
             self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
             self.controller.power_on()
-        else:
+        elif oper_status == SWITCH_HOST_ONLINE:
             self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
             self.controller.init_host_state()
+        else:
+            self._event_log.log_warning(
+                "STARTUP: Switch-Host oper_status={}; skipping automatic power-on".format(oper_status))
 
     def _execute_action_item(self, item):
         """
@@ -1457,8 +1470,8 @@ class BmcctldDaemon(daemon_base.DaemonBase):
           1. Sync HOST_STATE from live oper_status and seed CONFIG dedup state.
           2. Start the BmcEventHandler thread (CLI admin up/down, Rack Manager, leaks).
           3. If Switch-Host is already ONLINE: skip boot power-on sequence.
-          4. Non-liquid-cooled + OFFLINE + admin_status=up: power on immediately.
-          5. Liquid-cooled + OFFLINE: run _initial_power_on_sequence (boot delay).
+          4. If OFFLINE: run _initial_power_on_sequence for either cooling type.
+          5. Otherwise, skip automatic power-on for an unknown or fault status.
           6. Enter the action processing loop.
 
         HOST_STATE sync and CONFIG dedup (step 1) run before the event thread so
@@ -1466,7 +1479,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         enqueue ACTION_POWER_ON ahead of action-loop readiness. The BmcEventHandler
         thread (step 2) is started before the boot sequence so CLI admin commands
         and other CONFIG/STATE events are captured regardless of the startup path.
-        startup power-on or the action loop.
 
         Returns False to terminate the outer while-loop.
         """
@@ -1486,30 +1498,20 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         )
         event_thread.start()
 
-        # If Switch-Host is already ONLINE (daemon restart), skip the boot
-        # sequence entirely and go straight to the action loop.
-        if self.controller.get_oper_status() == SWITCH_HOST_ONLINE:
-            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE (daemon restart); "
+        # An ONLINE host may already have been released by the platform at boot.
+        # Leave it running rather than resetting it to enforce the delay.
+        oper_status = self.controller.get_oper_status()
+        if oper_status == SWITCH_HOST_ONLINE:
+            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; "
                                        "skipping boot sequence")
-        elif not self.chassis.is_liquid_cooled():
-            admin_status = self.policy_reader.get_switch_host_admin_status()
-            if admin_status != ADMIN_UP:
-                self._event_log.log_notice(
-                    "STARTUP: SWITCH-HOST admin_status='{}'; "
-                    "Switch-Host will remain powered off. "
-                    "Run 'config chassis modules startup SWITCH-HOST' to power on.".format(
-                        admin_status))
-            else:
-                self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
-                                           "immediate power_on, no additional checks")
-                self.controller.power_on()
-        else:
-            # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
-            # leaks/alerts, then power on if safe.
+        elif oper_status == SWITCH_HOST_OFFLINE:
             self._initial_power_on_sequence()
             if self.stop_event.is_set():
                 event_thread.join(timeout=5)
                 return False
+        else:
+            self._event_log.log_warning(
+                "STARTUP: Switch-Host oper_status={}; skipping automatic power-on".format(oper_status))
 
         self._run_action_loop()
         event_thread.join(timeout=5)
