@@ -1315,7 +1315,8 @@ class GracefulShutdownHandler(EventLogger):
         hard_limit = deadline + HANDSHAKE_JOIN_SECS
         cancelled_at = None
         while thread.is_alive():
-            thread.join(GRACEFUL_JOIN_SLICE_SECS)
+            limit = hard_limit if cancelled_at is None else min(hard_limit, cancelled_at + HANDSHAKE_JOIN_SECS)
+            thread.join(min(GRACEFUL_JOIN_SLICE_SECS, max(0.0, limit - time.monotonic())))
             if not thread.is_alive():
                 break
             now = time.monotonic()
