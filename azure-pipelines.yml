@@ -7,6 +7,8 @@ trigger:
   branches:
     include:
       - '*'
+    exclude:
+      - renovate/*
 
 variables:
   - name: DIFF_COVER_CHECK_THRESHOLD
