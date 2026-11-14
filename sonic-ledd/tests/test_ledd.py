@@ -175,6 +175,21 @@ def test_daemon_ledd_run_timeout(mock_fp_ports, mock_find_front_panel_ports, moc
     # Verify that initPortLeds was called during initialization
     mock_fp_ports.return_value.initPortLeds.assert_called_once()
 
+
+def test_daemon_ledd_run_non_object_backs_off():
+    daemon_ledd = ledd.DaemonLedd.__new__(ledd.DaemonLedd)
+    daemon_ledd._syslog = mock.Mock()
+    daemon_ledd.portObserver = mock.Mock()
+    daemon_ledd.portObserver.getSelectEvent.return_value = (object(), None)
+    daemon_ledd.log_warning = mock.Mock()
+
+    with mock.patch.object(ledd.swsscommon, 'Select', create=True) as mock_select:
+        mock_select.TIMEOUT = object()
+        with mock.patch('ledd.time.sleep') as mock_sleep:
+            assert daemon_ledd.run() == -1
+
+    mock_sleep.assert_called_once_with(ledd.SELECT_TIMEOUT / 1000)
+
 @mock.patch('swsscommon.swsscommon.Select.addSelectable', mock.MagicMock())
 @mock.patch("ledd.DaemonLedd.load_platform_util")
 @mock.patch("ledd.multi_asic.is_front_panel_port")
