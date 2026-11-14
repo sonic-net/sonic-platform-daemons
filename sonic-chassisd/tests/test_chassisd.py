@@ -57,6 +57,7 @@ CHASSIS_MODULE_INFO_SERIAL_FIELD = 'serial'
 CHASSIS_MODULE_INFO_PRESENCE_FIELD = 'presence'
 CHASSIS_MODULE_INFO_MODEL_FIELD = 'model'
 CHASSIS_MODULE_INFO_REPLACEABLE_FIELD = 'is_replaceable'
+CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD = 'shutdown_allowed'
 
 CHASSIS_INFO_KEY_TEMPLATE = 'CHASSIS {}'
 CHASSIS_INFO_CARD_NUM_FIELD = 'module_num'
@@ -114,6 +115,34 @@ def test_moduleupdater_check_valid_fields():
     assert model == fvs[CHASSIS_MODULE_INFO_MODEL_FIELD]
     assert str(replaceable) == fvs[CHASSIS_MODULE_INFO_REPLACEABLE_FIELD]
     assert str(presence) == fvs[CHASSIS_MODULE_INFO_PRESENCE_FIELD]
+    assert fvs[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] == 'True'
+
+def _module_denies_shutdown():
+    return False
+
+def _module_shutdown_not_implemented():
+    raise NotImplementedError
+
+def test_moduleupdater_shutdown_allowed():
+    chassis = MockChassis()
+    module = MockModule(0, "LINE-CARD0", "Line Module", ModuleBase.MODULE_TYPE_LINE, 2, "LC100")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    chassis.module_list.append(module)
+    module_updater = ModuleUpdater(SYSLOG_IDENTIFIER, chassis, 2, module.supervisor_slot)
+
+    module.is_shutdown_allowed = _module_denies_shutdown
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(module.module_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] == 'False'
+
+    module.is_shutdown_allowed = _module_shutdown_not_implemented
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(module.module_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] == 'True'
 
 def test_moduleupdater_check_phyentity_fields():
     chassis = MockChassis()
@@ -216,6 +245,28 @@ def test_smartswitch_moduleupdater_check_valid_fields():
     assert NOT_AVAILABLE == fvs[CHASSIS_MODULE_INFO_SLOT_FIELD]
     assert status == fvs[CHASSIS_MODULE_INFO_OPERSTATUS_FIELD]
     assert serial == fvs[CHASSIS_MODULE_INFO_SERIAL_FIELD]
+    assert fvs[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] == 'True'
+
+def test_smartswitch_moduleupdater_shutdown_allowed():
+    chassis = MockSmartSwitchChassis()
+    module = MockModule(0, "DPU0", "DPU Module 0", ModuleBase.MODULE_TYPE_DPU, 0, "DPU0-0000")
+    module.set_oper_status(ModuleBase.MODULE_STATUS_ONLINE)
+    chassis.module_list.append(module)
+    module_updater = SmartSwitchModuleUpdater(SYSLOG_IDENTIFIER, chassis)
+
+    module.is_shutdown_allowed = _module_denies_shutdown
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(module.module_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] == 'False'
+
+    module.is_shutdown_allowed = _module_shutdown_not_implemented
+    module_updater.module_db_update()
+    fvs = module_updater.module_table.get(module.module_name)
+    if isinstance(fvs, list):
+        fvs = dict(fvs[-1])
+    assert fvs[CHASSIS_MODULE_INFO_SHUTDOWN_ALLOWED_FIELD] == 'True'
 
 def test_smartswitch_moduleupdater_status_transitions():
     # Mock the chassis and module
