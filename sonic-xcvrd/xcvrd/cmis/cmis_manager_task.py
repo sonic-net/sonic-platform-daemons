@@ -820,6 +820,8 @@ class CmisManagerTask(threading.Thread):
         appl_db = daemon_base.db_connect("APPL_DB", namespace=namespace)
 
         sel = swsscommon.Select()
+        # SubscriberStateTable subscribes and preloads existing PORT keys,
+        # so both earlier and later completion markers are selectable.
         port_tbl = swsscommon.SubscriberStateTable(appl_db, swsscommon.APP_PORT_TABLE_NAME)
         sel.addSelectable(port_tbl)
 
@@ -829,7 +831,8 @@ class CmisManagerTask(threading.Thread):
             if state == swsscommon.Select.TIMEOUT:
                 continue
             if state != swsscommon.Select.OBJECT:
-                self.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                helper_logger.log_warning("sel.select() did not return swsscommon.Select.OBJECT")
+                self.task_stopping_event.wait(port_event_helper.SELECT_TIMEOUT_MSECS / 1000.0)
                 continue
 
             (key, op, fvp) = port_tbl.pop()
