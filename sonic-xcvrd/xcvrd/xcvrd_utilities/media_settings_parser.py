@@ -473,31 +473,33 @@ def get_media_settings_value(physical_port, key):
         {'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13',
                   'lane3': '0x14'}}
     """
+    port_default = {}
     global_default = {}
 
     # Priority order for traditional media settings:
-    #   1. GLOBAL explicit match (vendor/media/speed)
-    #   2. PORT explicit match
+    #   1. PORT explicit match
+    #   2. GLOBAL explicit match (vendor/media/speed)
     #   3. PORT Default
     #   4. GLOBAL Default (last-resort fallback)
 
-    # Check global media settings first (can apply to ranges/lists of ports)
+    # Check port-specific explicit media settings first
+    if PORT_MEDIA_SETTINGS_KEY in g_dict:
+        result, port_default = PortMediaSettingsParser().parse(
+            g_dict[PORT_MEDIA_SETTINGS_KEY], physical_port, key)
+        if result:
+            return result
+
+    # Then check global explicit media settings (can apply to ranges/lists of ports)
     if GLOBAL_MEDIA_SETTINGS_KEY in g_dict:
         result, global_default = GlobalMediaSettingsParser().parse(
             g_dict[GLOBAL_MEDIA_SETTINGS_KEY], physical_port, key)
         if result:
             return result
 
-    # Then check port-specific media settings
-    if PORT_MEDIA_SETTINGS_KEY in g_dict:
-        result, port_default = PortMediaSettingsParser().parse(
-            g_dict[PORT_MEDIA_SETTINGS_KEY], physical_port, key)
-        if result:
-            return result
-        if port_default:
-            return port_default
+    # Fall back to port default, then global default
+    if port_default:
+        return port_default
 
-    # Fall back to global default if no explicit or port-default match found
     if global_default:
         return global_default
 
