@@ -1,10 +1,10 @@
 """
     Mock implementation of swsscommon.swsscommon for unit testing.
-    Provides stubs needed by sonic_py_common.device_info and by bmcctld.
+    Provides the stubs bmcctld and the sonic_py_common modules it imports need.
 """
 
 
-# Stubs consumed by sonic_py_common.device_info on import
+# Stubs sonic_py_common modules consume at import time
 class ConfigDBConnector:
     def connect(self, *args, **kwargs):
         pass
@@ -43,12 +43,22 @@ class SonicDBConfig:
 STATE_DB = ''
 CONFIG_DB = ''
 
+_MOCK_DATABASE = {}
+
+
+def reset_mock_db():
+    _MOCK_DATABASE.clear()
+
 
 class Table:
     def __init__(self, *argv):
         self.db_or_pipe = argv[0] if argv else None
         self.table_name = argv[1] if len(argv) > 1 else ''
-        self.mock_dict = {}
+        if self.db_or_pipe is None:
+            self.mock_dict = {}
+        else:
+            self.mock_dict = _MOCK_DATABASE.setdefault(
+                (self.db_or_pipe, self.table_name), {})
 
     def _del(self, key):
         if key in self.mock_dict:
