@@ -144,7 +144,7 @@ class Monitor(object):
         self._thread.start()
         # MONITOR shows this marker once it is active.
         self._probe = harness_client(port=self.port)
-        wait_until(lambda: self._probe.echo("bb-monitor-ready") and self._lines > 0, 5, 0.02,
+        wait_until(lambda: self._probe.echo("bb-monitor-ready") and self._lines > 0, 5, 0.1,
                    "redis MONITOR did not start")
 
     def _run(self):
@@ -181,7 +181,7 @@ class Monitor(object):
         token = "bb-barrier-{}".format(next(self._barriers))
         start = len(self._ops)
         self._probe.echo(token)
-        wait_until(lambda: self._shows(token, start), timeout, 0.01,
+        wait_until(lambda: self._shows(token, start), timeout, 0.1,
                    "redis MONITOR did not show the barrier within {}s".format(timeout))
 
     def _shows(self, token, start):

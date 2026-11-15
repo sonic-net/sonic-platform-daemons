@@ -1,5 +1,5 @@
 """Requests for one cable from different sources at the same time: toggles,
-insertion and removal, and the CLI (HLD 3.8 issues 26 to 29).
+insertion and removal, and the CLI.
 
 Each test holds a call in the fake cable, sends a second request for the same
 port, then releases the call. A daemon that serves a port's requests one at a
@@ -55,9 +55,27 @@ def remove_and_wait(dut):
     dut.monitor.wait_access(mark, 5, kind="write", table="HW_MUX_CABLE_TABLE", key="Ethernet0")
 
 
-@pytest.mark.known_issue("3.8-26", "an active-standby toggle calls the cable without the port lock, during "
-                                   "another thread's call to the same cable")
+@pytest.mark.known_issue("an active-standby toggle calls the cable without the port lock, during "
+                         "another thread's call to the same cable")
 def test_toggle_waits_for_call_in_progress(dut, cable):
+    """A toggle for a cable in the middle of another call waits for that call
+    to return: two calls to one cable never overlap. The CLI command and the
+    toggle are both answered.
+
+    Steps:
+    1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
+       which keeps ycabled serving.
+    2. Start ycabled.
+    3. Send XCVRD_SHOW_HWMODE_DIR_CMD probe for Ethernet0 (show muxcable hwmode
+       muxdirection), with its first call to the cable, get_read_side(), held,
+       and wait for that call.
+    4. Toggle Ethernet0 to standby without waiting, and give ycabled 2 s to
+       call toggle_mux_to_tor_b() meanwhile.
+    5. Release the held call.
+    6. Expect ycabled's HW_MUX_CABLE_TABLE state write for Ethernet0 and the
+       CLI response, each within 10 s, and no two calls to the cable that
+       overlapped.
+    """
     dut.start()
     gate, hw_mark, cli_mark = hold_cli_call(dut, cable)
     mark = dut.monitor.mark()
@@ -69,9 +87,26 @@ def test_toggle_waits_for_call_in_progress(dut, cable):
     assert not dut.hw.overlaps(hw_mark, port=1)
 
 
-@pytest.mark.known_issue("3.8-27", "a toggle that finishes after the cable's removal overwrites the "
-                                   "removal's HW_MUX_CABLE_TABLE state")
+@pytest.mark.known_issue("a toggle that finishes after the cable's removal overwrites the "
+                         "removal's HW_MUX_CABLE_TABLE state")
 def test_removal_during_toggle_leaves_unknown(dut, cable):
+    """A cable removed while a toggle is switching it ends up unknown in
+    HW_MUX_CABLE_TABLE, whichever request finishes first: the toggle's state
+    does not overwrite the removal's.
+
+    Steps:
+    1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
+       which keeps ycabled serving.
+    2. Start ycabled.
+    3. Hold toggle_mux_to_tor_b() of Ethernet0's cable once, toggle Ethernet0
+       to standby without waiting, and wait for the held call.
+    4. Remove the cable, as xcvrd reports it (TRANSCEIVER_INFO deleted, the
+       cable absent), and give ycabled 2 s to write unknown for it.
+    5. Release the held call, which succeeds. Wait for two HW_MUX_CABLE_TABLE
+       state writes for Ethernet0, one for each request, and wait for ycabled
+       to go quiet.
+    6. Expect Ethernet0's state unknown.
+    """
     dut.start()
     gate = cable.script("toggle_mux_to_tor_b", block=True, times=1)
     hw_mark = dut.hw.mark()
@@ -88,9 +123,27 @@ def test_removal_during_toggle_leaves_unknown(dut, cable):
     assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "unknown"
 
 
-@pytest.mark.known_issue("3.8-27", "an insertion that read the mux direction before a toggle writes it after "
-                                   "the toggle, so HW_MUX_CABLE_TABLE disagrees with the cable")
+@pytest.mark.known_issue("an insertion that read the mux direction before a toggle writes it after "
+                         "the toggle, so HW_MUX_CABLE_TABLE disagrees with the cable")
 def test_toggle_during_insertion_keeps_cable_direction(dut, cable):
+    """A toggle that arrives while an insertion initializes the cable leaves
+    HW_MUX_CABLE_TABLE agreeing with the cable: the state the insertion read
+    before the toggle does not overwrite the toggle's.
+
+    Steps:
+    1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
+       which keeps ycabled serving.
+    2. Start ycabled, then remove Ethernet0's cable, as xcvrd reports it, and
+       wait for ycabled's write for the removal.
+    3. Script get_mux_direction() of the cable to return ToR A, held, once.
+       Insert the cable, and wait for the held call: the insertion has read the
+       direction and not yet written it.
+    4. Toggle Ethernet0 to standby without waiting, and give ycabled 2 s to
+       call toggle_mux_to_tor_b() meanwhile.
+    5. Release the held call. Wait for two HW_MUX_CABLE_TABLE state writes for
+       Ethernet0, one for each request, and wait for ycabled to go quiet.
+    6. Expect the cable's mux on ToR B, and Ethernet0's state standby.
+    """
     dut.start()
     remove_and_wait(dut)
     # The insertion reads the direction (ToR A) and is held before it writes it.
@@ -109,8 +162,28 @@ def test_toggle_during_insertion_keeps_cable_direction(dut, cable):
     assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "standby"
 
 
-@pytest.mark.known_issue("3.8-28", "toggles use an inserted cable's driver before get_vendor() has verified it")
+@pytest.mark.known_issue("toggles use an inserted cable's driver before get_vendor() has verified it")
 def test_no_toggle_through_unverified_driver(dut, cable):
+    """A toggle that arrives while an insertion checks the new driver with
+    get_vendor() does not use that driver. Here the check fails, so the cable
+    has no driver: the toggle is answered unknown, without a toggle call.
+
+    Steps:
+    1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
+       which keeps ycabled serving.
+    2. Start ycabled, then remove Ethernet0's cable, as xcvrd reports it, and
+       wait for ycabled's write for the removal.
+    3. Script get_vendor() of the cable to return another vendor, held, once:
+       the driver the vendor mapping selects does not work for this cable.
+       Insert the cable, and wait for the held call.
+    4. Toggle Ethernet0 to standby without waiting, and give ycabled 2 s to
+       call toggle_mux_to_tor_b() meanwhile.
+    5. Release the held call. Wait for two HW_MUX_CABLE_TABLE state writes for
+       Ethernet0, the rejected insertion's and the toggle's, and wait for
+       ycabled to go quiet.
+    6. Expect no toggle call to the cable since the insertion, and Ethernet0's
+       state unknown.
+    """
     dut.start()
     remove_and_wait(dut)
     # The driver the vendor mapping selects does not work for this cable.
@@ -129,9 +202,27 @@ def test_no_toggle_through_unverified_driver(dut, cable):
     assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "unknown"
 
 
-@pytest.mark.known_issue("3.8-28", "re-inserting a cable replaces the port lock while another thread holds it, "
-                                   "so the insertion's calls overlap that thread's call")
+@pytest.mark.known_issue("re-inserting a cable replaces the port lock while another thread holds it, "
+                         "so the insertion's calls overlap that thread's call")
 def test_insertion_waits_for_call_in_progress(dut, cable):
+    """A cable pulled and plugged in again during another call to it is
+    initialized after that call returns: the insertion's calls do not overlap
+    it.
+
+    Steps:
+    1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
+       which keeps ycabled serving.
+    2. Start ycabled.
+    3. Send XCVRD_SHOW_HWMODE_DIR_CMD probe for Ethernet0 (show muxcable hwmode
+       muxdirection), with its first call to the cable, get_read_side(), held,
+       and wait for that call.
+    4. Remove the cable and insert it again, and give ycabled 2 s to call
+       get_vendor() for the insertion meanwhile.
+    5. Release the held call. Wait for ycabled's MUX_CABLE_STATIC_INFO write
+       for Ethernet0, which the insertion makes, and for the CLI response,
+       within 10 s each, and wait for ycabled to go quiet.
+    6. Expect no two calls to the cable that overlapped.
+    """
     dut.start()
     gate, hw_mark, cli_mark = hold_cli_call(dut, cable)
     mark = dut.monitor.mark()
@@ -146,9 +237,25 @@ def test_insertion_waits_for_call_in_progress(dut, cable):
     assert not dut.hw.overlaps(hw_mark, port=1)
 
 
-@pytest.mark.known_issue("3.8-29", "a CLI command that fetched the driver before the cable's removal keeps "
-                                   "calling the cable after the removal")
+@pytest.mark.known_issue("a CLI command that fetched the driver before the cable's removal keeps "
+                         "calling the cable after the removal")
 def test_no_cable_calls_after_removal(dut, cable):
+    """Once ycabled has written a cable's removal, it makes no more calls to
+    that cable: a CLI command that was in progress does not go on calling it.
+
+    Steps:
+    1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
+       which keeps ycabled serving.
+    2. Start ycabled.
+    3. Send XCVRD_SHOW_HWMODE_DIR_CMD probe for Ethernet0 (show muxcable hwmode
+       muxdirection), with its first call to the cable, get_read_side(), held,
+       and wait for that call.
+    4. Remove the cable, as xcvrd reports it, and give ycabled 2 s to write
+       unknown for it.
+    5. Release the held call. Wait for the removal's unknown state and the CLI
+       response, within 10 s each, and wait for ycabled to go quiet.
+    6. Expect no call to the cable after the removal's write.
+    """
     dut.start()
     gate, hw_mark, cli_mark = hold_cli_call(dut, cable)
     mark = dut.monitor.mark()

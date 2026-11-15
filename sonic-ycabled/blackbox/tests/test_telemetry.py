@@ -1,8 +1,7 @@
-"""Periodic telemetry: MUX_CABLE_INFO every 60 s (HLD 3.4.8, 3.6.4).
+"""Periodic telemetry: MUX_CABLE_INFO every 60 s (HLD 3.3.8, 3.5.4).
 
-The module waits for one telemetry pass of a single ycabled, then checks
-each kind of port against what that pass wrote.
-"""
+The module waits for one telemetry pass of a single ycabled, then checks each
+kind of port against what that pass wrote."""
 
 import re
 import time
@@ -12,15 +11,14 @@ import pytest
 from harness import expect
 from harness.contract import MUX_CABLE_INFO_ACTIVE_ACTIVE, MUX_CABLE_INFO_ACTIVE_STANDBY
 from harness.fake_hw import FIRMWARE_DOWNLOAD_STATUS_INPROGRESS, TARGET_TOR_B
-from harness.topology import LOOPBACK3_LOWER, Topology
+from harness.topology import LOOPBACK3_UPPER, Topology, soc_ip
 from harness.util import TIMESTAMP_RE, wait_until
 
 pytestmark = pytest.mark.slow
 
-SOC_UP = "127.0.0.2"
-SOC_DOWN = "127.0.0.3"
 LAST_KNOWN = {"version_{}_{}".format(s, v): "9.9.{}".format(i)
-              for i, (s, v) in enumerate((s, v) for s in ("self", "peer", "nic") for v in ("active", "inactive", "next"))}
+              for i, (s, v) in enumerate((s, v) for s in ("self", "peer", "nic")
+                                         for v in ("active", "inactive", "next"))}
 PASS_TIMEOUT = 90
 
 PORTS = {
@@ -34,6 +32,7 @@ PORTS = {
     "Ethernet28": 8,   # active-standby, read from ToR A, every driver call raises
 }
 
+
 # Ethernet28: per target, cursor values raise (NIC, ToR B) or are not a list (ToR A).
 def _cursors(model, args):
     lane, target = args
@@ -44,6 +43,9 @@ def _cursors(model, args):
 
 @pytest.fixture(scope="module")
 def run(module_dut):
+    """The module's telemetry pass (_telemetry_pass), shared by its tests: the
+    held download is released and ycabled stopped before they run, and the
+    teardown's problems are kept for test_no_problems."""
     dut = module_dut
     try:
         result = _telemetry_pass(dut)
@@ -66,9 +68,32 @@ def run(module_dut):
 
 
 def _telemetry_pass(dut):
+    """One telemetry pass of a device with a port of each kind (PORTS), for the
+    tests of the module.
+
+    Steps:
+    1. Configure six active-standby ports and two active-active ones, as PORTS
+       lists them. Ethernet4's cable is read from ToR B, and some of its driver
+       methods raise or return invalid values; the driver methods of
+       Ethernet28's cable raise or return invalid values; Ethernet8's cable is
+       absent; Ethernet24's has no driver. Ethernet16's SoC answers, with mixed
+       link and operation states; nothing listens at Ethernet20's SoC address.
+    2. Write Ethernet12's last known firmware versions (LAST_KNOWN) to its
+       MUX_CABLE_INFO, as a previous ycabled would have, and write the firmware
+       image bb-fw.bin.
+    3. Start ycabled, and note MUX_CABLE_INFO as startup wrote it.
+    4. Start a firmware download on Ethernet12, held in the driver, and send
+       two forwarding state probes for Ethernet16.
+    5. Wait up to 90 s for the pass's write of Ethernet20's
+       grpc_connection_status, then for its write for Ethernet28, the last
+       port, and for ycabled to go quiet.
+    6. Return MUX_CABLE_INFO and MUX_CABLE_STATIC_INFO, the pass's writes,
+       driver calls and RPCs, and the time from the start to the pass.
+    """
     topo = Topology(nports=8)
     topo.active_standby("Ethernet0", "Ethernet4", "Ethernet8", "Ethernet12", "Ethernet24", "Ethernet28")
-    topo.active_active("Ethernet16", soc_ipv4=SOC_UP + "/32").active_active("Ethernet20", soc_ipv4=SOC_DOWN + "/32")
+    topo.active_active("Ethernet16", soc_ipv4=soc_ip("Ethernet16") + "/32")
+    topo.active_active("Ethernet20", soc_ipv4=soc_ip("Ethernet20") + "/32")
     dut.configure(topo)
     b = dut.hw.port(2)
     b.read_side = TARGET_TOR_B
@@ -87,7 +112,7 @@ def _telemetry_pass(dut):
     h.script("get_target_cursor_values", func=_cursors)
     dut.hw.port(3).present = False
     dut.hw.port(7).transceiver_info = {"manufacturer": "Nobody", "model": "X1"}
-    soc = dut.soc(SOC_UP)
+    soc = dut.soc(soc_ip("Ethernet16"))
     soc.admin, soc.link, soc.oper = [True, False], [True, False], [False, True]
     # What a previous ycabled left in STATE_DB for the cable being upgraded.
     dut.state.set("MUX_CABLE_INFO", "Ethernet12", LAST_KNOWN)
@@ -125,30 +150,73 @@ def _telemetry_pass(dut):
 
 
 def test_no_problems(run):
+    """The pass leaves nothing for the teardown to report: ycabled did not exit
+    or crash, and wrote nothing outside the DB contract.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect no problem from the teardown that followed it.
+    """
     run["checked"] = True
     assert not run["problems"], run["problems"]
 
 
 def test_first_pass_after_60s(run):
+    """The first telemetry pass comes 60 s after startup.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect its write for Ethernet20 59 s to 70 s after ycabled's start.
+    """
     assert 59 <= run["delay"] < 70, run["delay"]
 
 
 def test_active_standby(run):
+    """The pass writes an active-standby cable's MUX_CABLE_INFO with the values
+    its driver reads.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect the MUX_CABLE_INFO of Ethernet0, read from ToR A, whose driver
+       answers every call: a time_post timestamp and the cable's values,
+       besides peer_eye_height_lane2 (test_peer_eye_height_lane2).
+    """
     info = dict(run["info"]["Ethernet0"])
     assert re.match(TIMESTAMP_RE, info.pop("time_post"))
     wanted = dict(run["expected"])
-    wanted.pop("peer_eye_height_lane2")  # known issue 3.8-4, below
+    wanted.pop("peer_eye_height_lane2")  # a known issue, see test_peer_eye_height_lane2 below
     info.pop("peer_eye_height_lane2")
     assert info == wanted, expect.subset(info, wanted)
 
 
-@pytest.mark.known_issue("3.8-4", "peer_eye_height_lane2 is written from lane 1")
+@pytest.mark.known_issue("peer_eye_height_lane2 is written from lane 1")
 def test_peer_eye_height_lane2(run):
+    """peer_eye_height_lane2 is the peer's eye height on lane 2.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect Ethernet0's peer_eye_height_lane2 to be the second eye height its
+       cable reports for ToR B, the peer of read side A.
+    """
     assert run["info"]["Ethernet0"]["peer_eye_height_lane2"] == str(run["eye_tor_b"][1])
 
 
 def test_active_standby_driver_failures(run):
-    """Values the driver cannot read are N/A, unknown or down."""
+    """Values the driver cannot read are N/A, unknown or down; the values it
+    reads are still written.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture). Ethernet4's cable is
+       read from ToR B. Its get_eye_heights(), get_switch_count_total() and
+       is_link_active() raise; get_local_temperature() returns -1,
+       get_nic_voltage() 'bad', get_active_linked_tor_side() -1, and
+       get_firmware_version() None.
+    2. Expect N/A in the switch counts, internal_temperature, nic_voltage,
+       every eye height and every version, and in no other field.
+    3. Expect tor_active unknown, the three link statuses down, mux_direction
+       peer (the mux points at ToR A), and the values the driver read:
+       internal_voltage 3.3 and nic_temperature 45.
+    """
     info = run["info"]["Ethernet4"]
     na = [k for k, v in info.items() if v == "N/A"]
     assert set(na) == {"manual_switch_count", "auto_switch_count", "internal_temperature", "nic_voltage",
@@ -165,6 +233,13 @@ def test_active_standby_driver_failures(run):
 
 
 def test_absent_cable(run):
+    """The pass writes the placeholder MUX_CABLE_INFO of an absent cable again.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect Ethernet8's MUX_CABLE_INFO with a time_post timestamp and the
+       placeholder values, and a write for Ethernet8 during the pass.
+    """
     info = dict(run["info"]["Ethernet8"])
     assert re.match(TIMESTAMP_RE, info.pop("time_post"))
     assert info == expect.PLACEHOLDER_INFO
@@ -172,6 +247,17 @@ def test_absent_cable(run):
 
 
 def test_download_in_progress_keeps_last_known_versions(run):
+    """While a firmware download runs on a cable, the pass keeps the last known
+    versions in MUX_CABLE_INFO without asking the cable; the other fields are
+    read as usual.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture). Ethernet12's
+       download is held throughout.
+    2. Expect Ethernet12's version fields as LAST_KNOWN, no
+       get_firmware_version() call to its cable during the pass, and
+       mux_direction self.
+    """
     info = run["info"]["Ethernet12"]
     assert {k: info[k] for k in LAST_KNOWN} == LAST_KNOWN
     assert not [c for c in run["hw_calls"] if c.port == 4 and c.method == "get_firmware_version"]
@@ -179,6 +265,27 @@ def test_download_in_progress_keeps_last_known_versions(run):
 
 
 def test_active_active(run):
+    """For an active-active port, the pass asks the SoC for its link, operation
+    and admin forwarding states and its server version, and writes them to
+    MUX_CABLE_INFO with the probe counts and the connection status, besides the
+    placeholder active-standby fields from startup.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture). Ethernet16's SoC
+       reports, for port ids 0 and 1: admin active and standby, link up and
+       down, operation down and up.
+    2. Expect MUX_CABLE_INFO with the fields of both cable types: self and peer
+       link state up and down, operation state down and up, mux direction
+       active and standby, server_version bb-soc-1.0, grpc_connection_status
+       READY.
+    3. Expect the probe counts from before the pass: 3 for the mux directions,
+       the startup query and 2 probes; unknown for the link and operation
+       states, never queried before.
+    4. Expect the startup placeholders in the active-standby fields.
+    5. Expect QueryLinkState, QueryOperationPortState,
+       QueryAdminForwardingPortState and QueryServerVersion, in that order, for
+       port ids [0, 1] and version 1.0.
+    """
     info = run["info"]["Ethernet16"]
     assert set(info) == set(MUX_CABLE_INFO_ACTIVE_STANDBY) | set(MUX_CABLE_INFO_ACTIVE_ACTIVE)
     assert {k: info[k] for k in MUX_CABLE_INFO_ACTIVE_ACTIVE if k != "time_post"} == {
@@ -201,6 +308,16 @@ def test_active_active(run):
 
 
 def test_active_active_soc_unreachable(run):
+    """For an active-active port whose SoC cannot be reached, the pass writes
+    unknown states, server_version N/A, and a failing connection status.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture). Nothing listens at
+       Ethernet20's SoC address.
+    2. Expect the self and peer link, operation and mux direction states
+       unknown, server_version N/A, and grpc_connection_status
+       TRANSIENT_FAILURE, CONNECTING or IDLE.
+    """
     info = run["info"]["Ethernet20"]
     assert {k: info[k] for k in ("self_link_state", "peer_link_state", "self_oper_state", "peer_oper_state",
                                  "self_mux_direction", "peer_mux_direction")} == dict.fromkeys(
@@ -211,6 +328,17 @@ def test_active_active_soc_unreachable(run):
 
 
 def test_active_standby_driver_exceptions(run):
+    """When the driver calls raise, the pass writes unknown, down or N/A for
+    them, and still writes the port.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture). The driver methods
+       of Ethernet28's cable that the pass calls raise OSError, or return
+       invalid values.
+    2. Expect tor_active and mux_direction unknown, the three link statuses
+       down, and N/A in the switch counts, temperatures, voltages and the eye
+       heights checked.
+    """
     info = run["info"]["Ethernet28"]
     assert {k: info[k] for k in ("tor_active", "mux_direction", "link_status_self", "link_status_peer",
                                  "link_status_nic")} == {
@@ -222,18 +350,41 @@ def test_active_standby_driver_exceptions(run):
 
 
 def test_static_info_driver_failures(run):
+    """MUX_CABLE_STATIC_INFO, written at startup, of a cable whose cursor
+    values cannot be read holds its read side and N/A in every other field.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+       get_target_cursor_values() of Ethernet28's cable raises for the NIC and
+       ToR B, and returns -1 for ToR A.
+    2. Expect Ethernet28's MUX_CABLE_STATIC_INFO read_side tor1, and N/A in
+       every other field.
+    """
     static = dict(run["static"]["Ethernet28"])
     assert static.pop("read_side") == "tor1"
     assert set(static.values()) == {"N/A"}
 
 
 def test_cable_without_driver_is_skipped(run):
-    """No driver: the pass logs an error and leaves the startup placeholders."""
+    """No driver: the pass logs an error and leaves the startup placeholders.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect Ethernet24's MUX_CABLE_INFO as startup wrote it, and no write for
+       Ethernet24 during the pass.
+    """
     assert run["info"]["Ethernet24"] == run["init"]["Ethernet24"]
     assert not [a for a in run["writes"] if a.key == "Ethernet24"]
 
 
 def test_static_info_only_at_startup(run):
+    """MUX_CABLE_STATIC_INFO is written at startup only: the pass does not
+    write it.
+
+    Steps:
+    1. Take the module's telemetry pass (the run fixture).
+    2. Expect no MUX_CABLE_STATIC_INFO write during the pass.
+    """
     assert not [a for a in run["writes"] if a.table == "MUX_CABLE_STATIC_INFO"]
 
 
@@ -242,13 +393,33 @@ def _short_reply(request, pb2):
 
 
 def test_disable_telemetry(dut):
-    """Also: telemetry of the lower ToR's active-active port, whose SoC sends
-    a malformed operation state reply."""
-    topo = Topology(loopback3=LOOPBACK3_LOWER).active_standby("Ethernet0")
-    topo.active_active("Ethernet4", soc_ipv4=SOC_UP + "/32")
+    """XCVRD_LOG|Y_CABLE disable_telemetry True stops the telemetry passes, and
+    False starts them again. Startup's reset of the log level leaves the field
+    alone.
+
+    Also: telemetry of the upper ToR's active-active port (read side 1), whose
+    SoC sends a malformed operation state reply.
+
+    Steps:
+    1. Configure the upper ToR with Ethernet0 as active-standby, Ethernet4 as
+       active-active with a SoC double at 192.168.0.5, and XCVRD_LOG|Y_CABLE
+       disable_telemetry=True. The SoC's link is down for port id 0 and up for
+       port id 1, and it answers QueryOperationPortState for port id 0 only.
+    2. Start ycabled, and expect XCVRD_LOG|Y_CABLE {disable_telemetry: True,
+       log_verbosity: notice}.
+    3. Wait 65 s, and expect no MUX_CABLE_INFO write.
+    4. Set disable_telemetry=False. Expect a pass to write Ethernet0's
+       MUX_CABLE_INFO within 65 s, then Ethernet4's grpc_connection_status
+       within 10 s.
+    5. Expect Ethernet4's self and peer link states up and down (self is index
+       1 of the SoC's lists), operation states unknown, and mux directions
+       standby and active.
+    """
+    topo = Topology(loopback3=LOOPBACK3_UPPER).active_standby("Ethernet0")
+    topo.active_active("Ethernet4", soc_ipv4=soc_ip("Ethernet4") + "/32")
     topo.xcvrd_log = {"disable_telemetry": "True"}
     dut.configure(topo)
-    soc = dut.soc(SOC_UP)
+    soc = dut.soc(soc_ip("Ethernet4"))
     soc.link = [False, True]
     soc.script("QueryOperationPortState", reply=_short_reply)
     dut.start()
@@ -268,9 +439,22 @@ def test_disable_telemetry(dut):
     assert (info["self_mux_direction"], info["peer_mux_direction"]) == ("standby", "active")
 
 
-@pytest.mark.known_issue("3.8-3", "telemetry of an active-active port without HW_MUX_CABLE_TABLE (no SoC "
-                                   "address) raises NameError and kills the telemetry thread")
+@pytest.mark.known_issue("telemetry of an active-active port without HW_MUX_CABLE_TABLE (no SoC "
+                         "address) raises NameError and kills the telemetry thread")
 def test_active_active_port_without_soc_address(dut):
+    """The pass skips an active-active port without a SoC address and goes on
+    to the next port, without a crash.
+
+    Steps:
+    1. Configure Ethernet0 as active-active without a SoC address, and
+       Ethernet4 as active-standby.
+    2. Start ycabled. On Python ycabled, let the teardown accept the crash and
+       the exit of the known issue.
+    3. Expect the pass to write Ethernet4's MUX_CABLE_INFO, after Ethernet0's
+       turn, within 90 s.
+    4. Wait for syslog to catch up, and expect no crash in syslog or in
+       ycabled's output.
+    """
     dut.configure(Topology().active_active("Ethernet0").active_standby("Ethernet4"))
     dut.start()
     dut.tolerate_python_failure(crash=True, exit=True)

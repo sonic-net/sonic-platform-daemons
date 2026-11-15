@@ -1,8 +1,10 @@
 """Everything the suite runs once per session."""
 
+import errno
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from collections import namedtuple
@@ -11,6 +13,7 @@ from .fake_hw import MODEL, VENDOR, FakeHardware
 from .monitor import Monitor
 from .redisdb import TCP_PORT, UNIX_SOCKET, Dbs, RedisServer
 from .syslog_sink import DEV_LOG, SyslogSink
+from .topology import VLAN_V4, VLAN_V6
 from .util import DB_IDS
 
 BLACKBOX_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,6 +24,7 @@ DATABASE_CONFIG = "/var/run/redis/sonic-db/database_config.json"
 # its own at the start: as root, or with sudo.
 SYSTEM_DIRS = ("/var/run/redis", "/var/run/redis0", "/var/run/redis1", "/etc/sonic", "/usr/share/sonic/platform",
                "/usr/share/sonic/firmware")
+CAP_NET_ADMIN = 12
 
 # Where Python ycabled's coverage data goes. own_report: the suite reports it
 # (--bb-coverage); otherwise pytest-cov combines it into the report of the run.
@@ -35,6 +39,12 @@ def check_prerequisites():
             ["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0):
         return "the suite needs root, or sudo without a password, to set up {}".format(
             ", ".join((DEV_LOG,) + SYSTEM_DIRS))
+    if shutil.which("ip") is None:
+        return "ip (iproute2) is not installed"
+    if not _net_admin():
+        return "the suite needs the NET_ADMIN capability to route the dual ToR's VLAN, {} and {}, to lo, where " \
+               "its SoC doubles listen (docker run --cap-add NET_ADMIN, as run.sh does)".format(
+                   VLAN_V4.network, VLAN_V6.network)
     if not os.path.exists(DATABASE_CONFIG):
         return "{} is missing (libswsscommon installs it)".format(DATABASE_CONFIG)
     with open(DATABASE_CONFIG) as f:
@@ -51,6 +61,39 @@ def check_prerequisites():
 
 def _as_root(*cmd):
     subprocess.check_call((() if os.geteuid() == 0 else ("sudo", "-n")) + cmd)
+
+
+def _net_admin():
+    """Whether root, or sudo, gets NET_ADMIN here: a container started without
+    --cap-add NET_ADMIN has it in no process's bounding set."""
+    with open("/proc/self/status") as f:
+        for line in f:
+            if line.startswith("CapBnd:"):
+                return bool(int(line.split()[1], 16) & (1 << CAP_NET_ADMIN))
+    return False
+
+
+def _ipv6_on_lo():
+    try:
+        with open("/proc/sys/net/ipv6/conf/lo/disable_ipv6") as f:
+            return f.read().strip() == "0"
+    except OSError:
+        return False
+
+
+def make_local(ip):
+    """Lets a SoC double listen on `ip`. The VLAN's routes on lo
+    (BlackboxEnv.prepare_system()) do for IPv4, but IPv6 binds only to an
+    address of an interface: such an address goes on lo."""
+    family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((ip, 0))
+            return
+        except OSError as e:
+            if e.errno != errno.EADDRNOTAVAIL:
+                raise
+    _as_root("ip", "address", "add", "{}/{}".format(ip, 128 if family == socket.AF_INET6 else 32), "dev", "lo")
 
 
 def mapping_key(s):
@@ -120,12 +163,18 @@ class BlackboxEnv(object):
         self.redis.stop()
 
     def prepare_system(self):
-        """Makes SYSTEM_DIRS the suite's, and points /dev/log at its syslog
-        socket. Fine in the throwaway container the suite runs in."""
+        """Makes SYSTEM_DIRS the suite's, points /dev/log at its syslog
+        socket, and routes the dual ToR's VLAN to lo. Fine in the throwaway
+        container the suite runs in."""
         _as_root("mkdir", "-p", *SYSTEM_DIRS)
         if os.geteuid() != 0:
             _as_root("chown", "-R", "{}:{}".format(os.getuid(), os.getgid()), *SYSTEM_DIRS)
         _as_root("ln", "-sfn", self.syslog_socket, DEV_LOG)
+        # SoC doubles listen on the VLAN's addresses, and its other addresses
+        # refuse connections, as those of 127.0.0.0/8 do. Without IPv6 on lo,
+        # only the tests of IPv6 SoC addresses fail.
+        for vlan in (VLAN_V4, VLAN_V6) if _ipv6_on_lo() else (VLAN_V4,):
+            _as_root("ip", "route", "replace", "local", str(vlan.network), "dev", "lo")
 
     def generate_proto(self):
         out = os.path.join(self.gen_dir, "proto_out")

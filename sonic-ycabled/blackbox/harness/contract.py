@@ -12,7 +12,8 @@ depend on the port's cable type: pairs (cable type, pattern).
 Stopping ycabled deletes nothing (HLD C7). This departs on purpose from what
 Python's deinit() intends: it would delete the HW_MUX_CABLE_TABLE,
 MUX_CABLE_STATIC_INFO and MUX_CABLE_INFO rows and the GRPCCLIENT keys it
-copied, but it never runs, because SIGTERM never completes (HLD 3.8 issue 1).
+copied, but it never runs, because SIGTERM never completes (a known issue,
+see test_sigterm_exits_promptly).
 """
 
 import re

@@ -67,8 +67,9 @@ def pytest_configure(config):
                       "package), and --bb-test-timeout is not 0"
         if problem:
             raise pytest.UsageError("BB_ENABLE=1, but " + problem)
-    config.addinivalue_line("markers", "slow: waits for one of ycabled's 60 s timers")
-    config.addinivalue_line("markers", "known_issue(ref, reason): a known issue of Python ycabled; "
+    config.addinivalue_line("markers", "slow: takes a minute or more: waits for one of ycabled's 60 s "
+                                       "timers, or sends thousands of requests")
+    config.addinivalue_line("markers", "known_issue(reason): a known issue of Python ycabled; "
                                        "expected to fail on the Python implementation")
     config.addinivalue_line("markers", "python_only: checks a mechanism of Python ycabled only")
 
@@ -95,12 +96,11 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         mark = item.get_closest_marker("known_issue")
         if mark is not None:
-            ref = mark.args[0] if mark.args else ""
-            reason = mark.args[1] if len(mark.args) > 1 else mark.kwargs.get("reason", "")
+            reason = mark.args[0] if mark.args else mark.kwargs.get("reason", "")
             # AssertionError only: a harness error (harness.util.HarnessError) or
             # a timeout must not pass as the known issue.
             item.add_marker(pytest.mark.xfail(strict=True, raises=AssertionError,
-                                              reason="known issue {}: {}".format(ref, reason)))
+                                              reason="known issue: {}".format(reason)))
 
 
 def pytest_deselected(items):
@@ -140,7 +140,8 @@ def _full_contract_not_required(session):
         return "--bb-no-require-full-contract"
     if implementation() != "python":
         # The contract is what Python ycabled may do; another implementation
-        # need not make every access Python makes (HLD 3.8 issue 10, say).
+        # need not make every access Python makes (its subscription to
+        # XCVRD_DOWN_FW_STATUS_CMD, which nothing writes, say).
         return "the daemon under test is not Python ycabled"
     if session.shouldstop or session.shouldfail:
         return "the run stopped early"

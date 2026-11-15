@@ -2,7 +2,7 @@
 # Runs the ycabled black-box suite in its container. Arguments go to pytest.
 #
 #   sonic-ycabled/blackbox/run.sh                      # whole suite, Python ycabled
-#   sonic-ycabled/blackbox/run.sh -m "not slow" -x     # skip the 60 s timer cases
+#   sonic-ycabled/blackbox/run.sh -m "not slow" -x     # skip the cases that take a minute or more
 #   sonic-ycabled/blackbox/run.sh --bb-coverage        # with Python ycabled's code coverage
 #
 # Environment:
@@ -40,7 +40,10 @@ if [ -t 1 ]; then
     tty=(-t)
 fi
 
+# NET_ADMIN: the suite routes the dual ToR's VLAN to lo, where its SoC doubles
+# listen (harness/env.py).
 docker run --rm --init "${tty[@]}" "${extra[@]}" \
+    --cap-add NET_ADMIN \
     --sysctl net.ipv6.conf.all.disable_ipv6=0 \
     --sysctl net.ipv6.conf.lo.disable_ipv6=0 \
     -e PYTHONDONTWRITEBYTECODE=1 \

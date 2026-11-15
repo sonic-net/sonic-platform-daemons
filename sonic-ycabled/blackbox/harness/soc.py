@@ -65,7 +65,7 @@ class Soc(object):
         with PEM bytes."""
         self.ip = ip
         self.tls = tls
-        # Index 0 is the upper ToR's port, index 1 the lower ToR's.
+        # Port id 0 is the lower ToR's (read side 0), port id 1 the upper ToR's.
         self.admin = [True, False]
         self.link = [True, True]
         self.oper = [True, True]

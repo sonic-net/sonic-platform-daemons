@@ -17,6 +17,7 @@ import shutil
 from collections import namedtuple
 
 from . import contract
+from .env import make_local
 from .mux_simulator import MuxSimulator, UPPER_TOR
 from .soc import Blackhole, Soc
 from .topology import CONTAINER_PLATFORM_DIR, transceiver_info_row
@@ -97,6 +98,7 @@ class Dut(object):
         return topo
 
     def soc(self, ip, tls=None, start=True):
+        make_local(ip)
         soc = Soc(ip, tls)
         if start:
             soc.start()
@@ -104,6 +106,7 @@ class Dut(object):
         return soc
 
     def blackhole(self, ip):
+        make_local(ip)
         bh = Blackhole(ip)
         self.blackholes.append(bh)
         return bh

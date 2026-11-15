@@ -25,7 +25,7 @@ class MuxSimulator(object):
     def status(self, index):
         with self._lock:
             return dict(self.ports.setdefault(index, {"active_side": UPPER_TOR, "flap_counter": 0,
-                                                       "port_index": index}))
+                                                      "port_index": index}))
 
     def set_active_side(self, index, side):
         with self._lock:

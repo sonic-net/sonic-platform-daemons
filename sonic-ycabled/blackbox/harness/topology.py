@@ -1,6 +1,7 @@
 """What a test configures before ycabled starts: ports, mux cables, ToR
 addresses, gRPC client settings, and what xcvrd and the hardware report."""
 
+import ipaddress
 import os
 
 from .util import clear_dir
@@ -10,11 +11,31 @@ VS_PLATFORM = "x86_64-kvm_x86_64-r0"
 HWSKU = "BB-DualToR-SKU"
 CONTAINER_PLATFORM_DIR = "/usr/share/sonic/platform"
 
-# Loopback3 addresses ycabled maps to read_side 0 (upper ToR) and 1 (lower ToR).
-LOOPBACK3_UPPER = "10.212.64.2/32"
-LOOPBACK3_LOWER = "10.212.64.1/32"
-LOOPBACK3_UPPER_NIC = "10.1.0.39/32"
-LOOPBACK3_LOWER_NIC = "10.1.0.38/32"
+# Loopback3 addresses ycabled maps to read_side 1 (upper ToR) and 0 (lower ToR):
+# Python ycabled's LOOPBACK_INTERFACE_T0 and LOOPBACK_INTERFACE_LT0. The _NIC pair is
+# what sonic-mgmt gives dual ToR testbeds, 10.1.0.38 to the upper ToR (the first DUT).
+LOOPBACK3_UPPER = "10.212.64.1/32"
+LOOPBACK3_LOWER = "10.212.64.2/32"
+LOOPBACK3_UPPER_NIC = "10.1.0.38/32"
+LOOPBACK3_LOWER_NIC = "10.1.0.39/32"
+
+# sonic-mgmt's dual ToR VLAN, Vlan1000, whose hosts are the servers and the SoCs
+# behind the mux cables. With active-active cables, the n-th port of the VLAN
+# (from 0) has its server at the VLAN's address + 2n + 1 and its SoC at + 2n + 2
+# (generate_mux_cable_facts in sonic-mgmt's ansible/module_utils/dualtor_utils.py).
+# The suite routes both subnets to lo (env.prepare_system()).
+VLAN_V4 = ipaddress.ip_interface("192.168.0.1/21")
+VLAN_V6 = ipaddress.ip_interface("fc02:1000::1/64")
+
+
+def soc_ip(port, ipv6=False):
+    """The SoC address sonic-mgmt gives the active-active cable of `port`,
+    EthernetN, the (N/4)-th port of a Topology: 192.168.0.3 for Ethernet0,
+    192.168.0.5 for Ethernet4. sonic-mgmt gives SoCs no IPv6 address; the
+    suite's has the same host number in the IPv6 subnet, fc02:1000::3 for
+    Ethernet0."""
+    n = int(port[len("Ethernet"):]) // 4
+    return str((VLAN_V6 if ipv6 else VLAN_V4).ip + 2 * n + 2)
 
 
 class MuxPort(object):
@@ -47,7 +68,7 @@ class Topology(object):
     """A dual ToR device. `ports` are all front panel ports, in port config
     order; `mux` the MUX_CABLE entries."""
 
-    def __init__(self, nports=8, platform=PLATFORM, hwsku=HWSKU, loopback3=LOOPBACK3_UPPER):
+    def __init__(self, nports=8, platform=PLATFORM, hwsku=HWSKU, loopback3=LOOPBACK3_LOWER):
         self.platform = platform
         self.hwsku = hwsku
         self.ports = [("Ethernet{}".format(4 * i), i + 1) for i in range(nports)]
@@ -69,6 +90,9 @@ class Topology(object):
         return dict(self.ports)[name]
 
     def add_mux(self, name, **kw):
+        # A test that wants MUX_CABLE to name an unknown port writes the row itself.
+        if name not in dict(self.ports):
+            raise ValueError("{} is not a port of the topology".format(name))
         self.mux[name] = MuxPort(name, **kw)
         return self.mux[name]
 

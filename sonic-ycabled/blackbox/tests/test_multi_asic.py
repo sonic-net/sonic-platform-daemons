@@ -101,7 +101,8 @@ def multi_asic(dut):
                 dut.env.extra_accesses.extend(accesses)
                 if not dut.allow_contract_violations:
                     cable_types = {port_name: "active-standby" for port_name, _, _ in NAMESPACES.values()}
-                    problems += ["DB contract, {}: {}".format(ns, v) for v in contract.violations(accesses, cable_types)]
+                    problems += ["DB contract, {}: {}".format(ns, v)
+                                 for v in contract.violations(accesses, cable_types)]
             monitor.stop()
         for server in servers.values():
             server.stop()
@@ -117,17 +118,46 @@ def multi_asic(dut):
 
 
 def test_multi_asic_environment(dut, multi_asic):
-    """The two-ASIC environment works for a daemon that initializes the
-    global DB config first."""
+    """The two-ASIC environment works for a daemon that initializes the global
+    DB config first. This checks the suite's setup, which test_multi_asic
+    depends on.
+
+    Steps:
+    1. Set up the two-ASIC device (the multi_asic fixture): asic.conf with
+       NUM_ASIC=2, database_global.json, and per namespace its own redis and
+       database_config.json, with one active-standby port, Ethernet0 in asic0
+       and Ethernet4 in asic1, its CONFIG_DB entries and its TRANSCEIVER_INFO.
+    2. In ycabled's environment, run a Python script that initializes the
+       global DB config, then reads the front-end namespaces, the port to ASIC
+       map, and the TRANSCEIVER_INFO keys in asic1.
+    3. Expect the namespaces asic0 and asic1, Ethernet0 on ASIC 0 and Ethernet4
+       on ASIC 1, and Ethernet4 in asic1's TRANSCEIVER_INFO.
+    """
     env = YcabledProcess(dut.env, PLATFORM).process_env()
     out = subprocess.check_output([sys.executable, "-c", ENV_CHECK], env=env, cwd="/", text=True)
     assert out.strip().splitlines()[-1] == "['asic0', 'asic1'] {'Ethernet0': 0, 'Ethernet4': 1} ('Ethernet4',)"
 
 
-@pytest.mark.known_issue("3.8-23", "ycabled cannot start on a multi-ASIC platform: it opens namespace "
-                                    "connections before initializing the global DB config, and resolves "
-                                    "the default namespace '' to an ASIC index")
+@pytest.mark.known_issue("ycabled cannot start on a multi-ASIC platform: it opens namespace "
+                         "connections before initializing the global DB config, and resolves "
+                         "the default namespace '' to an ASIC index")
 def test_multi_asic(dut, multi_asic):
+    """ycabled starts on a two-ASIC device and serves the mux ports of both
+    namespaces, each through its namespace's redis.
+
+    Steps:
+    1. Set up the two-ASIC device (the multi_asic fixture): asic.conf with
+       NUM_ASIC=2, database_global.json, and per namespace its own redis and
+       database_config.json, with one active-standby port, Ethernet0 in asic0
+       and Ethernet4 in asic1, its CONFIG_DB entries and its TRANSCEIVER_INFO.
+    2. On Python ycabled, let the teardown accept the crash and the exit of the
+       known issue. Start ycabled without waiting until it is ready.
+    3. Expect, within 15 s and with ycabled running, each namespace's
+       HW_MUX_CABLE_TABLE row for its port, and Ethernet4's state in asic1
+       active.
+    4. Toggle Ethernet4 to standby through asic1's APPL_DB, and expect its
+       state standby in asic1's STATE_DB within 5 s.
+    """
     dut.tolerate_python_failure(crash=True, exit=True)
     dut.start(ready=False)
     namespaces = multi_asic
