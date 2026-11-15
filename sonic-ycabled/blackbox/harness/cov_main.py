@@ -24,18 +24,41 @@ cov = coverage.Coverage(data_file=os.environ["BB_COV_DATA_FILE"],
                         config_file=False)
 cov.start()
 
+# A SIGUSR1 during a save runs the handler again, nested in that save, and
+# coverage.py's data file does not survive it: the nested call only asks the
+# running save for one more round.
+_saving = False
+_again = False
 
-def _save(signum, frame):
-    # No stop()/start(): start() would trace only this thread and new ones.
-    # save() is safe while the other threads are traced.
-    cov.save()
+
+def _mark_saved():
     with open(os.path.join(os.environ["BB_COV_SAVED_DIR"], str(os.getpid())), "w"):
         pass
 
 
+def _save(signum, frame):
+    global _saving, _again
+    _again = True
+    if _saving:
+        return
+    _saving = True
+    try:
+        while _again:
+            _again = False
+            # No stop()/start(): start() would trace only this thread and new ones.
+            # save() is safe while the other threads are traced.
+            cov.save()
+    finally:
+        _saving = False
+    _mark_saved()
+
+
 def _save_at_exit():
+    global _saving
+    _saving = True
     cov.stop()
     cov.save()
+    _mark_saved()
 
 
 signal.signal(signal.SIGUSR1, _save)
