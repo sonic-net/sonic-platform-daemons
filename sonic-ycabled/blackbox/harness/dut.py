@@ -24,11 +24,13 @@ from .topology import CONTAINER_PLATFORM_DIR, transceiver_info_row
 from .util import HarnessError, WaitTimeout, clear_dir, wait_until
 from .ycabled import YcabledProcess, implementation
 
-# Tables ycabled subscribes to once it has found a mux cable.
+# Tables ycabled subscribes to once it has found a mux cable: the ones tests
+# write. Python ycabled also subscribes to XCVRD_DOWN_FW_STATUS_CMD, which
+# nothing writes, so another implementation need not.
 MUX_SUBSCRIPTIONS = [("APPL_DB", t) for t in ("HW_MUX_CABLE_TABLE", "MUX_CABLE_COMMAND_TABLE",
                                               "FORWARDING_STATE_COMMAND", "HW_FORWARDING_STATE_PEER")]
 MUX_SUBSCRIPTIONS += [("APPL_DB", cmd) for cmd, *_ in contract.CLI_TABLES]
-MUX_SUBSCRIPTIONS += [("APPL_DB", "XCVRD_DOWN_FW_STATUS_CMD"), ("CONFIG_DB", "XCVRD_LOG")]
+MUX_SUBSCRIPTIONS += [("CONFIG_DB", "XCVRD_LOG")]
 BASE_SUBSCRIPTIONS = [("STATE_DB", "TRANSCEIVER_INFO")]
 
 # The field each CLI command writes into its command table.

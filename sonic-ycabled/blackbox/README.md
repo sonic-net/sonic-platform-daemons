@@ -368,7 +368,7 @@ mark itself.
 | `mux_simulator(side)` | Starts a mux simulator and writes `/etc/sonic/mux_simulator.json` for it. |
 | `write_file(path, content)`, `firmware_file(name, content)` | Write a file ycabled reads; it is deleted at teardown. |
 | `start(ready, expect_mux, timeout, extra_env, publish_transceivers)` | Writes `TRANSCEIVER_INFO` for the cables present, starts ycabled, and waits until it is ready. |
-| `wait_ready(expect_mux, timeout)`, `subscriptions(since)` | Ready: ycabled has subscribed to `TRANSCEIVER_INFO` (`BASE_SUBSCRIPTIONS`), and to the 19 tables of `MUX_SUBSCRIPTIONS` if the device has mux cables, then sent nothing for 0.3 s. A daemon that exits meanwhile raises with its output. |
+| `wait_ready(expect_mux, timeout)`, `subscriptions(since)` | Ready: ycabled has subscribed to `TRANSCEIVER_INFO` (`BASE_SUBSCRIPTIONS`), and to the 18 tables of `MUX_SUBSCRIPTIONS`, the ones tests write, if the device has mux cables, then sent nothing for 0.3 s. A daemon that exits meanwhile raises with its output. |
 | `stop(sigterm_timeout)` | SIGTERM as supervisord sends it, SIGKILL after `sigterm_timeout`, then the barriers. Returns a `StopResult`: return code, whether SIGTERM ended it, and how long it took. |
 | `toggle(port, state)`, `peer_toggle(port, state)` | orchagent's `HW_MUX_CABLE_TABLE` and linkmgrd's `HW_FORWARDING_STATE_PEER`. Return the STATE_DB row ycabled wrote. |
 | `probe(port)`, `fwd_probe(port)` | linkmgrd's `MUX_CABLE_COMMAND_TABLE` and `FORWARDING_STATE_COMMAND` probes. Return the response. |
