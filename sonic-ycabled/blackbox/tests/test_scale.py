@@ -2,6 +2,8 @@
 requested state, each cable and SoC gets the calls the requests ask for, in
 order, and two calls to one cable never overlap."""
 
+import bisect
+
 import pytest
 
 from harness.fake_hw import TARGET_TOR_A, TARGET_TOR_B
@@ -57,6 +59,25 @@ def check_round(got, r, table, state):
     assert not wrong, "round {}, {} {}: {}".format(r, table, state, wrong)
 
 
+def settle(dut):
+    """Wait until ycabled has sent nothing for 1 s, and the recorder has all it
+    sent."""
+    assert dut.monitor.wait_settled(quiet=1, timeout=ROUND_TIMEOUT), "ycabled did not go quiet"
+    dut.monitor.barrier()
+
+
+def check_rounds(dut, marks, table, state_of, ports):
+    """Check each round again, once ycabled has settled: every answer from the
+    round's request (`marks[r]`) to the next round's, or to the end. An answer
+    written again after its round was checked, or after the last round, fails
+    here."""
+    got = [{port: [] for port in ports} for _ in marks]
+    for a in dut.monitor.accesses(marks[0], kind="write", db="STATE_DB", table=table, field="state"):
+        got[bisect.bisect_right(marks, a.seq) - 1].setdefault(a.key, []).append(a.value)
+    for r, round_got in enumerate(got):
+        check_round(round_got, r, table, state_of(r))
+
+
 def test_active_standby_ports_toggled_many_times(dut):
     """100 active-standby cables, half of them read from ToR B, all toggled
     together 100 times. Every toggle is answered once, with the requested
@@ -72,9 +93,12 @@ def test_active_standby_ports_toggled_many_times(dut):
     3. 100 rounds: in one transaction, request standby (even rounds) or active
        (odd rounds) for every port. Expect, within 60 s, exactly one
        HW_MUX_CABLE_TABLE state answer per port, with that state.
-    4. Expect each port's final row {state: active, read_side: its read side,
+    4. Once ycabled has sent nothing for 1 s, expect the same of each round
+       again, counting every answer from its request to the next round's, or
+       to the end: none was written twice after its round was checked.
+    5. Expect each port's final row {state: active, read_side: its read side,
        active_side: the same side}, and its mux on that side.
-    5. Expect each cable's toggle calls to be the 100 the rounds ask for, in
+    6. Expect each cable's toggle calls to be the 100 the rounds ask for, in
        order, and no overlapping calls to any cable.
     """
     ports = port_names(PORTS)
@@ -90,11 +114,14 @@ def test_active_standby_ports_toggled_many_times(dut):
     dut.start(timeout=120)
     hw_mark = dut.hw.mark()
 
+    marks = []
     for r in range(ROUNDS):
         state = round_state(r)
-        mark = dut.monitor.mark()
+        marks.append(dut.monitor.mark())
         send(dut, [("HW_MUX_CABLE_TABLE", port, state) for port in ports])
-        check_round(answers(dut, mark, "HW_MUX_CABLE_TABLE", ports), r, "HW_MUX_CABLE_TABLE", state)
+        check_round(answers(dut, marks[r], "HW_MUX_CABLE_TABLE", ports), r, "HW_MUX_CABLE_TABLE", state)
+    settle(dut)
+    check_rounds(dut, marks, "HW_MUX_CABLE_TABLE", round_state, ports)
 
     final = round_state(ROUNDS - 1)
     for port in ports:
@@ -130,9 +157,12 @@ def test_active_active_ports_toggled_many_times(dut):
        state for the peer in HW_FORWARDING_STATE_PEER. Expect, within 60 s,
        exactly one answer per port in HW_MUX_CABLE_TABLE and in
        HW_MUX_CABLE_TABLE_PEER, with the requested states.
-    4. Expect each port's final rows, active for this ToR and standby for the
+    4. Once ycabled has sent nothing for 1 s, expect the same of each round
+       again, counting every answer from its request to the next round's, or
+       to the end: none was written twice after its round was checked.
+    5. Expect each port's final rows, active for this ToR and standby for the
        peer, with read_side 0, and the SoC's admin states to match.
-    5. Expect 200 SetAdminForwardingPortState RPCs at each SoC: for port id 0,
+    6. Expect 200 SetAdminForwardingPortState RPCs at each SoC: for port id 0,
        the states of this ToR's requests, and for port id 1, those of the
        peer's, each in order.
     """
@@ -146,14 +176,18 @@ def test_active_active_ports_toggled_many_times(dut):
     dut.start(timeout=120)
     soc_marks = {port: soc.mark() for port, soc in socs.items()}
 
+    marks = []
     for r in range(ROUNDS):
         state = round_state(r)
-        mark = dut.monitor.mark()
+        marks.append(dut.monitor.mark())
         send(dut, [(table, port, s) for port in ports
                    for table, s in (("HW_MUX_CABLE_TABLE", state), ("HW_FORWARDING_STATE_PEER", opposite(state)))])
-        check_round(answers(dut, mark, "HW_MUX_CABLE_TABLE", ports), r, "HW_MUX_CABLE_TABLE", state)
-        check_round(answers(dut, mark, "HW_MUX_CABLE_TABLE_PEER", ports), r, "HW_MUX_CABLE_TABLE_PEER",
+        check_round(answers(dut, marks[r], "HW_MUX_CABLE_TABLE", ports), r, "HW_MUX_CABLE_TABLE", state)
+        check_round(answers(dut, marks[r], "HW_MUX_CABLE_TABLE_PEER", ports), r, "HW_MUX_CABLE_TABLE_PEER",
                     opposite(state))
+    settle(dut)
+    check_rounds(dut, marks, "HW_MUX_CABLE_TABLE", round_state, ports)
+    check_rounds(dut, marks, "HW_MUX_CABLE_TABLE_PEER", lambda r: opposite(round_state(r)), ports)
 
     final = round_state(ROUNDS - 1)
     for port, soc in socs.items():
