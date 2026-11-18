@@ -28,18 +28,25 @@
 # PyO3 bridge has to match the Python facade the same image installs, and
 # swss-common the libswsscommon it links.  It sets SONIC_CARGO_CONFIG to a
 # cargo --config file whose [patch] entries point the git dependencies at those
-# submodules.  Cargo records a patch in Cargo.lock, so --locked cannot hold with
-# one; the committed lock is kept aside and put back by clean.
-ifdef SONIC_CARGO_CONFIG
-CARGO_ARGS := --config $(SONIC_CARGO_CONFIG)
-else
+# submodules. Resolve that source replacement once during configure and check
+# all remaining external versions/checksums against the committed lock. Both
+# build and test then use --locked with the checked, patched lock.
 CARGO_ARGS := --locked
+ifdef SONIC_CARGO_CONFIG
+CARGO_ARGS += --config "$(SONIC_CARGO_CONFIG)"
+endif
+
+override_dh_auto_configure:
+ifdef SONIC_CARGO_CONFIG
+	[ -f debian/Cargo.lock.pinned ] || cp Cargo.lock debian/Cargo.lock.pinned
+	python3 debian/verify-cargo-lock.py --prepare --config "$(SONIC_CARGO_CONFIG)" debian/Cargo.lock.pinned Cargo.lock
+	cargo metadata --config "$(SONIC_CARGO_CONFIG)" --format-version=1 --filter-platform "$${CARGO_BUILD_TARGET:-$$(rustc -vV | sed -n 's/^host: //p')}" > /dev/null
+	python3 debian/verify-cargo-lock.py --config "$(SONIC_CARGO_CONFIG)" debian/Cargo.lock.pinned Cargo.lock
+else
+	:
 endif
 
 override_dh_auto_build:
-ifdef SONIC_CARGO_CONFIG
-	[ -f debian/Cargo.lock.pinned ] || cp Cargo.lock debian/Cargo.lock.pinned
-endif
 	cargo build $(CARGO_ARGS) --release --workspace
 
 override_dh_auto_install:

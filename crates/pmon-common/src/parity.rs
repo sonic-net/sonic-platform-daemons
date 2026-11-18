@@ -62,7 +62,7 @@ fn cstr(s: &str) -> CString {
 /// `sonic_py_common`, as it does for the bridge's own tests.
 pub fn with_harness<R>(f: impl FnOnce(Python<'_>, &Bound<'_, PyModule>) -> R) -> R {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let harness = match py.import(HARNESS_MODULE) {
             Ok(m) => m,
             Err(_) => PyModule::from_code(
@@ -375,7 +375,7 @@ impl PyTable {
         &self,
         f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<R>,
     ) -> Result<R, String> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let h = py.import(HARNESS_MODULE)?;
             let db = h.getattr("Db")?.call1((self.db.as_str(),))?;
             let table = h.getattr("Table")?.call1((db, self.table.as_str()))?;
