@@ -1634,10 +1634,10 @@ class TestXcvrdScript(object):
     def test_load_optical_si_settings_missing_file(self):
         assert optics_si_parser.load_optics_si_settings() == {}
 
-    @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api')
     @pytest.mark.parametrize('is_cpo', [False, True])
-    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis, monkeypatch, is_cpo):
+    def test_get_media_settings_key(self, mock_is_cmis_api, monkeypatch, is_cpo):
+        mock_chassis = MagicMock()
         mock_chassis.get_cpo.return_value = None
         monkeypatch.setattr(common, "platform_chassis", mock_chassis)
         mock_sfp = MagicMock()
