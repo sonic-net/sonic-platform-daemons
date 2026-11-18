@@ -1896,16 +1896,19 @@ class TestXcvrdScript(object):
             assert result == expected
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
-    @pytest.mark.parametrize('failure', ['lookup', 'missing_device', 'missing_api', 'unsupported'])
+    @pytest.mark.parametrize('failure', ['missing_device', 'missing_api', 'unsupported'])
     def test_is_copper_exception(self, mock_chassis, failure):
         mock_chassis.get_cpo.return_value = None
         mock_sfp = MagicMock()
         mock_chassis.get_sfp.return_value = mock_sfp
-        if failure == 'lookup':
-            mock_chassis.get_sfp.side_effect = AttributeError
-        elif failure == 'missing_device':
+        if failure == 'missing_device':
             mock_chassis.get_sfp.return_value = None
-        elif failure == 'missing_api':
+            with pytest.raises(
+                    LookupError,
+                    match='No transceiver device found for physical port 0'):
+                common.is_copper(0)
+            return
+        if failure == 'missing_api':
             mock_sfp.get_xcvr_api.return_value = None
         else:
             mock_sfp.get_xcvr_api.return_value.is_copper.side_effect = NotImplementedError
