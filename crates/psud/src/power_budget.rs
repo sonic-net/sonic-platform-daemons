@@ -58,7 +58,8 @@ fn supplier(row: &PsuInfo) -> Entry {
     // `try_get(get_maximum_supplied_power, 0.0)`: the default is a float.
     Entry::Set(
         field,
-        row.maximum_supplied_power.unwrap_or(Number::Float(0.0)),
+        row.maximum_supplied_power_for_budget
+            .unwrap_or(Number::Float(0.0)),
     )
 }
 
@@ -71,9 +72,9 @@ fn consumer(name: &str, presence: bool, power: Option<Number>) -> Entry {
 }
 
 impl PowerBudget {
-    pub fn incomplete_read(&mut self) {
+    pub fn incomplete_read(&mut self, reason: &str) {
         if !self.incomplete {
-            log::warn!("Skipping power budget: incomplete power readings");
+            log::warn!("Skipping power budget: incomplete power readings: {reason}");
         }
         self.incomplete = true;
     }
@@ -96,19 +97,39 @@ impl PowerBudget {
                 value.is_finite() && value >= 0.0
             })
         };
-        if psus
-            .iter()
-            .any(|row| row.presence && row.power_good && !valid(row.maximum_supplied_power))
-            || drawers
+        // Missing supply uses Python's 0.0 W default. Build the diagnostic
+        // from the same predicates that decide whether this pass is complete.
+        let mut missing = Vec::new();
+        missing.extend(
+            drawers
                 .iter()
-                .any(|row| row.presence && !valid(row.maximum_consumed_power))
-            || modules
+                .filter(|row| row.presence && !valid(row.maximum_consumed_power))
+                .map(|row| row.name.as_str()),
+        );
+        missing.extend(
+            modules
                 .iter()
-                .any(|row| row.presence && !valid(row.maximum_consumed_power))
-        {
-            // A missing present consumer is unknown consumption, not zero.
-            // Retain the last complete snapshot and make no new LED verdict.
-            self.incomplete_read();
+                .filter(|row| row.presence && !valid(row.maximum_consumed_power))
+                .map(|row| row.name.as_str()),
+        );
+        missing.extend(
+            psus.iter()
+                .filter(|row| {
+                    row.presence
+                        && row.power_good
+                        && !valid(Some(
+                            row.maximum_supplied_power_for_budget
+                                .unwrap_or(Number::Float(0.0)),
+                        ))
+                })
+                .map(|row| row.name.as_str()),
+        );
+        if !missing.is_empty() {
+            // Retain the previous complete snapshot and LED verdict.
+            self.incomplete_read(&format!(
+                "missing or invalid reading for {}",
+                missing.join(", ")
+            ));
             return;
         }
         self.incomplete = false;
@@ -257,6 +278,7 @@ mod tests {
             voltage_high_threshold: None,
             voltage_low_threshold: None,
             maximum_supplied_power: supplied.map(Number::Float),
+            maximum_supplied_power_for_budget: supplied.map(Number::Float),
             power_warning_suppress_threshold: None,
             power_critical_threshold: None,
         }
@@ -269,6 +291,47 @@ mod tests {
             presence,
             maximum_consumed_power: consumed.map(Number::Float),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn missing_supplier_power_defaults_to_zero_and_replaces_the_previous_budget() {
+        for name in ["PSU 1", "PDB 1"] {
+            let table = MockTable::new();
+            let mut budget = PowerBudget::default();
+            let consumers = [drawer("drawer", true, Some(120.0))];
+            budget.run(
+                &[
+                    psu(name, true, true, Some(100.0)),
+                    psu("PSU 2", true, true, Some(100.0)),
+                ],
+                &consumers,
+                &[],
+                &table,
+            );
+            assert_eq!(budget.master_status(), Some(LedColor::Green));
+            budget.run(
+                &[
+                    psu(name, true, true, None),
+                    psu("PSU 2", true, true, Some(100.0)),
+                ],
+                &consumers,
+                &[],
+                &table,
+            );
+            assert_eq!(
+                table
+                    .field(CHASSIS_POWER_KEY, &format!("{SUPPLIER_FIELD} {name}"))
+                    .as_deref(),
+                Some("0.0")
+            );
+            assert_eq!(
+                table
+                    .field(CHASSIS_POWER_KEY, TOTAL_SUPPLIED_FIELD)
+                    .as_deref(),
+                Some("100.0")
+            );
+            assert_eq!(budget.master_status(), Some(LedColor::Red));
         }
     }
 
@@ -349,6 +412,33 @@ mod tests {
             }],
             &table,
         );
+        assert!(table.writes().is_empty());
+        assert_eq!(budget.master_status(), None);
+    }
+
+    #[test]
+    fn a_missing_module_does_not_blame_psus_with_default_supply_power() {
+        let log = pmon_common::logging::capture();
+        let table = MockTable::new();
+        let mut budget = PowerBudget::default();
+        budget.run(
+            &[psu("PSU 1", true, true, None)],
+            &[],
+            &[ModuleInfo {
+                name: "LINE-CARD0".into(),
+                presence: true,
+                maximum_consumed_power: None,
+                ..Default::default()
+            }],
+            &table,
+        );
+        let warnings: Vec<_> = log
+            .lines()
+            .into_iter()
+            .filter(|(_, line)| line.starts_with("Skipping power budget:"))
+            .collect();
+        assert_eq!(warnings, vec![(log::Level::Warn,
+            "Skipping power budget: incomplete power readings: missing or invalid reading for LINE-CARD0".into())]);
         assert!(table.writes().is_empty());
         assert_eq!(budget.master_status(), None);
     }

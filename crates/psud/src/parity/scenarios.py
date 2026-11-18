@@ -155,7 +155,81 @@ def unsupported_modular_power_getter():
     return make, steps
 
 
-SCENARIOS = [modular_budget, unsupported_modular_power_getter, healthy, unnamed_devices, psu_raises, presence_changes, psu_fan_raises,
+def unsupported_psu_maximum_power_getter():
+    build, steps = modular_budget()
+    def make():
+        c = build()
+        def unsupported():
+            raise NotImplementedError()
+        c._psu_list[0].get_maximum_supplied_power = unsupported
+        return c
+    return make, steps
+
+
+def missing_psu_maximum_power_value():
+    build, steps = modular_budget()
+    def make():
+        c = build()
+        c._psu_list[0].get_maximum_supplied_power = lambda: None
+        return c
+    return make, steps
+
+
+def failed_psu_maximum_power_getter():
+    build, steps = modular_budget()
+    def make():
+        c = build()
+        raising_in(c._psu_list[0], 'get_maximum_supplied_power')
+        return c
+    return make, steps
+
+
+def power_thresholds():
+    # Over the critical threshold, still over the suppress one, then below it.
+    def build():
+        c = chassis(psus=[psu('PSU 1', 1), psu('PSU 2', 2)])
+        for p in c._psu_list:
+            p.get_psu_power_critical_threshold = lambda: 250.0
+            p.get_psu_power_warning_suppress_threshold = lambda: 200.0
+        return c
+
+    def power(watts):
+        def f(c):
+            for p in c._psu_list:
+                p.set_power(watts)
+        return f
+    return build, [('pass',), ('call', power(130.0)), ('pass',), ('call', power(105.0)), ('pass',),
+                   ('call', power(90.0)), ('pass',)]
+
+def zero_power_thresholds():
+    # Python arms the check only for truthy thresholds; Mellanox can answer 0.0.
+    def build():
+        c = chassis(psus=[psu('PSU 1', 1), psu('PSU 2', 2)])
+        for p in c._psu_list:
+            p.get_psu_power_critical_threshold = lambda: 0.0
+            p.get_psu_power_warning_suppress_threshold = lambda: 0.0
+        return c
+    return build, [('pass',), ('pass',)]
+
+def unnamed_consumers():
+    # Python's fallback names, and the drawers and the modules summed apart:
+    # 4 x 12.3 W + 2 x 250.7 W is 550.6, not 550.5999999999999.
+    build, steps = modular_budget()
+
+    def make():
+        c = build()
+        c._fan_drawer_list[:] = [MP.MockFanDrawer(None, i + 1) for i in range(4)]
+        c._module_list[:] = [MP.MockModule(None, i + 1) for i in range(2)]
+        for d in c._fan_drawer_list:
+            d.set_maximum_consumed_power(12.3)
+        for m in c._module_list:
+            m.set_maximum_consumed_power(250.7)
+        return c
+    return make, steps
+
+
+SCENARIOS = [power_thresholds, zero_power_thresholds, unnamed_consumers, missing_psu_maximum_power_value, failed_psu_maximum_power_getter,
+             unsupported_psu_maximum_power_getter, modular_budget, unsupported_modular_power_getter, healthy, unnamed_devices, psu_raises, presence_changes, psu_fan_raises,
              psu_fan_absent, pdb_without_presence, out_of_range]
 
 
