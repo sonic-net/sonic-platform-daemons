@@ -32,6 +32,7 @@ Stand-ins, installed once per interpreter by `install()`:
 
 import importlib.machinery
 import importlib.util
+import copy
 import sys
 import types
 from unittest import mock
@@ -270,7 +271,9 @@ def install():
         def get_chassis(self):
             if _BUILT[0] is not None:
                 _BUILT[0]()
-            return _CHASSIS[0]
+            # Each open owns a distinct chassis, while the mock devices share
+            # controlled hardware state between handles, as real hardware does.
+            return copy.copy(_CHASSIS[0])
     platform.Platform = Platform
     # psud imports the vendor's Psu class for the master LED, a classmethod.
     from sonic_platform_base.psu_base import PsuBase
@@ -350,7 +353,7 @@ def deliver(signum):
 
 
 def use_chassis(chassis, built=None):
-    """What `sonic_platform.platform.Platform().get_chassis()` answers next.
+    """The prototype copied for each platform handle's own chassis.
 
     `built`, if given, runs every time it does: a vendor's chassis constructor
     runs every time `get_chassis()` builds one, and that is where a vendor

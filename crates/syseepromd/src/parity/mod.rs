@@ -89,6 +89,9 @@ fn syseepromd_publishes_what_the_python_daemon_publishes() {
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
 const KNOWN: &[parity::Known] = &[
+    parity::Known { scenario: "repost_outage", contains: "only Python logged: ERROR Failed to read EEPROM", why: "Rust reports a failed repost once and its recovery; Python reports every failed pass" },
+    parity::Known { scenario: "repost_outage", contains: "only Python logged: ERROR Failed to post EEPROM to database", why: "Rust reports a failed repost once and its recovery; Python reports every failed pass" },
+
     parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x21: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
     parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x22: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },
     parity::Known { scenario: "unreadable", contains: "STATE_DB EEPROM_INFO|0x23: only Rust wrote it:", why: "a failed startup publication remains pending and recovers; Python treats the empty key set as a completed publication" },

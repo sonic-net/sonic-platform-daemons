@@ -424,19 +424,8 @@ impl FanUpdater {
             }
         }
 
-        // The LEDs are read in a pass of their own, after any were set, as
-        // `thermalctld:FanUpdater._update_led_color` reads them: what it
-        // publishes is what the hardware accepted.  A drawer's is re-read only
-        // when something was written, which in steady state (after the first
-        // cycle) is never.
-        let mut fresh_drawers = Some(
-            platform
-                .get_fan_drawers(FanDrawerInfoCols::STATUS_LED)
-                .unwrap_or_else(|e| {
-                    log::warn!("Failed to read fan drawer LEDs: {e}");
-                    drawers.clone()
-                }),
-        );
+        // Set LEDs before reading them once, so publication reflects what
+        // the hardware accepted without a discarded pre-write I/O read.
         if !led_writes.is_empty() {
             for write in &led_writes {
                 // Two calls, not one: `thermalctld:FanUpdater._set_fan_led`
@@ -466,22 +455,15 @@ impl FanUpdater {
                     }
                 }
             }
-            fresh_drawers = Some(
-                platform
-                    .get_fan_drawers(FanDrawerInfoCols::STATUS_LED)
-                    .unwrap_or_else(|e| {
-                        log::warn!("Failed to read fan drawer LEDs: {e}");
-                        drawers.clone()
-                    }),
-            );
         }
+        let fresh_drawers = platform
+            .get_fan_drawers(FanDrawerInfoCols::STATUS_LED)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to read fan drawer LEDs: {e}");
+                drawers.clone()
+            });
         let leds = fans_this_daemon_publishes(platform.get_fans(FanInfoCols::STATUS_LED, false)?);
-        self.update_led_color(
-            db,
-            &leds,
-            fresh_drawers.as_deref().unwrap_or(&drawers),
-            stop,
-        )?;
+        self.update_led_color(db, &leds, &fresh_drawers, stop)?;
 
         let bad_fan_count = counters.total();
         if bad_fan_count > 0 && self.previous_bad_fan_count != bad_fan_count {
@@ -671,6 +653,12 @@ impl FanUpdater {
             if drawer.name == fmt::NOT_AVAILABLE {
                 continue;
             }
+            if let Some(error) = &drawer.error {
+                log::warn!(
+                    "Failed to get status LED state for fan drawer {} - {error}",
+                    drawer.name
+                );
+            }
             let fvs = [("led_status", fmt::opt_str(&drawer.status_led))];
             db.fan_drawer.set(&drawer.name, &fvs).map_err(|e| {
                 format!(
@@ -767,6 +755,7 @@ mod tests {
             serial: None,
             status_led: None,
             maximum_consumed_power: None,
+            ..Default::default()
         }
     }
 
@@ -1078,6 +1067,7 @@ mod tests {
     struct FakePlatform {
         drawers: Vec<FanDrawerInfo>,
         fans: Vec<FanInfo>,
+        drawer_led_reads: usize,
         led_calls: std::cell::RefCell<Vec<(String, String)>>,
         drawer_led_calls: std::cell::RefCell<Vec<(String, String)>>,
         /// A platform with no software-controllable LED, which is what
@@ -1110,8 +1100,11 @@ mod tests {
         }
         fn get_fan_drawers(
             &mut self,
-            _cols: FanDrawerInfoCols,
+            cols: FanDrawerInfoCols,
         ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
+            if cols.bits() & FanDrawerInfoCols::STATUS_LED.bits() != 0 {
+                self.drawer_led_reads += 1;
+            }
             Ok(self.drawers.clone())
         }
         fn get_fans(
@@ -1161,10 +1154,22 @@ mod tests {
         FakePlatform {
             drawers,
             fans,
+            drawer_led_reads: 0,
             led_calls: std::cell::RefCell::new(Vec::new()),
             drawer_led_calls: std::cell::RefCell::new(Vec::new()),
             led_fails: false,
             fans_fail: false,
+        }
+    }
+
+    #[test]
+    fn drawer_leds_are_read_once_per_pass_after_the_writes() {
+        let m = MockDb::new(false);
+        let mut u = FanUpdater::new();
+        let mut p = platform(vec![drawer("drawer1")], vec![fan("fan1")]);
+        for pass in 1..=3 {
+            u.update(&mut p, &m.db, &never_stop).unwrap();
+            assert_eq!(p.drawer_led_reads, pass);
         }
     }
 

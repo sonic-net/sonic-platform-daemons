@@ -60,10 +60,15 @@ pub type OpenTable = Box<dyn FnMut(&str) -> Result<Box<dyn TableLike>, String> +
 
 /// The real opener: `STATE_DB` on the BMC, over TCP.
 fn open_over_tcp(address: &str) -> Result<Box<dyn TableLike>, String> {
-    DbConnector::new_tcp(STATE_DB_ID, address.to_string(), BMC_REDIS_PORT, CONNECT_TIMEOUT_MS)
-        .and_then(|c| Table::new(c, crate::db::TEMPERATURE_INFO))
-        .map(|t| Box::new(t) as Box<dyn TableLike>)
-        .map_err(|e| format!("{e:?}"))
+    DbConnector::new_tcp(
+        STATE_DB_ID,
+        address.to_string(),
+        BMC_REDIS_PORT,
+        CONNECT_TIMEOUT_MS,
+    )
+    .and_then(|c| Table::new(c, crate::db::TEMPERATURE_INFO))
+    .map(|t| Box::new(t) as Box<dyn TableLike>)
+    .map_err(|e| format!("{e:?}"))
 }
 
 pub struct BmcMirror {
@@ -124,7 +129,10 @@ impl BmcMirror {
                 self.table = None;
                 if !self.failed {
                     self.failed = true;
-                    log::warn!("Failed to open remote BMC {} table: {e}", crate::db::TEMPERATURE_INFO);
+                    log::warn!(
+                        "Failed to open remote BMC {} table: {e}",
+                        crate::db::TEMPERATURE_INFO
+                    );
                 }
             }
         }
@@ -229,12 +237,18 @@ impl ChassisThermalWatch {
             let mut reasons = Vec::new();
             if let Some(hi) = row.critical_high {
                 if temp >= hi {
-                    reasons.push(format!(">= critical_high_threshold {}C", crate::fmt::float(hi)));
+                    reasons.push(format!(
+                        ">= critical_high_threshold {}C",
+                        crate::fmt::float(hi)
+                    ));
                 }
             }
             if let Some(lo) = row.critical_low {
                 if temp <= lo {
-                    reasons.push(format!("<= critical_low_threshold {}C", crate::fmt::float(lo)));
+                    reasons.push(format!(
+                        "<= critical_low_threshold {}C",
+                        crate::fmt::float(lo)
+                    ));
                 }
             }
             let breach = !reasons.is_empty();
@@ -317,7 +331,10 @@ mod tests {
     #[test]
     fn the_address_comes_from_bmc_addr() {
         let f = json(r#"{"bmc_if_name": "eth1", "bmc_addr": "10.0.0.2"}"#);
-        assert_eq!(address_from(f.path().to_str().unwrap()), Some("10.0.0.2".to_string()));
+        assert_eq!(
+            address_from(f.path().to_str().unwrap()),
+            Some("10.0.0.2".to_string())
+        );
     }
 
     #[test]
@@ -387,7 +404,11 @@ mod tests {
         w.check(&[row("ASIC", 105.0)], &mut ev);
         w.check(&[], &mut ev);
         w.check(&[row("ASIC", 105.0)], &mut ev);
-        assert_eq!(ev.lines.len(), 2, "it must be reported again after coming back");
+        assert_eq!(
+            ev.lines.len(),
+            2,
+            "it must be reported again after coming back"
+        );
     }
 
     // ── The mirror's reconnect and log-once behaviour ─────────────────────
@@ -430,7 +451,11 @@ mod tests {
         let remote = MockTable::new();
         let (open, calls) = opener(remote.clone(), 1);
         let mut m = BmcMirror::with_opener("10.0.0.1", open);
-        assert_eq!(*calls.lock().unwrap(), 1, "the failed attempt at construction");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "the failed attempt at construction"
+        );
         assert!(remote.is_empty());
 
         m.set("ASIC", &[("temperature", "45.0".to_string())]);
@@ -487,7 +512,11 @@ mod tests {
         let (open, calls) = opener(remote.clone(), 1);
         let mut m = BmcMirror::with_opener("10.0.0.1", open);
         m.del("ASIC");
-        assert_eq!(*calls.lock().unwrap(), 1, "still just the construction attempt");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "still just the construction attempt"
+        );
     }
 
     #[test]
@@ -516,7 +545,10 @@ mod tests {
         remote.fail_writes("broken pipe");
         m.del("ASIC");
         assert!(
-            log.logged(log::Level::Warn, "BMC mirror delete of ASIC failed: broken pipe"),
+            log.logged(
+                log::Level::Warn,
+                "BMC mirror delete of ASIC failed: broken pipe"
+            ),
             "a failed delete is reported"
         );
 
@@ -532,7 +564,12 @@ mod tests {
     #[test]
     fn clearing_the_mirror_takes_back_every_row_it_published() {
         let remote = MockTable::new();
-        TableLike::set(&remote, "written elsewhere", &[("temperature", "30.0".to_string())]).unwrap();
+        TableLike::set(
+            &remote,
+            "written elsewhere",
+            &[("temperature", "30.0".to_string())],
+        )
+        .unwrap();
         let (open, _) = opener(remote.clone(), 0);
         let mut m = BmcMirror::with_opener("10.0.0.1", open);
         for name in ["ASIC", "CPU", "PSU-1 Temp"] {
@@ -562,7 +599,11 @@ mod tests {
 
         m.clear();
 
-        assert_eq!(*calls.lock().unwrap(), 1, "no second connection for the sweep");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "no second connection for the sweep"
+        );
     }
 
     /// The first delete that fails ends the sweep, as Python's `__del__` drops
@@ -578,8 +619,16 @@ mod tests {
 
         m.clear();
 
-        assert_eq!(remote.len(), 2, "the delete was refused, so both rows are still there");
-        assert_eq!(*calls.lock().unwrap(), 1, "and nothing redialled to try again");
+        assert_eq!(
+            remote.len(),
+            2,
+            "the delete was refused, so both rows are still there"
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "and nothing redialled to try again"
+        );
     }
 
     /// The mirror only exists on the switch host: on the BMC the same table is
@@ -651,7 +700,11 @@ mod tests {
         assert_eq!(rows[0].name, "ASIC");
         assert_eq!(rows[0].temperature, Some(45.5));
         assert_eq!(rows[0].critical_high, Some(120.0));
-        assert_eq!(rows[0].critical_low, Some(-5.0), "a low threshold may be negative");
+        assert_eq!(
+            rows[0].critical_low,
+            Some(-5.0),
+            "a low threshold may be negative"
+        );
     }
 
     #[test]
@@ -670,7 +723,10 @@ mod tests {
         let rows = read_mirror(&t);
         assert_eq!(rows[0].temperature, None);
         assert_eq!(rows[0].critical_high, None);
-        assert_eq!(rows[0].critical_low, None, "the field is not in the row at all");
+        assert_eq!(
+            rows[0].critical_low, None,
+            "the field is not in the row at all"
+        );
     }
 
     /// Values are trimmed before parsing, as everything else in this daemon is.

@@ -7,6 +7,8 @@ trigger:
   branches:
     include:
       - '*'
+    exclude:
+      - renovate/*
 
 variables:
   - name: DIFF_COVER_CHECK_THRESHOLD
@@ -213,6 +215,7 @@ jobs:
         # The platform API bridge imports sonic_platform_api.facade at run time.
         # Take it from the sonic-platform-common checkout cargo made for the
         # platform API crates, so the Python side is the commit the Rust is.
+        python3 -m unittest discover -s debian/tests -p 'test_*.py'
         cargo fetch --locked
         export PYTHONPATH=$(cargo metadata --locked --format-version 1 | python3 -c '
         import json, os, sys
