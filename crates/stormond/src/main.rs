@@ -7,6 +7,7 @@
 mod fsio;
 #[cfg(all(test, feature = "parity"))]
 mod parity;
+mod publish;
 mod storage;
 
 use std::io::Write;
@@ -24,6 +25,7 @@ use pmon_common::logging;
 use pmon_common::report_once::Latch;
 
 use fsio::{Reconciler, FSIO_RW_JSON_FILE, FSSTATS_SYNC_KEY};
+use publish::{publish_dynamic, publish_static};
 use storage::{ReadError, StorageSource, StorageWorker};
 
 const SYSLOG_IDENTIFIER: &str = "stormond";
@@ -35,7 +37,7 @@ const SYSLOG_IDENTIFIER: &str = "stormond";
 /// is which *implementation* of the platform API to open, because a platform
 /// with a native Rust one has to be able to say so without a new binary.
 #[derive(Parser, Debug)]
-#[command(name = "stormond-rs", about = "SONiC storage monitor daemon, in Rust")]
+#[command(name = "stormond", about = "SONiC storage monitor daemon, in Rust")]
 struct Args {
     /// Which platform API implementation to use: `pyo3` or `native`.
     ///
@@ -117,7 +119,8 @@ impl Intervals {
     /// reports the ones from before the read, which differ in exactly the case
     /// above.  Values are whole seconds: a negative one, which Python would
     /// take and then spin on, is refused like anything else that will not
-    /// parse.
+    /// parse. A zero polling interval is also refused to prevent repeated
+    /// smartctl calls without a wait; a zero sync interval remains supported.
     fn reload(self, row: Result<Option<Vec<(String, String)>>, String>) -> Self {
         let row = match row {
             Ok(row) => row.unwrap_or_default(),
@@ -128,8 +131,14 @@ impl Intervals {
             Some((_, v)) => v
                 .trim()
                 .parse::<u64>()
-                .map(Duration::from_secs)
-                .map_err(|_| format!("invalid literal for int() with base 10: '{v}'")),
+                .map_err(|_| format!("invalid literal for int() with base 10: '{v}'"))
+                .and_then(|seconds| {
+                    if name == "daemon_polling_interval" && seconds == 0 {
+                        Err("daemon_polling_interval must be greater than zero".to_string())
+                    } else {
+                        Ok(Duration::from_secs(seconds))
+                    }
+                }),
         };
         let poll = match field("daemon_polling_interval", DEFAULT_POLL) {
             Ok(poll) => poll,
@@ -156,18 +165,8 @@ impl Intervals {
     }
 }
 
-/// The disks whose lifetime counters this daemon carries: the ones it can read.
-///
-/// A disk no utility class handles gets no row (`publish_static`,
-/// `publish_dynamic`), so it can have no counters either -- and leaving it in
-/// the tracked list would manufacture an unknown baseline for an unsupported
-/// disk. Keep unavailable inventory separate. Each supported disk selects its
-/// own valid STATE_DB or file baseline, independently of other disks.
-///
-/// Python has exactly that defect: `StorageDevices.devices` keeps a `None` for
-/// such a disk, and `stormond:DaemonStorage._load_fsio_rw_statedb` and
-/// `sync_fsio_rw_json` iterate every key while the publishers skip the `None`
-/// ones.  Not reproduced: the counters are the reason this daemon exists.
+/// Disks with current readings. Unavailable discovered disks are still kept
+/// in sync_disks so their STATE_DB or previous JSON counters survive a restart.
 fn tracked_disks(devices: &[StorageDeviceInfo]) -> Vec<String> {
     devices
         .iter()
@@ -178,173 +177,6 @@ fn tracked_disks(devices: &[StorageDeviceInfo]) -> Vec<String> {
 
 fn formatted_time() -> String {
     chrono::Local::now().format(TIME_FORMAT).to_string()
-}
-
-/// Model and serial, which do not change while the switch is up.
-fn publish_static(devices: &[StorageDeviceInfo], table: &dyn TableLike) {
-    for d in devices {
-        if !d.available {
-            pmon_common::notice!(
-                "{} does not have an instantiated object. Static Information cannot be gathered.",
-                d.name
-            );
-            continue;
-        }
-        // The model or the serial raised: Python's per-device `except` in
-        // `stormond:DaemonStorage.get_static_fields_update_state_db`, at ERR,
-        // and nothing published for the disk.
-        if let Some(e) = &d.static_error {
-            log::error!("get_static_fields_update_state_db() failed with: {e}");
-            continue;
-        }
-        pmon_common::notice!(
-            "Storage Device: {}, Device Model: {}, Serial: {}",
-            d.name,
-            d.model,
-            d.serial
-        );
-        if let Err(e) = table.set(
-            &d.name,
-            &[
-                ("device_model", d.model.clone()),
-                ("serial", d.serial.clone()),
-            ],
-        ) {
-            log::error!("get_static_fields_update_state_db() failed with: {e}");
-        }
-    }
-}
-
-/// Everything that moves, including the reconciled lifetime totals.
-fn publish_dynamic(devices: &[StorageDeviceInfo], reconciler: &Reconciler, table: &dyn TableLike) {
-    for d in devices {
-        if !d.available {
-            pmon_common::notice!(
-                "Storage device '{}' does not have an instantiated object. \
-                 Dynamic Information cannot be gathered.",
-                d.name
-            );
-            continue;
-        }
-        // A reading raised: the per-device `except` in
-        // `stormond:DaemonStorage.get_dynamic_fields_update_state_db`, at
-        // NOTICE, and nothing published for the disk this pass.
-        if let Some(e) = &d.error {
-            pmon_common::notice!("get_dynamic_fields_update_state_db() failed with: {e}");
-            continue;
-        }
-
-        let (latest_reads, latest_writes) = (d.fs_io_reads, d.fs_io_writes);
-        let num = |v: Option<i64>| {
-            v.map_or_else(
-                || pmon_common::fmt::NOT_AVAILABLE.to_string(),
-                |n| n.to_string(),
-            )
-        };
-
-        // A counter that could not be read keeps the last known-good values,
-        // republished from STATE_DB ("0" where there are none), as
-        // `stormond:DaemonStorage.get_dynamic_fields_update_state_db` does
-        // through `stormond:DaemonStorage._get_last_fsio_statedb_value`.
-        //
-        // It comes in two shapes.  Both counters at 0 is the one Python knows:
-        // the platform's FSIO getters answer 0 when /proc/diskstats cannot be
-        // read, as when the disk has gone read-only, and a disk in use never
-        // has both at 0 -- reconciling that 0 would collapse the lifetime
-        // totals.  A counter that is not there at all (`None`: the getter
-        // raised, or answered something that is not a number) is the other.
-        // Python fails on that one in its arithmetic, inside the per-device
-        // `try`, and writes nothing for the disk, so last cycle's row stays;
-        // republishing the same values here comes to the same thing.  What
-        // must not reach the table is a placeholder: these four fields are
-        // what both baselines are read from. An "N/A" would invalidate this
-        // disk's STATE_DB baseline; file sync must retain its previous counters
-        // while continuing to persist the other healthy disks.
-        let [published_reads, published_writes, total_reads, total_writes] =
-            match (latest_reads, latest_writes) {
-                (Some(r), Some(w)) if (r, w) != (0, 0) => {
-                    let (tr, tw) = reconciler.totals(&d.name, r, w);
-                    [r.to_string(), w.to_string(), tr.to_string(), tw.to_string()]
-                }
-                _ => {
-                    log::warn!(
-                        "FSIO counters unavailable for {}. Retaining last known-good FSIO values.",
-                        d.name
-                    );
-                    let row = match table.get(&d.name) {
-                        Ok(row) => row.unwrap_or_default(),
-                        // Python reads these inside the per-device try, so a
-                        // failed read skips this disk with the same NOTICE.
-                        Err(e) => {
-                            pmon_common::notice!(
-                                "get_dynamic_fields_update_state_db() failed with: {e}"
-                            );
-                            continue;
-                        }
-                    };
-                    let last = |field: &str| {
-                        row.iter()
-                            .find(|(k, _)| k == field)
-                            .map_or_else(|| "0".to_string(), |(_, v)| v.clone())
-                    };
-                    [
-                        last("latest_fsio_reads"),
-                        last("latest_fsio_writes"),
-                        last("total_fsio_reads"),
-                        last("total_fsio_writes"),
-                    ]
-                }
-            };
-
-        let last_sync = formatted_time();
-        let fvs = [
-            ("firmware", d.firmware.clone()),
-            ("health", d.health.clone()),
-            ("temperature", d.temperature.clone()),
-            ("latest_fsio_reads", published_reads),
-            ("latest_fsio_writes", published_writes),
-            ("total_fsio_reads", total_reads.clone()),
-            ("total_fsio_writes", total_writes.clone()),
-            ("disk_io_reads", d.disk_io_reads.clone()),
-            ("disk_io_writes", d.disk_io_writes.clone()),
-            ("reserved_blocks", d.reserved_blocks.clone()),
-            ("last_sync_time", last_sync.clone()),
-        ];
-        if let Err(e) = table.set(&d.name, &fvs) {
-            // NOTICE, not WARNING: Python's dynamic pass catches this in
-            // `stormond:DaemonStorage.get_dynamic_fields_update_state_db` with
-            // `log_notice`.  Its static counterpart uses `log_error`
-            // (`stormond:DaemonStorage.get_static_fields_update_state_db`) and
-            // so does `publish_static` above.
-            pmon_common::notice!("get_dynamic_fields_update_state_db() failed with: {e}");
-            continue;
-        }
-
-        pmon_common::notice!(
-            "Storage Device: {}, Firmware: {}, health: {}%, Temp: {}C, \
-             FS IO Reads: {}, FS IO Writes: {}",
-            d.name,
-            d.firmware,
-            d.health,
-            d.temperature,
-            total_reads,
-            total_writes
-        );
-        // This cycle's readings, not what was published: a failed read still
-        // shows 0 here, which is how the log tells it apart.
-        pmon_common::notice!(
-            "Latest FSIO Reads: {}, Latest FSIO Writes: {}",
-            num(latest_reads),
-            num(latest_writes)
-        );
-        pmon_common::notice!(
-            "Disk IO Reads: {}, Disk IO Writes: {}, Reserved Blocks: {}",
-            d.disk_io_reads,
-            d.disk_io_writes,
-            d.reserved_blocks
-        );
-        pmon_common::notice!("Last successful sync time to STATE_DB: {last_sync}");
-    }
 }
 
 /// Whether the next poll would overshoot the sync period.
@@ -443,7 +275,13 @@ fn sync_to_disk_at(
     // redis that has gone away ends the daemon rather than leaving it running
     // against a dead socket.
     table
-        .set(FSSTATS_SYNC_KEY, &[("successful_sync_time", when.clone())])
+        .set(
+            FSSTATS_SYNC_KEY,
+            &[
+                ("successful_sync_time", when.clone()),
+                ("boot_id", fsio::boot_id()?),
+            ],
+        )
         .map_err(|e| format!("Unable to record the sync time: {e}"))?;
     Ok(Some(when))
 }
@@ -470,6 +308,7 @@ async fn run<S: StorageSource + ?Sized>(
     mut first: Option<Vec<StorageDeviceInfo>>,
     cycles: &mut Cycles,
 ) -> i32 {
+    let mut sync_disks = disks.to_vec();
     let mut intervals = Intervals::default();
     let mut last_sync = tokio::time::Instant::now();
     let mut read = Latch::new();
@@ -491,6 +330,11 @@ async fn run<S: StorageSource + ?Sized>(
         };
         match devices {
             Ok(devices) => {
+                for device in &devices {
+                    if !sync_disks.contains(&device.name) {
+                        sync_disks.push(device.name.clone());
+                    }
+                }
                 pmon_common::recovered!(read, "storage read recovered");
                 publish_dynamic(&devices, reconciler, table);
             }
@@ -511,8 +355,8 @@ async fn run<S: StorageSource + ?Sized>(
             Tick::Cycle => {}
         }
 
-        if !disks.is_empty() && sync_due(last_sync.elapsed(), intervals.poll, intervals.sync) {
-            match sync_to_disk_at(json_path, disks, table) {
+        if !sync_disks.is_empty() && sync_due(last_sync.elapsed(), intervals.poll, intervals.sync) {
+            match sync_to_disk_at(json_path, &sync_disks, table) {
                 Ok(Some(_)) => last_sync = tokio::time::Instant::now(),
                 // Not reset, so a sync that did not happen is tried again at
                 // the next poll, at the price of these two lines each poll
@@ -538,10 +382,12 @@ async fn run<S: StorageSource + ?Sized>(
     // A failure here is only logged, including the table write: the process is
     // already leaving, so there is no connection left to recover by leaving
     // again.
-    match sync_to_disk_at(json_path, disks, table) {
-        Ok(Some(_)) => {}
-        Ok(None) => log::warn!("Unable to sync latest and total procfs RW to disk"),
-        Err(e) => log::warn!("{e}"),
+    if !sync_disks.is_empty() {
+        match sync_to_disk_at(json_path, &sync_disks, table) {
+            Ok(Some(_)) => {}
+            Ok(None) => log::warn!("Unable to sync latest and total procfs RW to disk"),
+            Err(e) => log::warn!("{e}"),
+        }
     }
     // `stormond:DaemonStorage.signal_handler` says this once its sync is
     // done, between "Caught signal" and the daemon's own "Shutting down".
@@ -629,21 +475,9 @@ async fn start<S: StorageSource + ?Sized>(
         }
     };
 
-    // Fatal, not defaulted -- but only for what can actually arrive here.  A
-    // platform whose `StorageDevices()` raises does not: the PyO3 escape hatch
-    // catches that and answers an empty list
-    // (`_storage_devices` in sonic_platform_api/_escape_hatch.py), so it comes
-    // through as a successful enumeration of no disks, which
-    // `sync_to_disk_at` refuses to write over the baseline.  What does reach
-    // this arm is an implementation that does not offer the call at all --
-    // `NotSupported`, as on hardware whose facade predated
-    // `get_storage_devices` -- or a backend error from the bridge itself.
-    // Those end the daemon, as an unloadable `StorageDevices` ends Python's in
-    // `stormond:DaemonStorage.__init__`: run on with no disk list, the daemon
-    // has nothing to publish and a baseline it can only put at risk.
-    //
-    // An empty-but-successful enumeration stays allowed: a platform with no
-    // disks has nothing to publish and no baseline to lose.
+    // A storage constructor failure propagates through the facade, so exit
+    // with the reason and let supervisord retry. A successful empty inventory
+    // remains valid for a platform with no disks.
     let devices = match platform.read_storage(cycles).await {
         Ok(devices) => devices,
         Err(ReadError::Stopped(code)) => return code,
@@ -663,10 +497,14 @@ async fn start<S: StorageSource + ?Sized>(
     }
     let reconciler =
         Reconciler::load_known(&disks, &discovered, json_text.as_deref(), table.as_ref());
-    log::info!(
-        "Reconciling lifetime counters against {:?}",
-        reconciler.baseline()
-    );
+    if reconciler.baseline() == fsio::Baseline::Mixed {
+        pmon_common::notice!("Reconciling lifetime counters per disk: mixed baselines; disks without a baseline start from since-boot counters");
+    } else {
+        log::info!(
+            "Reconciling lifetime counters against {:?}",
+            reconciler.baseline()
+        );
+    }
 
     publish_static(&devices, table.as_ref());
 
@@ -772,7 +610,7 @@ mod tests {
         let table = MockTable::new();
         let config = MockTable::new();
         config
-            .set(INTERVALS_KEY, &[("daemon_polling_interval", "0".into())])
+            .set(INTERVALS_KEY, &[("daemon_polling_interval", "1".into())])
             .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("fsio.json");
@@ -916,7 +754,10 @@ mod tests {
         publish_dynamic(&devices, &Reconciler::default(), &t);
         t.set(
             fsio::FSSTATS_SYNC_KEY,
-            &[("successful_sync_time", "x".to_string())],
+            &[
+                ("successful_sync_time", "x".to_string()),
+                ("boot_id", fsio::boot_id().unwrap()),
+            ],
         )
         .unwrap();
         assert_eq!(
@@ -953,6 +794,27 @@ mod tests {
         // No baseline: this cycle's reading is the total.
         assert_eq!(t.field("sda", "total_fsio_reads").as_deref(), Some("4242"));
         assert!(t.field("sda", "last_sync_time").is_some());
+    }
+
+    #[test]
+    fn negative_kernel_counters_retain_the_last_published_values() {
+        for readings in [(Some(-1), Some(1)), (Some(1), Some(-1))] {
+            let table = MockTable::new();
+            publish_dynamic(&[disk("sda")], &Reconciler::default(), &table);
+            let before: Vec<_> = fsio::SYNC_FIELDS
+                .iter()
+                .map(|field| table.field("sda", field))
+                .collect();
+            let mut device = disk("sda");
+            device.fs_io_reads = readings.0;
+            device.fs_io_writes = readings.1;
+            publish_dynamic(&[device], &Reconciler::default(), &table);
+            let after: Vec<_> = fsio::SYNC_FIELDS
+                .iter()
+                .map(|field| table.field("sda", field))
+                .collect();
+            assert_eq!(before, after);
+        }
     }
 
     /// Both counters at 0 is a failed read (the disk went read-only), so the
@@ -1096,7 +958,10 @@ mod tests {
         publish_dynamic(&[d], &Reconciler::default(), &t);
         t.set(
             FSSTATS_SYNC_KEY,
-            &[("successful_sync_time", "x".to_string())],
+            &[
+                ("successful_sync_time", "x".to_string()),
+                ("boot_id", fsio::boot_id().unwrap()),
+            ],
         )
         .unwrap();
 
@@ -1565,7 +1430,7 @@ mod tests {
     fn sync_times(t: &MockTable) -> usize {
         t.writes()
             .iter()
-            .filter(|(k, _)| k == FSSTATS_SYNC_KEY)
+            .filter(|(key, field)| key == FSSTATS_SYNC_KEY && field == "successful_sync_time")
             .count()
     }
 
@@ -1763,6 +1628,40 @@ mod tests {
     fn config_db_overrides_either_interval_on_its_own() {
         let i = Intervals::default().reload(row(&[("daemon_polling_interval", "300")]));
         assert_eq!(i, secs(300, 86400), "the one not set is the default");
+    }
+
+    #[test]
+    fn a_zero_poll_interval_keeps_the_last_valid_intervals() {
+        let log = pmon_common::logging::capture();
+        let running = secs(300, 600);
+        assert_eq!(
+            running.reload(row(&[
+                ("daemon_polling_interval", "0"),
+                ("fsstats_sync_interval", "120")
+            ])),
+            running
+        );
+        assert!(log.logged(log::Level::Error,
+            "Failed to retrieve CONFIG_DB intervals: daemon_polling_interval must be greater than zero"));
+    }
+
+    #[test]
+    fn a_zero_poll_interval_cannot_replace_the_startup_default() {
+        assert_eq!(
+            Intervals::default().reload(row(&[("daemon_polling_interval", "0")])),
+            Intervals::default()
+        );
+    }
+
+    #[test]
+    fn a_zero_sync_interval_still_means_sync_every_poll() {
+        assert_eq!(
+            secs(300, 600).reload(row(&[
+                ("daemon_polling_interval", "120"),
+                ("fsstats_sync_interval", "0")
+            ])),
+            secs(120, 0)
+        );
     }
 
     /// A typo keeps whatever was working.  Falling back to the default would
@@ -2048,5 +1947,142 @@ mod tests {
             p.calls, 0,
             "the disks are not even read without somewhere to put them"
         );
+    }
+
+    /// The sync period is time, not a count of polls: the reads count too.
+    /// Each read here takes 50 s and each wait 60 s.  At the first check
+    /// 110 s have passed, and 110 + 60 >= 150 makes the sync due.  Counting
+    /// polls gives 60 s, and the sync waits one more cycle.
+    #[tokio::test(start_paused = true)]
+    async fn slow_reads_count_toward_the_sync_period() {
+        struct NoPlatform;
+        impl PlatformApi for NoPlatform {}
+        struct SlowReads;
+        impl StorageSource for SlowReads {
+            async fn read_storage(
+                &mut self,
+                _: &mut Cycles,
+            ) -> Result<Vec<StorageDeviceInfo>, ReadError> {
+                tokio::time::sleep(Duration::from_secs(50)).await;
+                Ok(vec![disk("sda")])
+            }
+            async fn next_cycle(&mut self, cycles: &mut Cycles, period: Duration) -> Tick {
+                cycles.next(period, &mut NoPlatform).await
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let t = MockTable::new();
+        let config = MockTable::new();
+        config
+            .set(
+                INTERVALS_KEY,
+                &[
+                    ("daemon_polling_interval", "60".to_string()),
+                    ("fsstats_sync_interval", "150".to_string()),
+                ],
+            )
+            .unwrap();
+        let mut cycles = Cycles::Paced {
+            remaining: 1,
+            code: 143,
+        };
+        run(
+            &mut SlowReads,
+            &t,
+            Some(&config),
+            &Reconciler::default(),
+            &["sda".to_string()],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
+        assert_eq!(
+            sync_times(&t),
+            2,
+            "one in the loop after 110 s, and one on the way out"
+        );
+    }
+
+    /// With no disk to carry, nothing is due: the loop does not try to sync,
+    /// and does not warn, on each poll.
+    #[tokio::test]
+    async fn a_platform_with_no_disks_does_not_sync_on_each_poll() {
+        let log = pmon_common::logging::capture();
+        tokio::time::pause();
+        let d = tempfile::tempdir().unwrap();
+        let t = MockTable::new();
+        let config = sync_every_cycle();
+        let mut p = FakePlatform {
+            devices: vec![],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 3,
+            code: 143,
+        };
+        run(
+            &mut p,
+            &t,
+            Some(&config),
+            &Reconciler::default(),
+            &[],
+            &d.path().join("f.json"),
+            None,
+            &mut cycles,
+        )
+        .await;
+        let warnings = log
+            .lines()
+            .iter()
+            .filter(|(_, m)| m.contains("Unable to sync latest and total procfs RW to disk"))
+            .count();
+        assert!(warnings <= 1, "{warnings} sync warnings for 3 polls");
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_discovered_disk_keeps_its_published_lifetime_counters() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("fsio.json");
+        let table = MockTable::new();
+        table
+            .set(
+                "sdb",
+                &[
+                    ("latest_fsio_reads", "100".into()),
+                    ("latest_fsio_writes", "10".into()),
+                    ("total_fsio_reads", "3000".into()),
+                    ("total_fsio_writes", "300".into()),
+                ],
+            )
+            .unwrap();
+        let mut unavailable = disk("sdb");
+        unavailable.available = false;
+        let mut platform = FakePlatform {
+            devices: vec![unavailable],
+            fail: false,
+            calls: 0,
+        };
+        let mut cycles = Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
+        let config = sync_every_cycle();
+        run(
+            &mut platform,
+            &table,
+            Some(&config),
+            &Reconciler::default(),
+            &[],
+            &path,
+            None,
+            &mut cycles,
+        )
+        .await;
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved["sdb"]["total_fsio_reads"].as_str(), Some("3000"));
+        assert_eq!(saved["sdb"]["latest_fsio_reads"].as_str(), Some("100"));
     }
 }

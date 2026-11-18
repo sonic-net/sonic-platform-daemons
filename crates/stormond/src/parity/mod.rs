@@ -30,7 +30,8 @@ fn python_half(
 ) -> (Published, Vec<Line>) {
     sc.call_method1("run_python", (name, polls))
         .unwrap_or_else(|e| panic!("[{name}] Python stormond: {}", parity::traceback(py, e)));
-    parity::python_side(py, harness)
+    let (tables, lines) = parity::python_side(py, harness);
+    (without_sync_boot_metadata(tables, false), lines)
 }
 
 fn rust_half(
@@ -76,7 +77,29 @@ fn rust_half(
         },
     ));
     let (tables, _) = parity::python_side(py, harness);
-    (tables, parity::rust_lines(log.lines()))
+    (
+        without_sync_boot_metadata(tables, true),
+        parity::rust_lines(log.lines()),
+    )
+}
+
+/// The Rust-only sync identity is checked independently, then excluded from
+/// the comparison with the unchanged Python daemon's publication.
+fn without_sync_boot_metadata(mut tables: Published, validate: bool) -> Published {
+    if let Some(row) = tables
+        .get_mut("STATE_DB")
+        .and_then(|db| db.get_mut("STORAGE_INFO"))
+        .and_then(|rows| rows.get_mut(FSSTATS_SYNC_KEY))
+    {
+        if validate {
+            assert_eq!(
+                row.get("boot_id").map(String::as_str),
+                Some(fsio::boot_id().unwrap().as_str())
+            );
+        }
+        row.remove("boot_id");
+    }
+    tables
 }
 
 #[test]
@@ -109,7 +132,7 @@ fn stormond_publishes_what_the_python_daemon_publishes() {
                 name,
                 &python,
                 &rust,
-                &["last_sync_time", "successful_sync_time"],
+                &["last_sync_time", "successful_sync_time", "boot_id"],
             ));
         }
         failures
@@ -165,9 +188,32 @@ fn new_json_boot_metadata_is_accepted_by_the_unchanged_python_loader() {
     });
 }
 
+#[test]
+fn an_unknown_baseline_is_rejected_by_the_unchanged_python_loader() {
+    parity::with_harness(|py, harness| {
+        let scenarios = parity::module(py, "stormond_unknown_baseline", SCENARIOS);
+        scenarios.call_method1("setup", (harness, ROOT)).unwrap();
+        let table = pmon_common::db::MockTable::new();
+        for field in fsio::SYNC_FIELDS {
+            table.set("sda", &[(field, "100".into())]).unwrap();
+        }
+        let document = fsio::sync_document(&["sda".into(), "sdb".into()], &table, "now").unwrap();
+        let result = scenarios
+            .call_method1("load_new_json_document", (document, vec!["sda", "sdb"]))
+            .unwrap();
+        let loaded: bool = result.get_item(0).unwrap().extract().unwrap();
+        assert!(
+            !loaded,
+            "Python must not accept unknown counters as a zero baseline"
+        );
+    });
+}
+
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
 const KNOWN: &[parity::Known] = &[
+    parity::Known { scenario: "unhandled_disk", contains: "only Rust logged: WARNING sdb: no current FSIO counters; retaining its previous baseline while syncing healthy disks", why: "discovered unavailable disks retain their own counters; Rust reports a missing per-disk baseline without discarding healthy disks" },
+
     parity::Known {
         scenario: "disk_getter_raises",
         contains: "only Rust logged: WARNING sda: no current FSIO counters; retaining its previous baseline while syncing healthy disks",

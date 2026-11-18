@@ -10,6 +10,7 @@ counts in -- so "is a sync due" is asked of the same elapsed time.
 """
 
 import json
+from pathlib import Path
 import os
 import tempfile
 import types
@@ -42,11 +43,11 @@ def json_path():
     return JSON
 
 
-def load_new_json_document(document):
+def load_new_json_document(document, disks=('sda',)):
     """The unchanged Python loader must accept the additive boot identity."""
     del ALIVE[:]
     H.reset()
-    platform({'sda': Disk()})
+    platform({disk: Disk() for disk in disks})
     with open(JSON, 'w') as stream:
         stream.write(document)
     daemon = SM.DaemonStorage('stormond')
@@ -135,7 +136,7 @@ def statedb_baseline():
         platform({'sda': Disk()}, statedb={
             'sda': {'latest_fsio_reads': '900', 'latest_fsio_writes': '1900',
                     'total_fsio_reads': '5000', 'total_fsio_writes': '9000'},
-            'FSSTATS_SYNC': {'successful_sync_time': '2026-01-01 00:00:00'}})
+            'FSSTATS_SYNC': {'successful_sync_time': '2026-01-01 00:00:00', 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}})
     return build, 2
 
 
@@ -154,7 +155,7 @@ def counters_unreadable():
         platform({'sda': Disk(reads=0, writes=0, step=None)}, statedb={
             'sda': {'latest_fsio_reads': '900', 'latest_fsio_writes': '1900',
                     'total_fsio_reads': '5000', 'total_fsio_writes': '9000'},
-            'FSSTATS_SYNC': {'successful_sync_time': '2026-01-01 00:00:00'}})
+            'FSSTATS_SYNC': {'successful_sync_time': '2026-01-01 00:00:00', 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}})
     return build, 1
 
 

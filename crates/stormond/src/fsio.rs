@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Mutex;
 
 use pmon_common::db::TableLike;
 
@@ -41,7 +42,7 @@ pub const FSIO_RW_JSON_FILE: &str = "/usr/share/stormond/fsio-rw-stats.json";
 pub const FSSTATS_SYNC_KEY: &str = "FSSTATS_SYNC";
 const BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
 
-fn boot_id() -> Result<String, String> {
+pub(crate) fn boot_id() -> Result<String, String> {
     std::fs::read_to_string(BOOT_ID_PATH)
         .map_err(|error| format!("failed to read boot identity: {error}"))
         .and_then(|id| {
@@ -89,6 +90,7 @@ pub struct Reconciler {
     statedb: BTreeMap<String, Counters>,
     baseline: Option<Baseline>,
     json_same_boot: BTreeSet<String>,
+    reset_counters: Mutex<BTreeSet<(String, &'static str)>>,
 }
 
 /// A field that will not do as a counter, and what it held.
@@ -156,7 +158,7 @@ impl Reconciler {
         current_boot: Option<&str>,
     ) -> Self {
         let mut r = Self::default();
-        r.load_statedb(disks, discovered, table);
+        r.load_statedb(disks, discovered, table, current_boot);
         r.load_json(disks, json_text, current_boot);
         let first = disks
             .first()
@@ -243,6 +245,7 @@ impl Reconciler {
         disks: &[String],
         discovered: &[String],
         table: &dyn TableLike,
+        current_boot: Option<&str>,
     ) -> bool {
         // A row count that does not match the disks plus the sync-time key
         // means something else has been editing the table, and a baseline read
@@ -263,6 +266,23 @@ impl Reconciler {
                 .iter()
                 .any(|k| k != FSSTATS_SYNC_KEY && !discovered.contains(k))
         {
+            return false;
+        }
+        // STATE_DB can survive a warm/fast reboot while kernel counters reset.
+        // Reuse a database baseline only when it belongs to this kernel boot.
+        let saved_boot = match table.get(FSSTATS_SYNC_KEY) {
+            Ok(row) => row.and_then(|fields| {
+                fields
+                    .into_iter()
+                    .find(|(key, _)| key == "boot_id")
+                    .map(|(_, value)| value)
+            }),
+            Err(error) => {
+                log::error!("Reading STATE_DB failed with: {error}");
+                return false;
+            }
+        };
+        if current_boot.is_none() || saved_boot.as_deref() != current_boot {
             return false;
         }
         for disk in disks {
@@ -305,34 +325,61 @@ impl Reconciler {
     ///
     /// `latest` is what `/proc/diskstats` says now.
     pub fn totals(&self, disk: &str, latest_reads: i64, latest_writes: i64) -> (i64, i64) {
-        match self.disk_baseline(disk) {
-            Baseline::Init | Baseline::Mixed => (latest_reads, latest_writes),
+        let (baseline, same_boot) = match self.disk_baseline(disk) {
+            Baseline::Init | Baseline::Mixed => return (latest_reads, latest_writes),
             Baseline::Json => {
                 let b = self.json.get(disk).copied().unwrap_or_default();
-                if self.json_same_boot.contains(disk) {
-                    (
-                        b.total_reads + latest_reads - b.latest_reads,
-                        b.total_writes + latest_writes - b.latest_writes,
-                    )
-                } else {
-                    // Legacy files have no boot identity. Retain their old
-                    // reboot interpretation; newly written files disambiguate
-                    // every subsequent same-boot fallback.
-                    (b.total_reads + latest_reads, b.total_writes + latest_writes)
-                }
+                // Legacy files retain their reboot interpretation.
+                (b, self.json_same_boot.contains(disk))
             }
             Baseline::StateDb => {
                 let b = self.statedb.get(disk).copied().unwrap_or_default();
-                // What the disk did while the daemon was not running.  The
-                // counters did not restart, so this is a difference and not a
-                // sum -- adding instead would double the lifetime total on
-                // every crash.
-                (
-                    b.total_reads + (latest_reads - b.latest_reads),
-                    b.total_writes + (latest_writes - b.latest_writes),
-                )
+                (b, true)
             }
-        }
+        };
+        let reconcile = |field, total: i64, previous: i64, latest: i64| {
+            let counter = (disk.to_string(), field);
+            let mut reset_counters = self
+                .reset_counters
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if reset_counters.contains(&counter) {
+                return latest.max(0);
+            }
+            // A valid final total can have an intermediate sum above i64::MAX.
+            // Widen first, then validate the complete Python-style expression.
+            let value = i128::from(total) + i128::from(latest)
+                - if same_boot { i128::from(previous) } else { 0 };
+            if let Ok(value) = i64::try_from(value) {
+                if value >= 0 {
+                    return value;
+                }
+            }
+            reset_counters.insert(counter);
+            drop(reset_counters);
+            log::warn!(
+                "{disk}:{field} reconciled total is outside 0..=i64::MAX; using current counter"
+            );
+            // As with an unusable baseline at startup, retain the current
+            // kernel reading for the rest of this run. Do not resume the old
+            // formula when it becomes valid again. The other counter keeps
+            // its valid lifetime total.
+            latest.max(0)
+        };
+        (
+            reconcile(
+                SYNC_FIELDS[2],
+                baseline.total_reads,
+                baseline.latest_reads,
+                latest_reads,
+            ),
+            reconcile(
+                SYNC_FIELDS[3],
+                baseline.total_writes,
+                baseline.latest_writes,
+                latest_writes,
+            ),
+        )
     }
 }
 
@@ -345,7 +392,8 @@ impl Reconciler {
 /// Healthy disks advance independently. Failed disks retain their previous
 /// counters and original boot identity; an unknown baseline is marked invalid.
 /// With no fresh disk, the previous file survives unchanged. The legacy Python
-/// loader ignores the additive metadata and still receives numeric fields.
+/// loader ignores additive metadata, so unknown counter fields must be null:
+/// it rejects null counters before using a baseline.
 #[cfg(test)]
 pub fn sync_document(
     disks: &[String],
@@ -441,10 +489,10 @@ fn compose_snapshot(
                     snapshot_boot(&saved, disk).map_or(serde_json::Value::Null, |id| id.into()),
                 );
             } else {
-                // Numeric neutral fields keep the legacy Python loader usable.
-                // The validity marker prevents Rust from treating them as data.
+                // Python does not inspect baseline_valid. Null counters make
+                // its unchanged loader reject this unknown baseline too.
                 for field in SYNC_FIELDS {
-                    fields.insert(field.into(), "0".into());
+                    fields.insert(field.into(), serde_json::Value::Null);
                 }
                 fields.insert("baseline_valid".into(), false.into());
                 fields.insert("boot_id".into(), serde_json::Value::Null);
@@ -507,7 +555,10 @@ mod tests {
         .unwrap();
         t.set(
             FSSTATS_SYNC_KEY,
-            &[("successful_sync_time", "x".to_string())],
+            &[
+                ("successful_sync_time", "x".to_string()),
+                ("boot_id", boot_id().unwrap()),
+            ],
         )
         .unwrap();
         t
@@ -519,6 +570,153 @@ mod tests {
                 "total_fsio_reads": "{total_r}", "total_fsio_writes": "0"}},
                 "successful_sync_time": "2026-09-17 00:00:00"}}"#
         )
+    }
+
+    fn bounded_baseline(source: &str, counters: Counters) -> Reconciler {
+        let table = MockTable::new();
+        let fields = [
+            (SYNC_FIELDS[0], counters.latest_reads.to_string()),
+            (SYNC_FIELDS[1], counters.latest_writes.to_string()),
+            (SYNC_FIELDS[2], counters.total_reads.to_string()),
+            (SYNC_FIELDS[3], counters.total_writes.to_string()),
+        ];
+        let json = if source == "state-db" {
+            table.set("sda", &fields).unwrap();
+            table
+                .set(FSSTATS_SYNC_KEY, &[("boot_id", "current".into())])
+                .unwrap();
+            None
+        } else {
+            let mut row = serde_json::Map::new();
+            for (field, value) in fields {
+                row.insert(field.into(), value.into());
+            }
+            Some(
+                serde_json::json!({
+                    "sda": row,
+                    "boot_id": if source == "json-same-boot" { "current" } else { "previous" },
+                })
+                .to_string(),
+            )
+        };
+        Reconciler::load_in_boot(&disks(), &disks(), json.as_deref(), &table, Some("current"))
+    }
+
+    #[test]
+    fn out_of_range_totals_reset_only_the_bad_counter_and_warn_once() {
+        for source in ["json-new-boot", "json-same-boot", "state-db"] {
+            for bad_reads in [true, false] {
+                let log = pmon_common::logging::capture();
+                let counters = Counters {
+                    latest_reads: if bad_reads { 0 } else { 5 },
+                    latest_writes: if bad_reads { 5 } else { 0 },
+                    total_reads: if bad_reads { i64::MAX } else { 100 },
+                    total_writes: if bad_reads { 100 } else { i64::MAX },
+                };
+                let reconciler = bounded_baseline(source, counters);
+                let healthy = if source == "json-new-boot" { 110 } else { 105 };
+                for current in [1, 2] {
+                    let latest = if bad_reads {
+                        (current, 10)
+                    } else {
+                        (10, current)
+                    };
+                    let expected = if bad_reads {
+                        (current, healthy)
+                    } else {
+                        (healthy, current)
+                    };
+                    assert_eq!(
+                        reconciler.totals("sda", latest.0, latest.1),
+                        expected,
+                        "{source}"
+                    );
+                }
+                let warnings: Vec<_> = log
+                    .lines()
+                    .into_iter()
+                    .filter(|(_, line)| line.contains("outside 0..=i64::MAX"))
+                    .collect();
+                assert_eq!(warnings.len(), 1, "{source}");
+                assert!(warnings[0].1.contains(if bad_reads {
+                    SYNC_FIELDS[2]
+                } else {
+                    SYNC_FIELDS[3]
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn an_invalid_baseline_stays_reset_after_the_formula_becomes_valid() {
+        for source in ["json-same-boot", "state-db"] {
+            for bad_reads in [true, false] {
+                let log = pmon_common::logging::capture();
+                let counters = Counters {
+                    latest_reads: if bad_reads { 1000 } else { 100 },
+                    latest_writes: if bad_reads { 100 } else { 1000 },
+                    total_reads: if bad_reads { 100 } else { 500 },
+                    total_writes: if bad_reads { 500 } else { 100 },
+                };
+                let reconciler = bounded_baseline(source, counters);
+                for current in [895, 899, 900, 901, 1000, 1001] {
+                    let latest = if bad_reads {
+                        (current, 110)
+                    } else {
+                        (110, current)
+                    };
+                    let expected = if bad_reads {
+                        (current, 510)
+                    } else {
+                        (510, current)
+                    };
+                    assert_eq!(
+                        reconciler.totals("sda", latest.0, latest.1),
+                        expected,
+                        "{source}: {current}"
+                    );
+                }
+                assert_eq!(
+                    log.lines()
+                        .into_iter()
+                        .filter(|(_, line)| line.contains("outside 0..=i64::MAX"))
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wide_intermediate_arithmetic_retains_a_valid_maximum_total() {
+        for source in ["json-same-boot", "state-db"] {
+            let log = pmon_common::logging::capture();
+            let reconciler = bounded_baseline(
+                source,
+                Counters {
+                    latest_reads: i64::MAX,
+                    total_reads: i64::MAX,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(reconciler.totals("sda", i64::MAX, 0), (i64::MAX, 0));
+            assert!(!log.contains("outside 0..=i64::MAX"));
+        }
+    }
+
+    #[test]
+    fn a_negative_reconciled_total_falls_back_to_the_current_counter() {
+        for source in ["json-same-boot", "state-db"] {
+            let reconciler = bounded_baseline(
+                source,
+                Counters {
+                    latest_reads: i64::MAX,
+                    total_reads: i64::MIN,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(reconciler.totals("sda", 1, 0), (1, 0));
+        }
     }
 
     /// A first-ever start has nothing to add to.  Publishing this cycle's
@@ -574,9 +772,9 @@ mod tests {
         assert_eq!(r.baseline(), Baseline::Init);
     }
 
-    /// A disk missing from the file invalidates the whole file.  Falling back
-    /// per-disk would restart one disk's lifetime total at zero with nothing
-    /// in the log to say which or why.
+    /// An incomplete record cannot provide this disk's baseline. Other disks
+    /// keep their own valid file or STATE_DB baseline; this disk falls back to
+    /// its initial counters and logs the missing field.
     #[test]
     fn a_partial_file_is_not_a_partial_baseline() {
         let log = pmon_common::logging::capture();
@@ -744,6 +942,9 @@ mod tests {
         let doc = compose_snapshot(&disks, &table, "now", "boot", None).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&doc).unwrap();
         assert_eq!(saved["sdb"]["baseline_valid"], false);
+        for field in SYNC_FIELDS {
+            assert!(saved["sdb"][field].is_null(), "unknown {field} is not zero");
+        }
         let loaded =
             Reconciler::load_in_boot(&disks, &disks, Some(&doc), &MockTable::new(), Some("boot"));
         assert_eq!(loaded.baseline(), Baseline::Mixed);
@@ -762,10 +963,36 @@ mod tests {
     fn each_disk_selects_its_own_state_or_file_baseline() {
         let disks = vec!["sda".into(), "sdb".into()];
         let table = statedb(200, 2200);
+        table
+            .set(FSSTATS_SYNC_KEY, &[("boot_id", "boot".into())])
+            .unwrap();
         let prior = serde_json::json!({"boot_id":"boot", "sdb": {"latest_fsio_reads":"80", "latest_fsio_writes":"0", "total_fsio_reads":"1000", "total_fsio_writes":"0"}}).to_string();
         let loaded = Reconciler::load_in_boot(&disks, &disks, Some(&prior), &table, Some("boot"));
         assert_eq!(loaded.baseline(), Baseline::Mixed);
         assert_eq!(loaded.totals("sda", 230, 0), (2230, 0));
         assert_eq!(loaded.totals("sdb", 100, 0), (1020, 0));
+    }
+
+    #[test]
+    fn a_preserved_state_db_from_an_earlier_boot_cannot_reduce_lifetime_totals() {
+        let table = statedb(1500, 101500);
+        table
+            .set(FSSTATS_SYNC_KEY, &[("boot_id", "previous-boot".into())])
+            .unwrap();
+        let saved =
+            sync_document_in_boot(&disks(), &table, "before-reboot", "previous-boot").unwrap();
+        let reconciler =
+            Reconciler::load_in_boot(&disks(), &disks(), Some(&saved), &table, Some("new-boot"));
+        assert_eq!(reconciler.baseline(), Baseline::Json);
+        assert_eq!(reconciler.totals("sda", 50, 0).0, 101550);
+        let same = Reconciler::load_in_boot(
+            &disks(),
+            &disks(),
+            Some(&saved),
+            &table,
+            Some("previous-boot"),
+        );
+        assert_eq!(same.baseline(), Baseline::StateDb);
+        assert_eq!(same.totals("sda", 1550, 0).0, 101550);
     }
 }

@@ -76,6 +76,8 @@ impl StorageWorker {
     /// Finalize an idle worker normally, but never wait out an uninterruptible
     /// vendor read. The caller has already synced the last published counters;
     /// process exit will dispose of any worker still inside vendor code.
+    /// Its platform.finalize()/vendor atexit cleanup cannot run while that read
+    /// remains blocked, matching the limitation of an interrupted Python read.
     pub async fn shutdown(&mut self) {
         let _ = self.control.notify_shutdown();
         if let Some(done) = self.done.take() {
