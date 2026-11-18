@@ -52,7 +52,7 @@ const SYSLOG_IDENTIFIER: &str = "chassisd";
 /// is which *implementation* of the platform API to open, because a platform
 /// with a native Rust one has to be able to say so without a new binary.
 #[derive(Parser, Debug)]
-#[command(name = "chassisd-rs", about = "SONiC chassis daemon, in Rust")]
+#[command(name = "chassisd", about = "SONiC chassis daemon, in Rust")]
 struct Args {
     /// Which platform API implementation to use: `pyo3` or `native`.
     ///
@@ -1339,12 +1339,7 @@ fn answered(
 
 impl<P: PlatformApi> dpu_recovery::PowerCycler for PlatformCycler<'_, P> {
     fn transition_in_progress(&mut self, key: &DeviceKey) -> Result<Option<bool>, PlatformError> {
-        Ok(self
-            .platform
-            .get_modules(ModuleInfoCols::STATE_TRANSITION)?
-            .into_iter()
-            .find(|m| &m.key == key)
-            .and_then(|m| m.state_transition))
+        self.platform.get_module_state_transition(key)
     }
     fn power_cycle(&mut self, name: &str, key: &DeviceKey) -> Result<bool, PlatformError> {
         power_cycle_sequence(self.platform, name, key)
@@ -1488,7 +1483,7 @@ async fn run_smartswitch_loop<P: PlatformApi>(
         // any other failure ends its daemon.  Skipping keeps every DPU's rows
         // and recovery state for the next pass.
         let modules = match platform.get_modules(
-            MODULE_PUBLICATION_COLS.with(
+            SMARTSWITCH_PUBLICATION_COLS.with(
                 ModuleInfoCols::DESCRIPTION
                     .with(ModuleInfoCols::SERIAL)
                     .with(ModuleInfoCols::OPER_STATUS)
@@ -1572,9 +1567,12 @@ async fn run_smartswitch<P: PlatformApi>(
         log::error!("Chassisd midplane intialization failed");
     }
 
-    let modules = match start_up_modules(platform) {
-        Ok(m) => m,
-        Err(code) => return code,
+    let modules = match platform.get_modules(ModuleInfoCols::OPER_STATUS) {
+        Ok(modules) => modules,
+        Err(error) => {
+            log::error!("Failed to read the modules: {error}");
+            return CHASSIS_LOAD_ERROR;
+        }
     };
     if let Err(e) = module_updater::publish_module_count(&modules, chassis_tbl.as_ref()) {
         log::error!("{e}");
@@ -1633,7 +1631,7 @@ async fn run_smartswitch<P: PlatformApi>(
 
 // ── the copy that runs on a DPU ───────────────────────────────────────────────
 
-/// The two chassis columns the DPU side reads, and nothing else.
+/// The module text columns the SmartSwitch publishes.
 ///
 /// Read every cycle, so a column more is a vendor getter more every ten
 /// seconds -- among them `get_reboot_cause` and the LED, which the facade's
@@ -1644,6 +1642,8 @@ const MODULE_PUBLICATION_COLS: ModuleInfoCols = ModuleInfoCols::NAME_TEXT
     .with(ModuleInfoCols::REPLACEABLE_TEXT)
     .with(ModuleInfoCols::SLOT_TEXT)
     .with(ModuleInfoCols::OPER_STATUS_TEXT);
+const SMARTSWITCH_PUBLICATION_COLS: ModuleInfoCols =
+    ModuleInfoCols::NAME_TEXT.with(ModuleInfoCols::OPER_STATUS_TEXT);
 
 const DPU_PLANE_COLS: ChassisInfoCols =
     ChassisInfoCols::DATAPLANE_STATE.with(ChassisInfoCols::CONTROLPLANE_STATE);
@@ -1670,18 +1670,20 @@ impl Drop for PlaneEvents {
     }
 }
 impl PlaneEvents {
-    fn subscribe() -> Self {
+    fn subscribe(dpu_name: &str) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let stop = Arc::new(AtomicBool::new(false));
         let workers = [
             (CONFIG_DB, "PORT"),
             ("APPL_DB", "PORT_TABLE"),
             (db::STATE_DB, "SYSTEM_READY"),
+            (CHASSIS_STATE_DB, dpu_updater::DPU_STATE_TABLE),
         ]
         .into_iter()
         .map(|(db, table)| {
             let sender = sender.clone();
             let stop = Arc::clone(&stop);
+            let dpu_name = dpu_name.to_string();
             std::thread::spawn(move || {
                 let result = (|| -> Result<(), String> {
                     let db = swss_common::DbConnector::new_named(db, true, 0)
@@ -1695,7 +1697,12 @@ impl PlaneEvents {
                             subscription.wait(Duration::from_millis(200))?,
                             swss_common::SelectResult::Data
                         ) {
-                            subscription.take()?;
+                            let updates = subscription.take()?;
+                            if table == dpu_updater::DPU_STATE_TABLE
+                                && !updates.iter().any(|update| update.key == dpu_name)
+                            {
+                                continue;
+                            }
                             if sender.send(Ok(())).is_err() {
                                 break;
                             }
@@ -1899,7 +1906,8 @@ async fn run_on_dpu<P: PlatformApi>(
         .get_chassis_info(DPU_PLANE_COLS)
         .map(|info| info.dataplane_state != Some(true) && info.controlplane_state != Some(true))
         .unwrap_or(true);
-    let events = (event_mode && matches!(cycles, Cycles::Signals(_))).then(PlaneEvents::subscribe);
+    let events =
+        (event_mode && matches!(cycles, Cycles::Signals(_))).then(|| PlaneEvents::subscribe(&name));
     run_dpu_loop_events(
         platform,
         &name,
@@ -2075,6 +2083,7 @@ mod tests {
             modules: vec![ModuleInfo {
                 key: key_of("DPU0"),
                 name: "DPU0".into(),
+                name_text: Some("DPU0".into()),
                 presence: true,
                 r#type: Some(ModuleType::Dpu),
                 ..Default::default()
@@ -2117,6 +2126,7 @@ mod tests {
         struct Projected {
             module: ModuleInfo,
             reads: Vec<ModuleInfoCols>,
+            transitions: Vec<DeviceKey>,
         }
         impl PlatformApi for Projected {
             fn get_modules(
@@ -2130,11 +2140,20 @@ mod tests {
                 }
                 Ok(vec![module])
             }
+            fn get_module_state_transition(
+                &mut self,
+                key: &DeviceKey,
+            ) -> Result<Option<bool>, PlatformError> {
+                self.transitions.push(key.clone());
+                assert_eq!(key, &self.module.key);
+                Ok(self.module.state_transition)
+            }
         }
         let root = tempfile::tempdir().unwrap();
         let module = ModuleInfo {
             key: key_of("DPU0"),
             name: "DPU0".into(),
+            name_text: Some("DPU0".into()),
             presence: true,
             r#type: Some(ModuleType::Dpu),
             oper_status: Some(ModuleStatus::Online),
@@ -2145,6 +2164,7 @@ mod tests {
         let mut platform = Projected {
             module: module.clone(),
             reads: Vec::new(),
+            transitions: Vec::new(),
         };
         let (chassis, modules, midplane, dpu_state) = (
             MockTable::new(),
@@ -2191,7 +2211,11 @@ mod tests {
             platform.reads[0].bits() & ModuleInfoCols::STATE_TRANSITION.bits(),
             0
         );
-        assert!(platform.reads[1..].contains(&ModuleInfoCols::STATE_TRANSITION));
+        assert!(platform
+            .reads
+            .iter()
+            .all(|cols| cols.bits() & ModuleInfoCols::STATE_TRANSITION.bits() == 0));
+        assert_eq!(platform.transitions, vec![key_of("DPU0")]);
     }
 
     #[tokio::test]
@@ -3065,6 +3089,7 @@ mod tests {
     fn startup_fixture(oper: ModuleStatus) -> (Vec<ModuleInfo>, [MockTable; 6]) {
         let dpu = ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -3302,6 +3327,7 @@ mod tests {
         };
         let modules = vec![ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -3527,6 +3553,7 @@ mod tests {
         };
         let dpu = ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -4271,6 +4298,7 @@ mod tests {
         let o = MockOpener::new();
         let modules = vec![ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -4755,6 +4783,7 @@ mod tests {
         };
         let modules = vec![ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -4810,6 +4839,7 @@ mod tests {
     fn online_dpu0() -> ModuleInfo {
         ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -5099,6 +5129,15 @@ mod tests {
             MockTable::new(),
         );
         config_ports.fail_reads("connection reset");
+        t.set(
+            "DPU0",
+            &[
+                (dpu_updater::DP_STATE, "up".to_string()),
+                (dpu_updater::CP_STATE, "up".to_string()),
+            ],
+        )
+        .unwrap();
+        let writes_before = t.writes().len();
         let sources = Sources {
             config_ports: Some(&config_ports),
             port_table: Some(&port_table),
@@ -5114,16 +5153,17 @@ mod tests {
             log::Level::Error,
             "Failed to read the DPU's plane state: connection reset"
         ));
-        // The shutdown row is still written on the way out: the process is
-        // going, and that part the NPU must hear.  It is the only write.
-        assert_eq!(t.field("DPU0", dpu_updater::DP_STATE).as_deref(), None);
+        // A read failure is an error exit, so the last published plane state
+        // remains intact. Only clean shutdown synthesizes down publication.
         assert_eq!(
-            t.writes()
-                .iter()
-                .filter(|(_, f)| f == dpu_updater::DP_STATE)
-                .count(),
-            0
+            t.field("DPU0", dpu_updater::DP_STATE).as_deref(),
+            Some("up")
         );
+        assert_eq!(
+            t.field("DPU0", dpu_updater::CP_STATE).as_deref(),
+            Some("up")
+        );
+        assert_eq!(t.writes().len(), writes_before);
     }
 
     /// A plane read that fails is answered from the databases rather than
@@ -5289,6 +5329,7 @@ mod tests {
         let o = MockOpener::new();
         let modules = vec![ModuleInfo {
             name: "DPU0".to_string(),
+            name_text: Some("DPU0".into()),
             key: key_of("DPU0"),
             parent_key: None,
             presence: true,
@@ -5404,5 +5445,170 @@ mod tests {
         .await;
         assert_eq!(code, ERR_DB_WRITE);
         assert!(log.logged(log::Level::Error, "Failed to publish the boot_id for DPU0"));
+    }
+
+    /// An Online DPU keeps the planes its own daemon published when this
+    /// daemon starts.  The start-up read is projected, so the platform below
+    /// answers `oper_status` only when the column is asked for, as the
+    /// facade does.  Python writes the midplane `up` for an Online DPU and
+    /// leaves the other two planes alone
+    /// (`chassisd:ChassisdDaemon.set_initial_dpu_admin_state`).
+    #[tokio::test]
+    async fn an_online_dpu_keeps_its_planes_when_the_daemon_starts() {
+        struct Projected(ModuleInfo);
+        impl PlatformApi for Projected {
+            fn get_modules(
+                &mut self,
+                cols: ModuleInfoCols,
+            ) -> Result<Vec<ModuleInfo>, PlatformError> {
+                let mut m = self.0.clone();
+                if cols.bits() & ModuleInfoCols::OPER_STATUS.bits() == 0 {
+                    m.oper_status = None;
+                }
+                Ok(vec![m])
+            }
+        }
+        let opener = MockOpener::new();
+        opener
+            .open(CONFIG_DB, CHASSIS_CFG_TABLE)
+            .unwrap()
+            .set("DPU0", &[(CHASSIS_MODULE_ADMIN_STATUS, "up".into())])
+            .unwrap();
+        let planes = [
+            dpu_updater::MP_STATE,
+            dpu_updater::CP_STATE,
+            dpu_updater::DP_STATE,
+        ];
+        let published: Vec<_> = planes.iter().map(|p| (*p, "up".to_string())).collect();
+        opener
+            .open(CHASSIS_STATE_DB, dpu_updater::DPU_STATE_TABLE)
+            .unwrap()
+            .set("DPU0", &published)
+            .unwrap();
+        let mut platform = Projected(online_dpu0());
+        let code = run_smartswitch(
+            &mut platform,
+            &|d, t| opener.open(d, t),
+            None,
+            None,
+            dpu_recovery::Thresholds::default(),
+            &no_watcher,
+            &no_shutdown,
+            &mut Cycles::Fixed {
+                remaining: 0,
+                code: 1,
+            },
+        )
+        .await;
+        assert_eq!(code, 1);
+        let row = opener.table(dpu_updater::DPU_STATE_TABLE).unwrap();
+        for plane in planes {
+            assert_eq!(row.field("DPU0", plane).as_deref(), Some("up"), "{plane}");
+        }
+    }
+
+    /// A planned reboot holds the transition flag, and the recovery machine
+    /// reads it live: the pass's own module read does not ask for it.  A
+    /// Ready DPU that goes Offline during the reboot is left alone, as
+    /// `chassisd:SmartSwitchModuleUpdater._is_planned_transition_in_progress`
+    /// leaves it.
+    #[tokio::test]
+    async fn a_planned_reboot_is_read_live_and_suppresses_the_power_cycle() {
+        struct Rebooting(ModuleInfo);
+        impl PlatformApi for Rebooting {
+            fn get_modules(
+                &mut self,
+                cols: ModuleInfoCols,
+            ) -> Result<Vec<ModuleInfo>, PlatformError> {
+                let mut m = self.0.clone();
+                if cols.bits() & ModuleInfoCols::STATE_TRANSITION.bits() == 0 {
+                    m.state_transition = None;
+                }
+                Ok(vec![m])
+            }
+            fn get_module_state_transition(
+                &mut self,
+                key: &DeviceKey,
+            ) -> Result<Option<bool>, PlatformError> {
+                assert_eq!(key, &self.0.key);
+                Ok(self.0.state_transition)
+            }
+        }
+        let log = pmon_common::logging::capture();
+        let root = tempfile::tempdir().unwrap();
+        let (chassis, module, midplane, dpu_state, config, metadata) = (
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+            MockTable::new(),
+        );
+        config
+            .set("DPU0", &[(CHASSIS_MODULE_ADMIN_STATUS, "up".into())])
+            .unwrap();
+        metadata
+            .set(
+                "localhost",
+                &[(dpu_updater::DPU_AUTO_RECOVERY_FIELD, "enable".into())],
+            )
+            .unwrap();
+        dpu_state
+            .set(
+                "DPU0",
+                &[
+                    (dpu_updater::CP_STATE, "up".into()),
+                    (dpu_updater::DP_STATE, "up".into()),
+                ],
+            )
+            .unwrap();
+        let tables = dpu_updater::Tables {
+            chassis: &chassis,
+            module: &module,
+            midplane: &midplane,
+            dpu_state: &dpu_state,
+            config: Some(&config),
+            device_metadata: Some(&metadata),
+        };
+        let mut dpu = online_dpu0();
+        dpu.state_transition = Some(false);
+        let mut u = dpu_updater::DpuUpdater::new(
+            &[dpu.clone()],
+            dpu_recovery::Thresholds::default(),
+            true,
+            root.path(),
+            Instant::now(),
+        );
+        let mut p = Rebooting(dpu);
+        let one_pass = || Cycles::Fixed {
+            remaining: 1,
+            code: 143,
+        };
+        run_smartswitch_loop(
+            &mut p,
+            &mut u,
+            &tables,
+            None,
+            &mut one_pass(),
+            &AtomicBool::new(false),
+        )
+        .await;
+        assert_eq!(u.state_of("DPU0"), Some(dpu_recovery::DpuState::Ready));
+
+        // `reboot -d DPU0`: the flag is set, and the DPU goes Offline.
+        p.0.state_transition = Some(true);
+        p.0.oper_status = Some(ModuleStatus::Offline);
+        p.0.oper_status_text = Some(ModuleStatus::Offline.as_str().into());
+        run_smartswitch_loop(
+            &mut p,
+            &mut u,
+            &tables,
+            None,
+            &mut one_pass(),
+            &AtomicBool::new(false),
+        )
+        .await;
+        assert!(!log.contains("Hardware failure detected"));
+        assert_eq!(u.state_of("DPU0"), Some(dpu_recovery::DpuState::Ready));
     }
 }

@@ -125,6 +125,10 @@ fn rust_half(
                     });
                 }
             }
+            "stop" => {
+                let modules = platform.get_modules(ModuleInfoCols::NONE).unwrap();
+                updater.clear(&modules, &tables);
+            }
             _ => {
                 step.get_item(1)
                     .and_then(|f| f.call1((&chassis,)))
@@ -222,6 +226,30 @@ fn chassisd_publishes_what_the_python_daemon_publishes() {
         for name in &names {
             let python = python_half(py, harness, &sc, name);
             let rust = rust_half(py, harness, &sc, name);
+            if name == "line_card_shutdown_keeps_peer_asics" {
+                let rows = &rust.0["CHASSIS_STATE_DB"][CHASSIS_ASIC_INFO_TABLE];
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "only the peer ASIC row must survive: {rows:?}"
+                );
+                assert_eq!(
+                    rows["LINE-CARD1|asic8"],
+                    std::collections::BTreeMap::from([
+                        (
+                            ASIC_PCI_ADDRESS_FIELD.to_string(),
+                            "0000:08:00.0".to_string()
+                        ),
+                        (NAME_FIELD.to_string(), "LINE-CARD1".to_string()),
+                        (ASIC_ID_IN_MODULE_FIELD.to_string(), "0".to_string()),
+                    ])
+                );
+                assert!(python
+                    .0
+                    .get("CHASSIS_STATE_DB")
+                    .and_then(|db| db.get(CHASSIS_ASIC_INFO_TABLE))
+                    .is_none_or(|rows| rows.is_empty()));
+            }
             // The DPU_STATE times are `date`-style strings of their own.
             failures.extend(parity::differences(
                 name,
@@ -239,4 +267,8 @@ fn chassisd_publishes_what_the_python_daemon_publishes() {
 
 /// What the comparison finds and the daemon does not fix, each with the
 /// place in Python it comes from and what would remove it.
-const KNOWN: &[parity::Known] = &[];
+const KNOWN: &[parity::Known] = &[parity::Known {
+    scenario: "line_card_shutdown_keeps_peer_asics",
+    contains: "CHASSIS_STATE_DB CHASSIS_ASIC_TABLE|LINE-CARD1|asic8: only Rust wrote it:",
+    why: "Python ModuleUpdater.deinit clears the shared ASIC table; Rust limits cleanup to this card's keys so another live card keeps its published ASICs",
+}];

@@ -186,6 +186,7 @@ FIELD_COMMAND = "command"
 FIELD_STATUS = "status"
 FIELD_RESULT = "result"
 FIELD_DEVICE_LEAK_STATUS = "device_leak_status"
+FIELD_TEST_LEAK = "test_leak"
 FIELD_SEVERITY = "severity"
 FIELD_LEAK = "leak"
 FIELD_ADMIN_STATUS = "admin_status"
@@ -667,7 +668,8 @@ class CriticalEventChecker(logger.Logger):
         tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
-            if fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS) == SystemLeakStatus.CRITICAL:
+            d = fvs_to_dict(result[1])
+            if d.get(FIELD_TEST_LEAK) != "Enabled" and d.get(FIELD_DEVICE_LEAK_STATUS) == SystemLeakStatus.CRITICAL:
                 return True
         return False
 
@@ -745,7 +747,9 @@ class CriticalEventChecker(logger.Logger):
         tbl = swsscommon.Table(self.state_db, SYSTEM_LEAK_STATUS_TABLE)
         result = tbl.get(SYSTEM_LEAK_STATUS_KEY)
         if result and result[0]:
-            return fvs_to_dict(result[1]).get(FIELD_DEVICE_LEAK_STATUS, "")
+            d = fvs_to_dict(result[1])
+            # A test aggregate is never used for power-on gating.
+            return "" if d.get(FIELD_TEST_LEAK) == "Enabled" else d.get(FIELD_DEVICE_LEAK_STATUS, "")
         return ""
 
 
@@ -1060,6 +1064,20 @@ class BmcEventHandler(EventLogger):
             self._event_log.log_notice(
                 "SYSTEM_LEAK handler done: key={} status={} result=SKIPPED (policy=disabled)".format(
                     key, leak_status))
+            return
+
+        if fvs.get(FIELD_TEST_LEAK) == "Enabled":
+            # Test-injected leak: log the action that would have run, never dispatch it.
+            would_be = {
+                SystemLeakStatus.CRITICAL: policy.get("system_critical_leak_action",
+                                                      DEFAULT_SYSTEM_CRITICAL_LEAK_ACTION),
+                SystemLeakStatus.MAJOR: policy.get("system_major_leak_action",
+                                                   DEFAULT_SYSTEM_MAJOR_LEAK_ACTION),
+                SystemLeakStatus.MINOR: policy.get("system_minor_leak_action",
+                                                   DEFAULT_SYSTEM_MINOR_LEAK_ACTION),
+            }.get(leak_status, "none")
+            self.log_notice("TEST SYSTEM LEAK (status={}); action={} not dispatched".format(
+                leak_status, would_be))
             return
 
         if leak_status == SystemLeakStatus.CRITICAL:

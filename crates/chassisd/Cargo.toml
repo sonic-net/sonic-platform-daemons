@@ -7,7 +7,7 @@ description = "SONiC chassis and DPU management daemon in Rust"
 license = "Apache-2.0"
 
 [[bin]]
-name = "chassisd-rs"
+name = "chassisd"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,10 +21,9 @@ pmon-common   = { path = "../pmon-common" }
 # modules shutdown` takes effect now and not on the next ten-second cycle.
 swss-common   = { workspace = true }
 # `spawn_blocking` for that watcher, which blocks in select().
-tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
-# Retain thermalctld's compatibility cap for release builders using
-# cargo-auditable 0.6.4. Current master uses 0.7.6 and supports edition 2024.
-clap  = { version = ">=4.0, <4.6", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
+# Cargo.lock retains the validated graph; current master uses cargo-auditable 0.7.6.
+clap  = { version = "4", features = ["derive"] }
 log   = "0.4"
 # platform.json carries the DPU recovery thresholds.
 serde_json = "1"

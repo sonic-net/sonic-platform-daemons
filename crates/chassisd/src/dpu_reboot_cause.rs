@@ -89,7 +89,10 @@ impl RebootCause {
             device: s("device"),
             time: s("time"),
             name: s("name"),
-            boot_id: v.get("boot_id").and_then(|x| x.as_str()).map(str::to_string),
+            boot_id: v
+                .get("boot_id")
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
         })
     }
 }
@@ -132,7 +135,10 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// `chassisd:_fsync_parent_directory`: make a rename or a new directory entry
 /// survive a power cut, which syncing the file alone does not.
 fn fsync_parent(path: &Path) -> std::io::Result<()> {
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     File::open(dir)?.sync_all()
 }
 
@@ -238,7 +244,10 @@ pub fn persist(
 
     let file = history_dir(root, module).join(format!("{now_name}_reboot_cause.json"));
     atomic_write(&file, record.to_json().as_bytes())?;
-    atomic_replace_symlink(&file, &dir_for(root, module).join("previous-reboot-cause.json"))?;
+    atomic_replace_symlink(
+        &file,
+        &dir_for(root, module).join("previous-reboot-cause.json"),
+    )?;
 
     rotate(root, module)?;
     Ok(record)
@@ -285,11 +294,7 @@ fn rotate(root: &Path, module: &str) -> std::io::Result<()> {
 /// ends the pass here, and the caller says the record is still on disk.  Every
 /// field the file holds is published, so the boot_id is too, and a record
 /// written before boot_ids were kept is published without one.
-pub fn publish(
-    root: &Path,
-    module: &str,
-    table: &dyn TableLike,
-) -> Result<(), String> {
+pub fn publish(root: &Path, module: &str, table: &dyn TableLike) -> Result<(), String> {
     let prefix = format!("{}|", module.to_uppercase());
     for key in table.get_keys()? {
         if key.starts_with(&prefix) {
@@ -396,7 +401,10 @@ pub fn boot_id_update(
         // What a platform that answered nothing gets: `chassisd:try_get`
         // turns both a NotImplementedError and a `None` into "N/A", and that
         // string is then the cause.
-        Ok(ModuleRebootCause { cause: None, detail: None })
+        Ok(ModuleRebootCause {
+            cause: None,
+            detail: None,
+        })
         | Err(PlatformError::NotSupported(_)) => (Some(NOT_AVAILABLE.to_string()), None),
         Ok(ModuleRebootCause { cause, detail }) => (cause, detail),
         Err(e) => {
@@ -406,24 +414,31 @@ pub fn boot_id_update(
     };
 
     if let Err(e) = persist(
-        root, module, cause.as_deref(), detail.as_deref(), Some(boot_id), now_name, formatted)
-    {
+        root,
+        module,
+        cause.as_deref(),
+        detail.as_deref(),
+        Some(boot_id),
+        now_name,
+        formatted,
+    ) {
         log::error!("Failed to persist reboot cause for {module}: {e}");
         return;
     }
     if let Err(e) = publish(root, module, table) {
         log::error!(
             "Failed to update reboot cause to DB for {module}: {e}. \
-             The boot_id and reboot cause is stored in json file.");
+             The boot_id and reboot cause is stored in json file."
+        );
     }
 }
 
 /// An error as Python's `{e}` prints the exception: its message alone.
 fn detail_of(e: &PlatformError) -> &str {
     match e {
-        PlatformError::NotSupported(m)
-        | PlatformError::NotFound(m)
-        | PlatformError::Backend(m) => m,
+        PlatformError::NotSupported(m) | PlatformError::NotFound(m) | PlatformError::Backend(m) => {
+            m
+        }
     }
 }
 
@@ -494,7 +509,10 @@ mod tests {
     }
 
     fn answered(cause: &str, detail: &str) -> Result<ModuleRebootCause, PlatformError> {
-        Ok(ModuleRebootCause { cause: Some(cause.to_string()), detail: Some(detail.to_string()) })
+        Ok(ModuleRebootCause {
+            cause: Some(cause.to_string()),
+            detail: Some(detail.to_string()),
+        })
     }
 
     /// A platform with one DPU, at `modules[0]`, answering `cause` for it.
@@ -511,13 +529,20 @@ mod tests {
             &mut self,
             key: &DeviceKey,
         ) -> Result<ModuleRebootCause, PlatformError> {
-            assert_eq!(key.as_str(), "modules[0]", "asked through the key the name resolved to");
+            assert_eq!(
+                key.as_str(),
+                "modules[0]",
+                "asked through the key the name resolved to"
+            );
             self.cause.clone()
         }
     }
 
     fn dpu(cause: Result<ModuleRebootCause, PlatformError>) -> Dpus {
-        Dpus { key: Ok(Some(DeviceKey::from("modules[0]"))), cause }
+        Dpus {
+            key: Ok(Some(DeviceKey::from("modules[0]"))),
+            cause,
+        }
     }
 
     /// A platform that must not be asked anything.
@@ -531,18 +556,28 @@ mod tests {
 
     #[test]
     fn a_cause_splits_into_a_cause_and_a_comment() {
-        assert_eq!(split_cause(Some("Watchdog,fired at 3am")),
-                   ("Watchdog".to_string(), "fired at 3am".to_string()));
-        assert_eq!(split_cause(Some("Power Loss")),
-                   ("Power Loss".to_string(), "N/A".to_string()));
+        assert_eq!(
+            split_cause(Some("Watchdog,fired at 3am")),
+            ("Watchdog".to_string(), "fired at 3am".to_string())
+        );
+        assert_eq!(
+            split_cause(Some("Power Loss")),
+            ("Power Loss".to_string(), "N/A".to_string())
+        );
     }
 
     /// A platform that answers nothing still gets a record: the DPU did go
     /// down, and an empty history reads as "it never happened".
     #[test]
     fn a_platform_that_says_nothing_still_records_a_reboot() {
-        assert_eq!(split_cause(None), ("Unknown".to_string(), "N/A".to_string()));
-        assert_eq!(split_cause(Some("")), ("Unknown".to_string(), "N/A".to_string()));
+        assert_eq!(
+            split_cause(None),
+            ("Unknown".to_string(), "N/A".to_string())
+        );
+        assert_eq!(
+            split_cause(Some("")),
+            ("Unknown".to_string(), "N/A".to_string())
+        );
     }
 
     /// Named for the moment it is taken, and carrying the boot_id it was
@@ -550,7 +585,13 @@ mod tests {
     #[test]
     fn the_record_is_named_for_now_and_carries_its_boot_id() {
         let r = root();
-        let rec = keep(r.path(), "DPU0", Some("Watchdog"), Some("b-1"), "2026_09_15_01_05_00");
+        let rec = keep(
+            r.path(),
+            "DPU0",
+            Some("Watchdog"),
+            Some("b-1"),
+            "2026_09_15_01_05_00",
+        );
         assert_eq!(rec.name, "2026_09_15_01_05_00");
         assert_eq!(rec.boot_id.as_deref(), Some("b-1"));
         let file = history_dir(r.path(), "DPU0").join("2026_09_15_01_05_00_reboot_cause.json");
@@ -563,19 +604,37 @@ mod tests {
     #[test]
     fn a_record_leaves_only_the_history_file_and_the_link() {
         let r = root();
-        keep(r.path(), "DPU0", Some("Watchdog"), Some("b-1"), "2026_09_15_01_05_00");
+        keep(
+            r.path(),
+            "DPU0",
+            Some("Watchdog"),
+            Some("b-1"),
+            "2026_09_15_01_05_00",
+        );
         let mut names: Vec<String> = std::fs::read_dir(dir_for(r.path(), "DPU0"))
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         names.sort();
-        assert_eq!(names, vec!["history".to_string(), "previous-reboot-cause.json".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "history".to_string(),
+                "previous-reboot-cause.json".to_string()
+            ]
+        );
     }
 
     #[test]
     fn the_latest_record_is_readable_back() {
         let r = root();
-        keep(r.path(), "DPU0", Some("Watchdog,x"), Some("b-1"), "2026_09_15_01_00_00");
+        keep(
+            r.path(),
+            "DPU0",
+            Some("Watchdog,x"),
+            Some("b-1"),
+            "2026_09_15_01_00_00",
+        );
         let prev = previous(r.path(), "DPU0").expect("the symlink resolves");
         assert_eq!(prev.cause, "Watchdog");
         assert_eq!(prev.comment, "x");
@@ -603,7 +662,11 @@ mod tests {
         .unwrap();
         let prev = previous(r.path(), "DPU0").expect("valid JSON");
         assert_eq!(prev.comment, cause);
-        assert_eq!(prev.boot_id.as_deref(), Some("b-1"), "so the same boot is not recorded twice");
+        assert_eq!(
+            prev.boot_id.as_deref(),
+            Some("b-1"),
+            "so the same boot is not recorded twice"
+        );
     }
 
     /// Clearing the old rows is not wrapped in Python, and a delete that fails
@@ -611,9 +674,16 @@ mod tests {
     #[test]
     fn a_row_that_will_not_go_ends_the_publish() {
         let r = root();
-        keep(r.path(), "DPU0", Some("a"), Some("b-1"), "2026_09_15_01_00_00");
+        keep(
+            r.path(),
+            "DPU0",
+            Some("a"),
+            Some("b-1"),
+            "2026_09_15_01_00_00",
+        );
         let t = MockTable::new();
-        t.set("DPU0|2026_01_01_00_00_00", &[("cause", "old".to_string())]).unwrap();
+        t.set("DPU0|2026_01_01_00_00_00", &[("cause", "old".to_string())])
+            .unwrap();
         t.fail_writes("redis is gone");
         publish(r.path(), "DPU0", &t).expect_err("a stale row that will not go is reported");
     }
@@ -626,7 +696,11 @@ mod tests {
         let r = root();
         let dir = history_dir(r.path(), "DPU0");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("2026_09_15_01_00_00_reboot_cause.json"), "{not json").unwrap();
+        std::fs::write(
+            dir.join("2026_09_15_01_00_00_reboot_cause.json"),
+            "{not json",
+        )
+        .unwrap();
         publish(r.path(), "DPU0", &MockTable::new()).unwrap();
         assert!(log.logged(log::Level::Warn, "Failed to decode JSON from file"));
         assert!(!log.contains("No reboot cause history files found"));
@@ -637,11 +711,26 @@ mod tests {
     #[test]
     fn the_link_moves_to_the_newest_record() {
         let r = root();
-        keep(r.path(), "DPU0", Some("a"), Some("b-1"), "2026_09_15_01_00_00");
-        keep(r.path(), "DPU0", Some("b"), Some("b-2"), "2026_09_15_02_00_00");
+        keep(
+            r.path(),
+            "DPU0",
+            Some("a"),
+            Some("b-1"),
+            "2026_09_15_01_00_00",
+        );
+        keep(
+            r.path(),
+            "DPU0",
+            Some("b"),
+            Some("b-2"),
+            "2026_09_15_02_00_00",
+        );
         assert_eq!(previous(r.path(), "DPU0").unwrap().cause, "b");
-        assert!(!with_suffix(&dir_for(r.path(), "DPU0").join("previous-reboot-cause.json"), ".tmp")
-            .exists());
+        assert!(!with_suffix(
+            &dir_for(r.path(), "DPU0").join("previous-reboot-cause.json"),
+            ".tmp"
+        )
+        .exists());
     }
 
     /// Ten is what `show reboot-cause history` pages through, and the file
@@ -652,10 +741,19 @@ mod tests {
     fn the_history_keeps_the_newest_ten_records() {
         let r = root();
         std::fs::create_dir_all(history_dir(r.path(), "DPU0")).unwrap();
-        std::fs::write(history_dir(r.path(), "DPU0").join("0000_reboot_cause.json.tmp"), "")
-            .unwrap();
+        std::fs::write(
+            history_dir(r.path(), "DPU0").join("0000_reboot_cause.json.tmp"),
+            "",
+        )
+        .unwrap();
         for i in 0..14 {
-            keep(r.path(), "DPU0", Some("x"), None, &format!("2026_09_15_01_00_{i:02}"));
+            keep(
+                r.path(),
+                "DPU0",
+                Some("x"),
+                None,
+                &format!("2026_09_15_01_00_{i:02}"),
+            );
         }
         let mut names: Vec<String> = std::fs::read_dir(history_dir(r.path(), "DPU0"))
             .unwrap()
@@ -664,19 +762,35 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names.len(), MAX_HISTORY_FILES);
-        assert_eq!(names[0], "2026_09_15_01_00_04_reboot_cause.json", "the oldest four went");
+        assert_eq!(
+            names[0], "2026_09_15_01_00_04_reboot_cause.json",
+            "the oldest four went"
+        );
     }
 
     #[test]
     fn the_whole_history_is_republished_and_stale_rows_go() {
         let r = root();
         let t = MockTable::new();
-        t.set("DPU0|2020_01_01_00_00_00", &[("cause", "old".to_string())]).unwrap();
-        keep(r.path(), "DPU0", Some("Watchdog"), Some("b-1"), "2026_09_15_01_00_00");
+        t.set("DPU0|2020_01_01_00_00_00", &[("cause", "old".to_string())])
+            .unwrap();
+        keep(
+            r.path(),
+            "DPU0",
+            Some("Watchdog"),
+            Some("b-1"),
+            "2026_09_15_01_00_00",
+        );
         publish(r.path(), "DPU0", &t).unwrap();
         assert_eq!(t.keys(), vec!["DPU0|2026_09_15_01_00_00".to_string()]);
-        assert_eq!(t.field("DPU0|2026_09_15_01_00_00", "cause").as_deref(), Some("Watchdog"));
-        assert_eq!(t.field("DPU0|2026_09_15_01_00_00", "boot_id").as_deref(), Some("b-1"));
+        assert_eq!(
+            t.field("DPU0|2026_09_15_01_00_00", "cause").as_deref(),
+            Some("Watchdog")
+        );
+        assert_eq!(
+            t.field("DPU0|2026_09_15_01_00_00", "boot_id").as_deref(),
+            Some("b-1")
+        );
     }
 
     /// A record from before boot_ids were kept has none, and publishes none.
@@ -691,9 +805,13 @@ mod tests {
                 r#"{"cause": "Watchdog", "comment": "N/A", "device": "DPU0", "#,
                 r#""time": "t", "name": "2026_01_01_00_00_00"}"#,
             ),
-        ).unwrap();
+        )
+        .unwrap();
         publish(r.path(), "DPU0", &t).unwrap();
-        assert_eq!(t.field("DPU0|2026_01_01_00_00_00", "cause").as_deref(), Some("Watchdog"));
+        assert_eq!(
+            t.field("DPU0|2026_01_01_00_00_00", "cause").as_deref(),
+            Some("Watchdog")
+        );
         assert_eq!(t.field("DPU0|2026_01_01_00_00_00", "boot_id"), None);
     }
 
@@ -711,8 +829,10 @@ mod tests {
         std::fs::create_dir(&bad).unwrap();
         publish(r.path(), "DPU0", &t).expect("an unreadable file is not the end of the pass");
         assert_eq!(t.keys(), vec!["DPU0|2026_09_15_01_00_00".to_string()]);
-        assert!(log.logged(log::Level::Warn,
-            &format!("Error processing file {}", bad.display())));
+        assert!(log.logged(
+            log::Level::Warn,
+            &format!("Error processing file {}", bad.display())
+        ));
     }
 
     /// A row that will not write costs that entry only: it is warned about in
@@ -736,7 +856,11 @@ mod tests {
     fn republishing_one_dpu_leaves_the_others_alone() {
         let r = root();
         let t = MockTable::new();
-        t.set("DPU1|2026_01_01_00_00_00", &[("cause", "other".to_string())]).unwrap();
+        t.set(
+            "DPU1|2026_01_01_00_00_00",
+            &[("cause", "other".to_string())],
+        )
+        .unwrap();
         keep(r.path(), "DPU0", Some("x"), None, "2026_09_15_01_00_00");
         publish(r.path(), "DPU0", &t).unwrap();
         assert!(t.field("DPU1|2026_01_01_00_00_00", "cause").is_some());
@@ -762,14 +886,20 @@ mod tests {
     fn the_detail_the_platform_gave_is_the_comment_that_is_recorded() {
         let r = root();
         let rec = persist(
-            r.path(), "DPU0",
-            Some("Non-Hardware"), Some("Reset due to Power off"), None,
-            "2026_09_20_04_06_29", |_| "when".to_string(),
+            r.path(),
+            "DPU0",
+            Some("Non-Hardware"),
+            Some("Reset due to Power off"),
+            None,
+            "2026_09_20_04_06_29",
+            |_| "when".to_string(),
         )
         .expect("persists");
         assert_eq!(rec.cause, "Non-Hardware");
         assert_eq!(rec.comment, "Reset due to Power off");
-        assert!(rec.to_json().contains(r#""comment": "Reset due to Power off""#));
+        assert!(rec
+            .to_json()
+            .contains(r#""comment": "Reset due to Power off""#));
     }
 
     /// And a platform that answers one string still gets it split, which is
@@ -777,10 +907,17 @@ mod tests {
     #[test]
     fn a_single_string_answer_is_still_split_on_its_comma() {
         let r = root();
-        let rec = keep(r.path(), "DPU1", Some("Non-Hardware,Reset from CPU"), None,
-                       "2026_09_20_04_06_29");
-        assert_eq!((rec.cause.as_str(), rec.comment.as_str()),
-                   ("Non-Hardware", "Reset from CPU"));
+        let rec = keep(
+            r.path(),
+            "DPU1",
+            Some("Non-Hardware,Reset from CPU"),
+            None,
+            "2026_09_20_04_06_29",
+        );
+        assert_eq!(
+            (rec.cause.as_str(), rec.comment.as_str()),
+            ("Non-Hardware", "Reset from CPU")
+        );
     }
 
     // ── boot_id ──────────────────────────────────────────────────────────────
@@ -802,10 +939,15 @@ mod tests {
             fixed,
         );
         let prev = previous(r.path(), "DPU0").expect("recorded");
-        assert_eq!((prev.cause.as_str(), prev.comment.as_str()),
-                   ("Non-Hardware", "Reset due to Power off"));
+        assert_eq!(
+            (prev.cause.as_str(), prev.comment.as_str()),
+            ("Non-Hardware", "Reset due to Power off")
+        );
         assert_eq!(prev.boot_id.as_deref(), Some("b-2"));
-        assert_eq!(t.field("DPU0|2026_09_20_04_06_29", "boot_id").as_deref(), Some("b-2"));
+        assert_eq!(
+            t.field("DPU0|2026_09_20_04_06_29", "boot_id").as_deref(),
+            Some("b-2")
+        );
         assert!(log.contains("DPU0: new boot_id b-2 detected, capturing reboot cause"));
     }
 
@@ -815,9 +957,22 @@ mod tests {
     fn the_boot_id_already_recorded_records_nothing() {
         let r = root();
         let t = MockTable::new();
-        keep(r.path(), "DPU0", Some("Watchdog"), Some("b-1"), "2026_09_15_01_00_00");
-        boot_id_update(r.path(), "DPU0", "b-1", &mut Untouched,
-                       &t, "2026_09_20_04_06_29", fixed);
+        keep(
+            r.path(),
+            "DPU0",
+            Some("Watchdog"),
+            Some("b-1"),
+            "2026_09_15_01_00_00",
+        );
+        boot_id_update(
+            r.path(),
+            "DPU0",
+            "b-1",
+            &mut Untouched,
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
         assert!(t.is_empty());
     }
 
@@ -826,8 +981,15 @@ mod tests {
     fn an_empty_boot_id_records_nothing() {
         let r = root();
         let t = MockTable::new();
-        boot_id_update(r.path(), "DPU0", "", &mut Untouched,
-                       &t, "2026_09_20_04_06_29", fixed);
+        boot_id_update(
+            r.path(),
+            "DPU0",
+            "",
+            &mut Untouched,
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
         assert_eq!(previous(r.path(), "DPU0"), None);
     }
 
@@ -842,8 +1004,15 @@ mod tests {
         ] {
             let r = root();
             let t = MockTable::new();
-            boot_id_update(r.path(), "DPU0", "b-2", &mut dpu(ask), &t, "2026_09_20_04_06_29",
-                           fixed);
+            boot_id_update(
+                r.path(),
+                "DPU0",
+                "b-2",
+                &mut dpu(ask),
+                &t,
+                "2026_09_20_04_06_29",
+                fixed,
+            );
             let prev = previous(r.path(), "DPU0").expect("recorded");
             assert_eq!((prev.cause.as_str(), prev.comment.as_str()), ("N/A", "N/A"));
         }
@@ -857,24 +1026,64 @@ mod tests {
         let log = pmon_common::logging::capture();
         let r = root();
         let t = MockTable::new();
-        for key in [Ok(None), Err(PlatformError::NotSupported("get_module_index".to_string()))] {
-            let mut p = Dpus { key, cause: answered("Watchdog", "x") };
-            boot_id_update(r.path(), "DPU7", "b-2", &mut p, &t, "2026_09_20_04_06_29", fixed);
+        for key in [
+            Ok(None),
+            Err(PlatformError::NotSupported("get_module_index".to_string())),
+        ] {
+            let mut p = Dpus {
+                key,
+                cause: answered("Watchdog", "x"),
+            };
+            boot_id_update(
+                r.path(),
+                "DPU7",
+                "b-2",
+                &mut p,
+                &t,
+                "2026_09_20_04_06_29",
+                fixed,
+            );
         }
         let lookup = Err(PlatformError::Backend("redis".to_string()));
-        let mut p = Dpus { key: lookup, cause: answered("Watchdog", "x") };
-        boot_id_update(r.path(), "DPU6", "b-2", &mut p, &t, "2026_09_20_04_06_29", fixed);
+        let mut p = Dpus {
+            key: lookup,
+            cause: answered("Watchdog", "x"),
+        };
+        boot_id_update(
+            r.path(),
+            "DPU6",
+            "b-2",
+            &mut p,
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
         let mut p = dpu(Err(PlatformError::Backend("i2c".to_string())));
-        boot_id_update(r.path(), "DPU0", "b-2", &mut p, &t, "2026_09_20_04_06_29", fixed);
+        boot_id_update(
+            r.path(),
+            "DPU0",
+            "b-2",
+            &mut p,
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
         for m in ["DPU7", "DPU6", "DPU0"] {
             assert_eq!(previous(r.path(), m), None);
         }
-        assert!(log.logged(log::Level::Error,
-            "Unable to get module-index for DPU7 to capture reboot cause"));
-        assert!(log.logged(log::Level::Error,
-            "Failed to look up module DPU6 to capture reboot cause: redis"));
+        assert!(log.logged(
+            log::Level::Error,
+            "Unable to get module-index for DPU7 to capture reboot cause"
+        ));
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to look up module DPU6 to capture reboot cause: redis"
+        ));
         assert!(!log.contains("DPU7: new boot_id") && !log.contains("DPU6: new boot_id"));
-        assert!(log.logged(log::Level::Error, "Failed to get reboot cause for DPU0: i2c"));
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to get reboot cause for DPU0: i2c"
+        ));
     }
 
     /// A record that will not publish is still on disk, and says so.
@@ -884,10 +1093,23 @@ mod tests {
         let r = root();
         let t = MockTable::new();
         t.fail_reads("redis went away");
-        boot_id_update(r.path(), "DPU0", "b-2", &mut dpu(answered("Watchdog", "x")),
-                       &t, "2026_09_20_04_06_29", fixed);
-        assert_eq!(previous(r.path(), "DPU0").unwrap().boot_id.as_deref(), Some("b-2"));
-        assert!(log.logged(log::Level::Error, "Failed to update reboot cause to DB for DPU0"));
+        boot_id_update(
+            r.path(),
+            "DPU0",
+            "b-2",
+            &mut dpu(answered("Watchdog", "x")),
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
+        assert_eq!(
+            previous(r.path(), "DPU0").unwrap().boot_id.as_deref(),
+            Some("b-2")
+        );
+        assert!(log.logged(
+            log::Level::Error,
+            "Failed to update reboot cause to DB for DPU0"
+        ));
         assert!(log.contains("The boot_id and reboot cause is stored in json file."));
     }
 
@@ -898,8 +1120,10 @@ mod tests {
         let r = root();
         assert_eq!(read_midplane_down_reason(r.path(), "DPU0"), None);
         write_midplane_down_reason(r.path(), "DPU0", "Unplanned: 'Power Loss'");
-        assert_eq!(read_midplane_down_reason(r.path(), "DPU0").as_deref(),
-                   Some("Unplanned: 'Power Loss'"));
+        assert_eq!(
+            read_midplane_down_reason(r.path(), "DPU0").as_deref(),
+            Some("Unplanned: 'Power Loss'")
+        );
         clear_midplane_down_reason(r.path(), "DPU0");
         assert_eq!(read_midplane_down_reason(r.path(), "DPU0"), None);
         clear_midplane_down_reason(r.path(), "DPU0");
@@ -925,14 +1149,22 @@ mod tests {
         std::fs::create_dir_all(dir_for(r.path(), "DPU0").join("previous-reboot-cause.json"))
             .unwrap();
         assert_eq!(previous(r.path(), "DPU0"), None);
-        assert!(log.logged(log::Level::Error, "DPU0: Failed to read previous-reboot-cause.json"));
+        assert!(log.logged(
+            log::Level::Error,
+            "DPU0: Failed to read previous-reboot-cause.json"
+        ));
 
         std::fs::create_dir_all(dir_for(r.path(), "DPU1")).unwrap();
-        std::fs::write(dir_for(r.path(), "DPU1").join("previous-reboot-cause.json"), "not json")
-            .unwrap();
+        std::fs::write(
+            dir_for(r.path(), "DPU1").join("previous-reboot-cause.json"),
+            "not json",
+        )
+        .unwrap();
         assert_eq!(previous(r.path(), "DPU1"), None);
-        assert!(log.logged(log::Level::Error,
-            "DPU1: Failed to read previous-reboot-cause.json: not valid JSON"));
+        assert!(log.logged(
+            log::Level::Error,
+            "DPU1: Failed to read previous-reboot-cause.json: not valid JSON"
+        ));
     }
 
     /// A write that cannot land leaves what was there and no temporary file.
@@ -945,7 +1177,10 @@ mod tests {
         std::fs::create_dir_all(target.join("occupied")).unwrap();
         assert!(atomic_write(&target, b"{}").is_err());
         assert!(with_suffix(&target, ".tmp").symlink_metadata().is_err());
-        assert!(target.join("occupied").exists(), "what was there is untouched");
+        assert!(
+            target.join("occupied").exists(),
+            "what was there is untouched"
+        );
     }
 
     /// A temporary link left by a replacement that was cut off is cleared
@@ -956,7 +1191,10 @@ mod tests {
         let link = d.path().join("previous-reboot-cause.json");
         std::os::unix::fs::symlink("gone", with_suffix(&link, ".tmp")).unwrap();
         atomic_replace_symlink(Path::new("history/a.json"), &link).unwrap();
-        assert_eq!(std::fs::read_link(&link).unwrap(), Path::new("history/a.json"));
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            Path::new("history/a.json")
+        );
         assert!(with_suffix(&link, ".tmp").symlink_metadata().is_err());
     }
 
@@ -980,8 +1218,15 @@ mod tests {
         let r = d.path().join("not-a-dir");
         std::fs::write(&r, "").unwrap();
         let t = MockTable::new();
-        boot_id_update(&r, "DPU0", "b-2", &mut dpu(answered("Watchdog", "x")), &t,
-                       "2026_09_20_04_06_29", fixed);
+        boot_id_update(
+            &r,
+            "DPU0",
+            "b-2",
+            &mut dpu(answered("Watchdog", "x")),
+            &t,
+            "2026_09_20_04_06_29",
+            fixed,
+        );
         assert!(t.is_empty());
         assert!(log.logged(log::Level::Error, "Failed to persist reboot cause for DPU0"));
     }

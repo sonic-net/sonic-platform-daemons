@@ -88,7 +88,10 @@ pub fn should_apply(machine: Machine, key: &str) -> bool {
     if machine.accepts(key) {
         return true;
     }
-    log::error!("Incorrect module-name {key}. Should start with {}", machine.expected());
+    log::error!(
+        "Incorrect module-name {key}. Should start with {}",
+        machine.expected()
+    );
     false
 }
 
@@ -99,7 +102,10 @@ mod tests {
     /// On a chassis the row *is* the shutdown.
     #[test]
     fn a_chassis_reads_the_rows_existence_as_the_shutdown() {
-        assert!(!admin_state_for(Machine::Chassis, Event::Set { admin_status: None }));
+        assert!(!admin_state_for(
+            Machine::Chassis,
+            Event::Set { admin_status: None }
+        ));
         assert!(admin_state_for(Machine::Chassis, Event::Del));
     }
 
@@ -108,15 +114,33 @@ mod tests {
     /// modules shutdown` a no-op on a card somebody had previously started.
     #[test]
     fn a_chassis_ignores_the_admin_status_field() {
-        assert!(!admin_state_for(Machine::Chassis, Event::Set { admin_status: Some("up") }));
+        assert!(!admin_state_for(
+            Machine::Chassis,
+            Event::Set {
+                admin_status: Some("up")
+            }
+        ));
     }
 
     /// On a SmartSwitch the field is the statement and the row is not.
     #[test]
     fn a_smartswitch_reads_the_field() {
-        assert!(admin_state_for(Machine::SmartSwitch, Event::Set { admin_status: Some("up") }));
-        assert!(!admin_state_for(Machine::SmartSwitch, Event::Set { admin_status: Some("down") }));
-        assert!(!admin_state_for(Machine::SmartSwitch, Event::Set { admin_status: None }));
+        assert!(admin_state_for(
+            Machine::SmartSwitch,
+            Event::Set {
+                admin_status: Some("up")
+            }
+        ));
+        assert!(!admin_state_for(
+            Machine::SmartSwitch,
+            Event::Set {
+                admin_status: Some("down")
+            }
+        ));
+        assert!(!admin_state_for(
+            Machine::SmartSwitch,
+            Event::Set { admin_status: None }
+        ));
     }
 
     /// And a removed row is down, not up: the two machines are opposite here,

@@ -134,8 +134,18 @@ impl ModuleUpdater {
             let replaceable = fmt::opt_str(&m.replaceable_text);
             let fvs = [
                 (DESC_FIELD, fmt::opt_str(&m.description)),
-                (SLOT_FIELD, fmt::opt_str(&m.slot_text)),
-                (OPERSTATUS_FIELD, fmt::opt_str(&m.oper_status_text)),
+                (
+                    SLOT_FIELD,
+                    m.slot_text
+                        .clone()
+                        .unwrap_or_else(|| INVALID_SLOT.to_string()),
+                ),
+                (
+                    OPERSTATUS_FIELD,
+                    m.oper_status_text
+                        .clone()
+                        .unwrap_or_else(|| ModuleStatus::Offline.as_str().to_string()),
+                ),
                 (NUM_ASICS_FIELD, module_asics.len().to_string()),
                 (SERIAL_FIELD, serial.clone()),
                 (PRESENCE_FIELD, presence.clone()),
@@ -475,7 +485,10 @@ impl ModuleUpdater {
         }
     }
 
-    /// Remove everything this updater published.
+    /// Remove this daemon's rows; a line card removes only its own ASIC keys.
+    ///
+    /// CHASSIS_ASIC_TABLE is shared by all line cards. Unlike Python's
+    /// ModuleUpdater.deinit, which clears that whole table, retain peer rows.
     ///
     /// Logged, not propagated: the process is already leaving, so there is no
     /// connection left to recover by leaving again.  Logged all the same, so a
@@ -688,6 +701,19 @@ mod tests {
 
     /// An empty slot is not a physical entity.  Leaving the row would have the
     /// entity MIB report a card that has been pulled.
+    #[test]
+    fn a_vendor_presence_value_keeps_its_published_text() {
+        let db = Db::new();
+        let mut m = module("LINE-CARD0", 1, ModuleStatus::Online);
+        m.presence = true;
+        m.presence_text = Some("1".into());
+        supervisor().refresh(&[m], &[], &db.tables()).unwrap();
+        assert_eq!(
+            db.module.field("LINE-CARD0", "presence").as_deref(),
+            Some("1")
+        );
+    }
+
     #[test]
     fn pulling_a_card_removes_its_entity_row() {
         let db = Db::new();
@@ -1051,10 +1077,7 @@ mod tests {
         no_slot.slot = None;
         no_slot.slot_text = None;
         supervisor().refresh(&[no_slot], &[], &db.tables()).unwrap();
-        assert_eq!(
-            db.module.field("LINE-CARD0", "slot").as_deref(),
-            Some("N/A")
-        );
+        assert_eq!(db.module.field("LINE-CARD0", "slot").as_deref(), Some("-1"));
     }
 
     /// The hostname a line card publishes is the key the chassis app DB is
@@ -1590,5 +1613,33 @@ mod tests {
         sup.refresh(&modules, &asics, &db2.tables()).unwrap();
         sup.clear(&modules, &db2.tables());
         assert_eq!(db2.asic.len(), 1);
+    }
+
+    #[test]
+    fn line_card_teardown_preserves_peer_and_similar_prefix_asic_rows() {
+        for (slot, own, peer) in [
+            (1, "LINE-CARD0", "LINE-CARD1"),
+            (2, "LINE-CARD1", "LINE-CARD0"),
+        ] {
+            let db = Db::new();
+            let modules = [module(own, slot, ModuleStatus::Online)];
+            let mut updater = ModuleUpdater::new(slot, 16, Duration::from_secs(180), true);
+            updater
+                .refresh(&modules, &[asic(own, "0", "0000:03:00.0")], &db.tables())
+                .unwrap();
+            let peer_key = format!("{peer}|asic0");
+            let preserved = [&peer_key[..], "LINE-CARD10|asic0", "asic0"];
+            for key in preserved {
+                db.asic.set(key, &[("marker", key.to_string())]).unwrap();
+            }
+
+            updater.clear(&modules, &db.tables());
+
+            assert!(db.asic.get(&format!("{own}|asic0")).unwrap().is_none());
+            assert_eq!(db.asic.len(), preserved.len());
+            for key in preserved {
+                assert_eq!(db.asic.field(key, "marker").as_deref(), Some(key));
+            }
+        }
     }
 }

@@ -1,7 +1,5 @@
 //! Port of ThermalMonitor's polling loop.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
@@ -17,10 +15,6 @@ use crate::temp_updater::TemperatureUpdater;
 use crate::ERR_DB_WRITE;
 
 pub struct Monitor {
-    pub shutdown_sender: Option<Arc<watch::Sender<bool>>>,
-    pub policy_request: Option<Arc<AtomicBool>>,
-    pub policy_stopped: Option<Arc<crate::TmStopped>>,
-    pub policy_interval: Arc<std::sync::atomic::AtomicU64>,
     initial_interval: f64,
     update_interval: f64,
     update_elapsed_threshold: f64,
@@ -30,14 +24,6 @@ pub struct Monitor {
     intervals: PollingIntervals,
     /// Tracks when the fan update was last due.
     fan_gate: PollingGate,
-    /// And when the platform's policy was.
-    ///
-    /// Python runs the policy on a second loop, on the main thread, at the
-    /// interval the manager reports rather than the one the updaters use
-    /// (`thermalctld:ThermalControlDaemon.run`).  One loop here, gated, so a
-    /// policy round waits for the cycle's updates and runs at most once per
-    /// cycle -- but within that, the cadence is the manager's.
-    policy_gate: PollingGate,
     /// On the BMC, the watch over the mirror the switch host pushes.
     bmc_watch: Option<(ChassisThermalWatch, BmcEventLogger)>,
 }
@@ -83,10 +69,6 @@ impl Monitor {
             );
         }
         Self {
-            shutdown_sender: None,
-            policy_request: None,
-            policy_stopped: None,
-            policy_interval: Arc::new(std::sync::atomic::AtomicU64::new(60.0f64.to_bits())),
             initial_interval,
             update_interval,
             update_elapsed_threshold,
@@ -94,21 +76,8 @@ impl Monitor {
             temperature_updater: TemperatureUpdater::new(),
             intervals,
             fan_gate: PollingGate::new(),
-            policy_gate: PollingGate::new(),
             bmc_watch: is_switch_bmc
                 .then(|| (ChassisThermalWatch::new(), BmcEventLogger::new(true))),
-        }
-    }
-
-    pub(crate) fn run_policy(
-        &self,
-        platform: &mut dyn PlatformApi,
-    ) -> Result<(), platform_api::PlatformError> {
-        if let Some(request) = &self.policy_request {
-            request.store(true, Ordering::Release);
-            Ok(())
-        } else {
-            platform.tm_run_policy()
         }
     }
 
@@ -134,17 +103,14 @@ impl Monitor {
     /// populated soon after boot; subsequent waits absorb the cycle's own
     /// duration to keep a steady period.
     ///
-    /// Calls `tm_run_policy()` on each cycle (Mellanox: no-op; other platforms
-    /// may implement fan-speed policy logic here).
+    /// An independent policy worker owns policy scheduling in the daemon.
     ///
     /// The manager is reached through the platform rather than held as an
     /// object: what the base class answers is a class, not an instance, and
     /// two of its methods take the chassis back as an argument. Keeping that
     /// on the Python side is what stops a policy round re-entering Rust.
     ///
-    /// `tm_ready` goes true once the thermal manager has been started, on the
-    /// thread `main::run` put it on.  The updaters below do not wait for it —
-    /// that is the whole point of starting them first — but the policy does.
+    /// Telemetry never calls the policy or waits for its initialization.
     /// Returns the exit code to leave with when STATE_DB went away, and
     /// `None` when the loop ended for any other reason.
     ///
@@ -156,36 +122,18 @@ impl Monitor {
         &mut self,
         platform: &mut dyn PlatformApi,
         db: &StateDb,
-        tm_ready: Arc<AtomicBool>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Option<i32> {
         // `ThermalMonitor`'s own logger, which Python sets to INFO: the two
         // INFO lines thermalctld sends.
         pmon_common::info_logger!("Start thermal monitoring loop");
 
-        // Learned once the manager is up, not here.  Python reads the interval
-        // immediately after `initialize()` and `load()` in
-        // `thermalctld:ThermalControlDaemon.__init__`, so it reads what
-        // thermal_policy.json says; this loop now starts before either (see
-        // `main::run`), and reading at this point would get the base-class
-        // default instead.
-        let mut policy_interval: Option<f64> = None;
-
-        // Where the policy gate gets seeded from once the interval is known.
-        //
-        // A manager that was already up when the loop started is Python with
-        // `initialize()` returning at once: its policy loop begins waiting
-        // when the daemon starts, so the gate has to be seeded from here or
-        // the first policy round slips by a whole cycle.  A manager that comes
-        // up later is Python with `initialize()` blocked -- its policy loop
-        // has not started waiting yet -- and the gate is seeded from the cycle
-        // that first saw it up, further down.
-        let started_ready = tm_ready.load(Ordering::Acquire);
-        let loop_start = Instant::now();
-
         let mut wait_time = self.initial_interval;
 
         loop {
+            if *shutdown.borrow() {
+                break;
+            }
             tokio::select! {
                 _ = shutdown.changed() => break,
                 _ = tokio::time::sleep(Duration::from_secs_f64(wait_time)) => {}
@@ -237,58 +185,6 @@ impl Monitor {
                 watch.check(&rows, events);
             }
 
-            // Platform-specific fan-speed policy (Mellanox: no-op), on the
-            // manager's own cadence rather than this loop's.
-            //
-            // Not before the manager is up.  `tm_initialize()` runs on its own
-            // thread now, and a policy round against a half-started manager is
-            // a call Python never makes: there the policy loop *is* the main
-            // thread, which has already returned from `initialize()`.
-            if tm_ready.load(Ordering::Acquire) {
-                match policy_interval {
-                    // First cycle with a manager: learn the cadence and seed
-                    // the gate.  Python's policy loop waits a full interval
-                    // before its first run, where the updaters go after the
-                    // short initial one; seeding rather than firing is what
-                    // reproduces that.  60 is the base class default, and what
-                    // a platform whose thermal_policy.json omits the key gets.
-                    None => {
-                        let v = if self.policy_request.is_some() {
-                            f64::from_bits(self.policy_interval.load(Ordering::Acquire))
-                        } else {
-                            platform.tm_get_interval().ok().flatten().unwrap_or(60.0)
-                        };
-                        let v = if v.is_finite() && v >= 0.0 && v <= u32::MAX as f64 {
-                            v
-                        } else {
-                            log::warn!("Invalid thermal policy interval {v}; using 60 seconds");
-                            60.0
-                        };
-                        self.policy_gate.is_due(
-                            "policy",
-                            Some(v),
-                            if started_ready { loop_start } else { begin },
-                        );
-                        policy_interval = Some(v);
-                        // Seeded, then asked: a zero interval is due on the
-                        // cycle it was seeded from, and Python runs it there
-                        // too -- `stop_event.wait(0)` returns at once.
-                        if self.policy_gate.is_due("policy", Some(v), begin) {
-                            if let Err(e) = self.run_policy(platform) {
-                                log::warn!("run_policy failed: {e}");
-                            }
-                        }
-                    }
-                    Some(v) => {
-                        if self.policy_gate.is_due("policy", Some(v), begin) {
-                            if let Err(e) = self.run_policy(platform) {
-                                log::warn!("run_policy failed: {e}");
-                            }
-                        }
-                    }
-                }
-            }
-
             let elapsed = begin.elapsed().as_secs_f64();
             // The fallback is not clamped to `update_interval`, though
             // `resolve` may have shrunk that below `initial_interval`; see
@@ -324,9 +220,7 @@ mod tests {
 
     use crate::db::mock::MockDb;
 
-    /// What each cycle did, in order.  The platform and the thermal manager
-    /// share it, which is the only way to see that the policy runs *after* the
-    /// two updaters rather than merely the same number of times.
+    /// What each telemetry cycle did, in order.
     type Log = Arc<Mutex<Vec<&'static str>>>;
 
     struct FakePlatform {
@@ -339,12 +233,6 @@ mod tests {
         fail_thermals: bool,
         /// Report one named drawer, so the fan pass has a row to write.
         one_drawer: bool,
-        /// The policy is reached through the platform now, so what used to be
-        /// a separate fake manager lives here.
-        fail_policy: bool,
-        /// What `tm_get_interval()` reports; the policy runs on this, not on
-        /// the monitor's update interval.
-        policy_interval: f64,
     }
 
     impl PlatformApi for FakePlatform {
@@ -411,15 +299,11 @@ mod tests {
         }
 
         fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
-            Ok(Some(self.policy_interval))
+            panic!("the telemetry handle must not read policy intervals")
         }
 
         fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
-            self.log.lock().unwrap().push("policy");
-            if self.fail_policy {
-                return Err(PlatformError::Backend("policy failed".into()));
-            }
-            Ok(())
+            panic!("the telemetry handle must not execute policy")
         }
     }
 
@@ -427,31 +311,6 @@ mod tests {
         platform: FakePlatform,
         log: Log,
         rx: watch::Receiver<bool>,
-    }
-
-    #[tokio::test]
-    async fn invalid_vendor_intervals_do_not_abort_monitoring() {
-        tokio::time::pause();
-        for interval in [f64::NAN, f64::INFINITY, -1.0, f64::MAX] {
-            let mut rig = rig(2);
-            rig.platform.policy_interval = interval;
-            let db = MockDb::new(false);
-            let mut monitor =
-                Monitor::with_env(1.0, 10.0, 30.0, PollingIntervals::default(), false);
-            assert_eq!(
-                monitor
-                    .run(&mut rig.platform, &db.db, ready(), rig.rx)
-                    .await,
-                None
-            );
-            assert!(rig.log.lock().unwrap().contains(&"thermals"));
-        }
-    }
-
-    /// A manager that is already up, which is what every test below but the
-    /// two about the flag itself is about.
-    fn ready() -> Arc<AtomicBool> {
-        Arc::new(AtomicBool::new(true))
     }
 
     fn rig(stop_after: usize) -> Rig {
@@ -466,11 +325,6 @@ mod tests {
                 fail_fans: false,
                 fail_thermals: false,
                 one_drawer: false,
-                fail_policy: false,
-                // Zero means due every cycle.  `PollingGate` measures in real
-                // time, which `start_paused` does not advance, so a non-zero
-                // interval here would never come due.
-                policy_interval: 0.0,
             },
             log,
             rx,
@@ -491,20 +345,16 @@ mod tests {
 
     // ── Ordering ──────────────────────────────────────────────────────────
 
-    /// Fans, then temperatures, then the platform's policy — every cycle.
-    /// Python runs them in that order and the policy is what a vendor hangs
-    /// fan-speed control off, so it must see the readings this cycle took.
+    /// Telemetry updates fans before temperatures and never runs policy.
     #[tokio::test(start_paused = true)]
-    async fn each_cycle_updates_fans_then_temperatures_then_runs_the_policy() {
+    async fn each_cycle_updates_fans_then_temperatures_without_running_policy() {
         let mut r = rig(2);
         let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
 
         assert_eq!(
             *r.log.lock().unwrap(),
-            ["fans", "thermals", "policy", "fans", "thermals", "policy"]
+            ["fans", "thermals", "fans", "thermals"]
         );
     }
 
@@ -519,13 +369,13 @@ mod tests {
         let mut r = rig(3);
         let m = MockDb::new(false);
         monitor(3600.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
+            .run(&mut r.platform, &m.db, r.rx.clone())
             .await;
 
         let log = r.log.lock().unwrap();
         assert_eq!(log.iter().filter(|e| **e == "fans").count(), 1);
         assert_eq!(log.iter().filter(|e| **e == "thermals").count(), 3);
-        assert_eq!(log.iter().filter(|e| **e == "policy").count(), 3);
+        assert_eq!(log.iter().filter(|e| **e == "policy").count(), 0);
     }
 
     // ── Wait arithmetic ───────────────────────────────────────────────────
@@ -538,9 +388,7 @@ mod tests {
         let start = tokio::time::Instant::now();
         let mut r = rig(1);
         let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
         let one = start.elapsed().as_secs_f64();
         assert!(
             (one - 1.0).abs() < 0.5,
@@ -550,9 +398,7 @@ mod tests {
         let start = tokio::time::Instant::now();
         let mut r = rig(3);
         let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
         let three = start.elapsed().as_secs_f64();
         // 1 (initial) + 10 + 10, the cycles themselves taking no time.
         assert!(
@@ -571,13 +417,11 @@ mod tests {
         let mut r = rig(2);
         r.platform.fail_fans = true;
         let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
 
         let log = r.log.lock().unwrap();
         assert_eq!(log.iter().filter(|e| **e == "thermals").count(), 2);
-        assert_eq!(log.iter().filter(|e| **e == "policy").count(), 2);
+        assert_eq!(log.iter().filter(|e| **e == "policy").count(), 0);
     }
 
     /// A STATE_DB that will not take the fan pass's write is different: that
@@ -589,9 +433,7 @@ mod tests {
         r.platform.one_drawer = true;
         let m = MockDb::new(false);
         m.physical_entity.fail_writes("redis is gone");
-        let code = monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        let code = monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
 
         assert_eq!(code, Some(crate::ERR_DB_WRITE));
         assert_eq!(
@@ -607,9 +449,7 @@ mod tests {
         let mut r = rig(1);
         r.platform.one_drawer = true;
         let m = MockDb::new(false);
-        let code = monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        let code = monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
         assert_eq!(code, None);
         assert!(m.fan_drawer.row("drawer1").is_some());
     }
@@ -619,9 +459,7 @@ mod tests {
         let mut r = rig(2);
         r.platform.fail_thermals = true;
         let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
+        monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
         assert_eq!(
             r.log
                 .lock()
@@ -629,26 +467,7 @@ mod tests {
                 .iter()
                 .filter(|e| **e == "policy")
                 .count(),
-            2
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_failing_policy_does_not_stop_the_loop() {
-        let mut r = rig(2);
-        r.platform.fail_policy = true;
-        let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
-        assert_eq!(
-            r.log
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|e| **e == "thermals")
-                .count(),
-            2
+            0
         );
     }
 
@@ -662,7 +481,7 @@ mod tests {
         tx.send(true).unwrap();
         let mut r = rig(99);
         let m = MockDb::new(false);
-        monitor(0.0).run(&mut r.platform, &m.db, ready(), rx).await;
+        monitor(0.0).run(&mut r.platform, &m.db, rx).await;
         assert!(r.log.lock().unwrap().is_empty());
     }
 
@@ -677,7 +496,7 @@ mod tests {
             let mut r = rig(2);
             let m = MockDb::new(false);
             Monitor::with_env(1.0, 10.0, 30.0, PollingIntervals::default(), is_bmc)
-                .run(&mut r.platform, &m.db, ready(), r.rx.clone())
+                .run(&mut r.platform, &m.db, r.rx.clone())
                 .await;
             assert_eq!(m.temperature.scans(), expected, "is_switch_bmc = {is_bmc}");
         }
@@ -748,7 +567,7 @@ mod tests {
         // threshold; the fallback is the 5 s initial interval.
         let start = tokio::time::Instant::now();
         Monitor::with_env(5.0, 0.010, 0.005, PollingIntervals::default(), false)
-            .run(&mut slow, &m.db, ready(), r.rx.clone())
+            .run(&mut slow, &m.db, r.rx.clone())
             .await;
         let waited = start.elapsed().as_secs_f64();
 
@@ -761,51 +580,11 @@ mod tests {
         );
         assert_eq!(
             *r.log.lock().unwrap(),
-            ["fans", "thermals", "policy", "fans", "thermals", "policy"]
+            ["fans", "thermals", "fans", "thermals"]
         );
     }
 
     // ── The policy's own cadence ──────────────────────────────────────────
-
-    /// The policy runs at the interval its manager reports, not at the one the
-    /// fan and temperature updaters use.  Python keeps them apart by running
-    /// the policy on a second loop on the main thread; folding it into this one
-    /// is only correct while the cadence is still the manager's.
-    #[tokio::test(start_paused = true)]
-    async fn the_policy_runs_on_its_own_interval_and_not_the_monitors() {
-        let mut r = rig(3);
-        r.platform.policy_interval = 3600.0;
-        let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
-
-        let log = r.log.lock().unwrap();
-        assert_eq!(log.iter().filter(|e| **e == "thermals").count(), 3);
-        assert_eq!(
-            log.iter().filter(|e| **e == "policy").count(),
-            0,
-            "an hour has not passed: {log:?}"
-        );
-    }
-
-    /// Python waits a full policy interval before the first run, where the
-    /// updaters go after the short initial one.  A policy that ran on the first
-    /// cycle would act on readings the box has only just started producing.
-    #[tokio::test(start_paused = true)]
-    async fn the_first_cycle_does_not_run_the_policy() {
-        let mut r = rig(1);
-        r.platform.policy_interval = 3600.0;
-        let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, ready(), r.rx.clone())
-            .await;
-        assert_eq!(
-            *r.log.lock().unwrap(),
-            ["fans", "thermals"],
-            "no policy on cycle 1"
-        );
-    }
 
     /// The updaters do not wait for the thermal manager.  This is the whole
     /// reason `tm_initialize()` was moved off this path: on SPC1 it sits in
@@ -817,10 +596,7 @@ mod tests {
     async fn the_updaters_do_not_wait_for_the_thermal_manager() {
         let mut r = rig(2);
         let m = MockDb::new(false);
-        let not_yet = Arc::new(AtomicBool::new(false));
-        monitor(0.0)
-            .run(&mut r.platform, &m.db, Arc::clone(&not_yet), r.rx.clone())
-            .await;
+        monitor(0.0).run(&mut r.platform, &m.db, r.rx.clone()).await;
 
         let log = r.log.lock().unwrap();
         assert_eq!(log.iter().filter(|e| **e == "fans").count(), 2);
@@ -831,144 +607,5 @@ mod tests {
             "a policy round against a manager that has not started is a call \
              Python never makes: {log:?}"
         );
-    }
-
-    /// And the policy starts once it is up, not before and not late.  The
-    /// interval is read at that point rather than at loop start, because that
-    /// is where Python reads it -- right after `initialize()` and `load()` --
-    /// and reading earlier would get the base-class default instead of what
-    /// thermal_policy.json says.
-    #[tokio::test(start_paused = true)]
-    async fn the_policy_starts_once_the_manager_is_up() {
-        /// Announces the manager partway through, as the init thread does.
-        struct LateManager {
-            inner: FakePlatform,
-            ready: Arc<AtomicBool>,
-            cycles: usize,
-        }
-        impl PlatformApi for LateManager {
-            fn get_chassis_info(
-                &mut self,
-                cols: ChassisInfoCols,
-            ) -> Result<ChassisInfo, PlatformError> {
-                self.inner.get_chassis_info(cols)
-            }
-            fn get_thermals(
-                &mut self,
-                cols: ThermalInfoCols,
-                skip: &[DeviceKey],
-            ) -> Result<Vec<ThermalInfo>, PlatformError> {
-                self.cycles += 1;
-                // Up from the third cycle on.
-                if self.cycles == 3 {
-                    self.ready.store(true, Ordering::Release);
-                }
-                self.inner.get_thermals(cols, skip)
-            }
-            fn get_fan_drawers(
-                &mut self,
-                cols: FanDrawerInfoCols,
-            ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
-                self.inner.get_fan_drawers(cols)
-            }
-            fn get_fans(
-                &mut self,
-                cols: FanInfoCols,
-                absorb: bool,
-            ) -> Result<Vec<FanInfo>, PlatformError> {
-                self.inner.get_fans(cols, absorb)
-            }
-            fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
-                self.inner.tm_get_interval()
-            }
-            fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
-                self.inner.tm_run_policy()
-            }
-        }
-
-        let mut r = rig(5);
-        // Due every cycle once the gate has been seeded, so the count shows
-        // exactly which cycles were allowed to run it.
-        r.platform.policy_interval = 0.0;
-        let log = r.log.clone();
-        let not_yet = Arc::new(AtomicBool::new(false));
-        let mut late = LateManager {
-            inner: r.platform,
-            ready: Arc::clone(&not_yet),
-            cycles: 0,
-        };
-        let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut late, &m.db, not_yet, r.rx.clone())
-            .await;
-
-        let log = log.lock().unwrap();
-        assert_eq!(
-            log.iter().filter(|e| **e == "thermals").count(),
-            5,
-            "{log:?}"
-        );
-        assert_eq!(
-            log.iter().filter(|e| **e == "policy").count(),
-            3,
-            "cycles 1-2 had no manager, 3 seeds and -- at a zero interval -- \
-             also runs, then 4 and 5: {log:?}"
-        );
-    }
-
-    /// The default is 60 seconds — `ThermalManagerBase._interval`, which is
-    /// what a platform whose `thermal_policy.json` omits the key gets, and
-    /// every Mellanox file omits it.
-    ///
-    /// The default used to live on the manager object. It lives in the monitor
-    /// now, because a platform that has no manager at all answers None rather
-    /// than an interval, and the loop still needs a period to gate on.
-    #[tokio::test(start_paused = true)]
-    async fn a_platform_with_no_policy_interval_gets_pythons_default() {
-        struct Silent(FakePlatform);
-        impl PlatformApi for Silent {
-            fn get_chassis_info(
-                &mut self,
-                cols: ChassisInfoCols,
-            ) -> Result<ChassisInfo, PlatformError> {
-                self.0.get_chassis_info(cols)
-            }
-            fn get_thermals(
-                &mut self,
-                cols: ThermalInfoCols,
-                skip: &[DeviceKey],
-            ) -> Result<Vec<ThermalInfo>, PlatformError> {
-                self.0.get_thermals(cols, skip)
-            }
-            fn get_fan_drawers(
-                &mut self,
-                cols: FanDrawerInfoCols,
-            ) -> Result<Vec<FanDrawerInfo>, PlatformError> {
-                self.0.get_fan_drawers(cols)
-            }
-            fn get_fans(
-                &mut self,
-                cols: FanInfoCols,
-                absorb: bool,
-            ) -> Result<Vec<FanInfo>, PlatformError> {
-                self.0.get_fans(cols, absorb)
-            }
-            fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
-                self.0.tm_run_policy()
-            }
-            // tm_get_interval is left to the trait's default, which answers
-            // None -- a platform with no thermal manager.
-        }
-
-        let r = rig(1);
-        let log = r.log.clone();
-        let mut silent = Silent(r.platform);
-        let m = MockDb::new(false);
-        monitor(0.0)
-            .run(&mut silent, &m.db, ready(), r.rx.clone())
-            .await;
-
-        // 60 s has not passed in one cycle, so the policy has not run.
-        assert_eq!(*log.lock().unwrap(), ["fans", "thermals"]);
     }
 }

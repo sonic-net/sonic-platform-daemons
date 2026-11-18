@@ -18,6 +18,7 @@ import os
 import signal
 import threading
 import time
+from unittest import mock
 
 H = None
 TD = None
@@ -289,7 +290,17 @@ def absent_psu():
     return build, [('fan',), ('temp', 0), ('call', insert), ('fan',), ('temp', 1)], NO_INTERVALS
 
 
-SCENARIOS = [healthy, unnamed_devices, thermal_raises, fan_raises, absent_fan_raises,
+def a_failed_drawer_led_does_not_hide_the_healthy_drawer():
+    def build():
+        broken = drawer(0, [fan('fan1')], 'drawer1')
+        good = drawer(1, [fan('fan2')], 'drawer2')
+        broken.get_status_led = _raising('get_status_led').__get__(broken)
+        return chassis(drawers=[broken, good])
+    return build, [('fan',), ('fan',)], NO_INTERVALS
+
+
+SCENARIOS = [a_failed_drawer_led_does_not_hide_the_healthy_drawer,
+             healthy, unnamed_devices, thermal_raises, fan_raises, absent_fan_raises,
              virtual_and_unnamed_drawers, fan_states, temperature_states, integer_readings, temperature_unreadable, polling_intervals,
              pdb_without_presence, absent_psu]
 
@@ -421,27 +432,30 @@ def stop_while_starting_python():
             pass
         daemon.deinit()
 
-    t = threading.Thread(target=main)
-    t.start()
-    if not waiting.wait(PROMPT):
-        raise AssertionError("the thermal manager never started waiting")
-    deadline = time.monotonic() + PROMPT
-    while not _published():
-        if time.monotonic() > deadline:
-            raise AssertionError('the first pass never published')
-        time.sleep(0.01)
+    # The Rust half passes PollingIntervals::default(). Keep the Python
+    # half independent of the DUT's real platform.json for the same input.
+    with mock.patch.object(TD, '_parse_platform_json_polling_intervals', return_value={}):
+        t = threading.Thread(target=main)
+        t.start()
+        if not waiting.wait(PROMPT):
+            raise AssertionError("the thermal manager never started waiting")
+        deadline = time.monotonic() + PROMPT
+        while not _published():
+            if time.monotonic() > deadline:
+                raise AssertionError('the first pass never published')
+            time.sleep(0.01)
 
-    begin = time.monotonic()
-    H.deliver(signal.SIGTERM)
-    t.join(VENDOR_WAIT * 2)
-    if t.is_alive():
-        raise AssertionError('Python thermalctld did not stop')
-    # The process exiting: the interpreter lets go of its signal handlers,
-    # and with them of the daemon, whose updaters' destructors clear its rows
-    # (`thermalctld:FanUpdater.__del__`, `thermalctld:TemperatureUpdater.__del__`).
-    H.reset_signals()
-    gc.collect()
-    return time.monotonic() - begin
+        begin = time.monotonic()
+        H.deliver(signal.SIGTERM)
+        t.join(VENDOR_WAIT * 2)
+        if t.is_alive():
+            raise AssertionError('Python thermalctld did not stop')
+        # The process exiting: the interpreter lets go of its signal handlers,
+        # and with them of the daemon, whose updaters' destructors clear its rows
+        # (`thermalctld:FanUpdater.__del__`, `thermalctld:TemperatureUpdater.__del__`).
+        H.reset_signals()
+        gc.collect()
+        return time.monotonic() - begin
 
 
 def stop_while_starting_rust():
@@ -458,55 +472,3 @@ def stop_while_starting_rust():
     c, watch, waiting = vendor_platform()
     H.use_chassis(c, watch)
     return waiting
-
-
-def leak_system_status(case):
-    """Run the current Python leak updater for the Rust state regressions."""
-    H.reset()
-
-    class Profile:
-        def get_type(self): return 'p'
-        def get_leak_max_minor_duration_sec(self): return 0 if case == 'zero_limit' else 10
-
-    class Sensor:
-        def __init__(self, name, severity):
-            self.name, self.severity, self.failed = name, severity, False
-        def get_name(self): return self.name
-        def is_leak_sensor_ok(self): return True
-        def is_leak(self):
-            if self.failed: raise IOError('sensor unavailable')
-            return True
-        def get_leak_severity(self): return self.severity
-        def get_leak_profile(self): return Profile()
-        def get_leak_sensor_type(self): return 'leak'
-        def get_leak_sensor_location(self): return 'rack'
-
-    critical = case in ('restart', 'read_failure')
-    sensors = [Sensor('a', TD.LeakSeverity.CRITICAL if critical else TD.LeakSeverity.MINOR)]
-    if case == 'two_minor': sensors.append(Sensor('b', TD.LeakSeverity.MINOR))
-
-    class Cooling:
-        leakage_sensors = sensors
-        def get_all_profiles(self): return [Profile()]
-        def get_major_leak_num_min_sensors(self): return 2
-
-    class Chassis:
-        def get_liquid_cooling(self): return Cooling()
-
-    updater = TD.LiquidCoolingUpdater(Chassis(), 0.001)
-    ALIVE.append(updater)
-    updater.update()
-    if case == 'restart':
-        sensors[0].severity = TD.LeakSeverity.MINOR
-        updater = TD.LiquidCoolingUpdater(Chassis(), 0.001)
-        ALIVE.append(updater)
-        updater.update()
-    elif case == 'read_failure':
-        sensors[0].failed = True
-        try:
-            updater.update()
-        except IOError:
-            pass
-    found, fields = updater.system_table.get('system')
-    assert found
-    return dict(fields)['device_leak_status']
