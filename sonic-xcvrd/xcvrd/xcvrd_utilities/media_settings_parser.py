@@ -333,7 +333,7 @@ def get_lane_speed_key(physical_port, port_speed, lane_count):
         Refer to Table 4-5 of SFF-8024 for different kinds of host electrical interfaces.
     """
     device = common.get_port_device(physical_port)
-    api = device.get_xcvr_api() if device is not None else None
+    api = device.get_xcvr_api()
     
     lane_speed_key = None
     if common.is_cmis_api(api):
@@ -371,7 +371,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
 
     try:
         device = common.get_port_device(physical_port)
-        api = device.get_xcvr_api() if device is not None else None
+        api = device.get_xcvr_api()
         if common.is_cmis_api(api):
             media_compliance_code = media_compliance_dict_str
         else:
@@ -392,7 +392,7 @@ def get_media_settings_key(physical_port, transceiver_dict, port_speed, lane_cou
     if len(media_compliance_code) != 0:
         media_key += '-' + media_compliance_code
         device = common.get_port_device(physical_port)
-        api = device.get_xcvr_api() if device is not None else None
+        api = device.get_xcvr_api()
         if common.is_cmis_api(api):
             if media_compliance_code == "passive_copper_media_interface":
                 if media_len != 0:

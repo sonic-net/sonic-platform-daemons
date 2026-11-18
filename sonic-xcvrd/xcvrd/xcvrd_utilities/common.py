@@ -297,9 +297,7 @@ def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
     if platform_chassis:
         try:
-            device = get_port_device(physical_port)
-            if device is not None:
-                return device.get_xcvr_api().is_copper()
+            return get_port_device(physical_port).get_xcvr_api().is_copper()
         except (NotImplementedError, AttributeError):
             helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
     return True
@@ -489,10 +487,8 @@ def _wrapper_is_flat_memory(physical_port):
     """Check if transceiver is flat memory"""
     if platform_chassis is not None:
         try:
-            device = get_port_device(physical_port)
-            if device is None:
-                return None
-            api = device.get_xcvr_api()
+            sfp = platform_chassis.get_sfp(physical_port)
+            api = sfp.get_xcvr_api()
             if not api:
                 return True
             return api.is_flat_memory()
@@ -504,10 +500,8 @@ def _wrapper_get_transceiver_firmware_info(physical_port):
     """Get transceiver firmware info"""
     if platform_chassis is not None:
         try:
-            device = get_port_device(physical_port)
-            if device is not None:
-                return device.get_transceiver_info_firmware_versions()
-        except (NotImplementedError, AttributeError):
+            return platform_chassis.get_sfp(physical_port).get_transceiver_info_firmware_versions()
+        except NotImplementedError:
             pass
     return {}
 
@@ -515,10 +509,8 @@ def _wrapper_get_transceiver_pm(physical_port):
     """Get transceiver PM info"""
     if platform_chassis is not None:
         try:
-            device = get_port_device(physical_port)
-            if device is not None:
-                return device.get_transceiver_pm()
-        except (NotImplementedError, AttributeError):
+            return platform_chassis.get_sfp(physical_port).get_transceiver_pm()
+        except NotImplementedError:
             pass
     return {}
 
