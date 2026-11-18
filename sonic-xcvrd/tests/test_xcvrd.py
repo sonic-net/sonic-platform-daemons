@@ -1636,9 +1636,14 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api')
-    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
+    @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
+    def test_get_media_settings_key(self, mock_common_chassis, mock_is_cmis_api, mock_chassis):
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        # The parser resolves the port through common.get_port_device(), which
+        # asks for a CPO port first. This one is pluggable.
+        mock_common_chassis.get_cpo = MagicMock(return_value=None)
+        mock_common_chassis.get_sfp = MagicMock(return_value=mock_sfp)
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
         mock_is_cmis_api.return_value = False
@@ -1878,6 +1883,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_is_copper_exception(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_sfp = MagicMock()
         mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
         result = common.is_copper(0)
@@ -2872,6 +2879,12 @@ class TestXcvrdScript(object):
         for expected in ('CmisManagerTask', 'DomInfoUpdateTask', 'SfpStateUpdateTask',
                          'CpoManagerTask', 'CpoDomInfoUpdateTask', 'CpoStateUpdateTask'):
             assert expected in names
+
+        # Each task covers only its own kind of port
+        for name, ports in (('DomInfoUpdateTask', {1}), ('SfpStateUpdateTask', {1}),
+                            ('CpoDomInfoUpdateTask', {2}), ('CpoStateUpdateTask', {2})):
+            task = next(t for t in xcvrd.threads if t.name == name)
+            assert set(task.port_obj_dict) == ports, name
 
     def test_CmisManagerTask_on_port_update_event_without_index(self):
         port_mapping = PortMapping()
@@ -4464,6 +4477,77 @@ class TestXcvrdScript(object):
         task.post_port_active_apsel_to_db(mock_xcvr_api, lport, host_lanes_mask)
         assert mock_field_value_pairs.call_count == 0
 
+    def test_CmisManagerTask_post_port_info_after_power_up_to_db(self):
+        task = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {1: MagicMock()}, threading.Event())
+        lport = "Ethernet0"
+        mock_xcvr_api = MagicMock()
+        int_tbl = MagicMock()
+        int_tbl.get = MagicMock(return_value=(True, [('serial', 'SN1')]))
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
+
+        # Case: the field is not in TRANSCEIVER_INFO yet, it is added
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(return_value={'oe_sn': 'N/A'})
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.set.call_count == 1
+        assert dict(int_tbl.set.call_args[0][1]) == {'oe_sn': 'N/A'}
+
+        # Case: the field changed since it was posted, only it is written
+        int_tbl.set.reset_mock()
+        int_tbl.get = MagicMock(return_value=(True, [('serial', 'SN1'), ('oe_sn', 'N/A')]))
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(return_value={'oe_sn': 'TSMC-T80K86-09_x4_y27'})
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.set.call_count == 1
+        assert int_tbl.set.call_args[0][0] == lport
+        assert dict(int_tbl.set.call_args[0][1]) == {'oe_sn': 'TSMC-T80K86-09_x4_y27'}
+
+        # Case: the field is unchanged, nothing is written
+        int_tbl.set.reset_mock()
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(return_value={'oe_sn': 'N/A'})
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.set.call_count == 0
+
+        # Case: the xcvr does not implement post power up fields, it is skipped silently
+        int_tbl.get.reset_mock()
+        task.log_error = MagicMock()
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(side_effect=NotImplementedError)
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.get.call_count == 0
+        assert int_tbl.set.call_count == 0
+        task.log_error.assert_not_called()
+
+        # Case: the xcvr has no post power up fields, the table is not touched
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(return_value={})
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.get.call_count == 0
+        assert int_tbl.set.call_count == 0
+
+    def test_CmisManagerTask_post_port_info_after_power_up_to_db_error_cases(self):
+        task = CmisManagerTask(DEFAULT_NAMESPACE, PortMapping(), {1: MagicMock()}, threading.Event())
+        lport = "Ethernet0"
+        mock_xcvr_api = MagicMock()
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(return_value={'oe_sn': 'TSMC-T80K86-09_x4_y27'})
+        task.xcvr_table_helper = XcvrTableHelper(DEFAULT_NAMESPACE)
+
+        # Case: table does not exist
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=None)
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+
+        # Case: lport is not in the table
+        int_tbl = MagicMock()
+        int_tbl.get = MagicMock(return_value=(False, []))
+        task.xcvr_table_helper.get_intf_tbl = MagicMock(return_value=int_tbl)
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.set.call_count == 0
+
+        # Case: reading the xcvr raises, the error is logged and not propagated
+        int_tbl.get = MagicMock(return_value=(True, []))
+        task.log_error = MagicMock()
+        mock_xcvr_api.get_transceiver_info_after_power_up = MagicMock(side_effect=RuntimeError("cdb"))
+        task.post_port_info_after_power_up_to_db(mock_xcvr_api, lport)
+        assert int_tbl.set.call_count == 0
+        assert task.log_error.call_count == 1
+
     def test_CmisManagerTask_post_port_active_apsel_to_db(self):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.get_active_apsel_hostlane = MagicMock(side_effect=[
@@ -4861,8 +4945,13 @@ class TestXcvrdScript(object):
         # Case 5: DP_TXON --> DP_ACTIVATION
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.post_port_active_apsel_to_db = MagicMock()
+        states_at_refresh = []
+        task.post_port_info_after_power_up_to_db = MagicMock(side_effect=lambda api, lport: states_at_refresh.append(
+            common.get_cmis_state_from_state_db(lport, task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id(lport)))))
         task.task_worker()
         assert task.post_port_active_apsel_to_db.call_count == 1
+        # The post power up info is refreshed before the port is moved to READY
+        assert states_at_refresh == [CMIS_STATE_DP_ACTIVATE]
         assert common.get_cmis_state_from_state_db('Ethernet0', task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id('Ethernet0'))) == CMIS_STATE_READY
 
         # Fail test coverage - Module Inserted state failing to reach DP_DEINIT
@@ -5204,11 +5293,16 @@ class TestXcvrdScript(object):
         task.configure_tx_output_power = MagicMock(return_value=1)
         task.configure_laser_frequency = MagicMock(return_value=1)
         task.post_port_active_apsel_to_db = MagicMock()
+        states_at_refresh = []
+        task.post_port_info_after_power_up_to_db = MagicMock(side_effect=lambda api, lport: states_at_refresh.append(
+            common.get_cmis_state_from_state_db(lport, task.xcvr_table_helper.get_status_sw_tbl(task.get_asic_id(lport)))))
 
         task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
         task.task_worker()
 
         assert task.post_port_active_apsel_to_db.call_count == 1
+        # The post power up info is posted before the port is moved to READY
+        assert len(states_at_refresh) == 1 and states_at_refresh[0] != CMIS_STATE_READY
         assert mock_xcvr_api.set_datapath_deinit.call_count == 1
         assert mock_xcvr_api.tx_disable_channel.call_count == 1
         assert dp_deinit_tx_disable_calls == ['set_datapath_deinit', 'tx_disable_channel']
@@ -6425,6 +6519,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd.platform_sfputil')
     def test_wrapper_get_transceiver_info(self, mock_sfputil, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_transceiver_info = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6563,6 +6659,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.platform_sfputil')
     def test_wrapper_get_transceiver_firmware_info(self, mock_sfputil, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_transceiver_dom_real_value = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6652,6 +6750,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_get_transceiver_pm(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_transceiver_pm = MagicMock(return_value=True)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6680,6 +6780,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd.platform_chassis')
     def test_wrapper_get_sfp_type(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.sfp_type = 'QSFP'
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
@@ -6707,6 +6809,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_api = MagicMock()
         mock_api.is_flat_memory = MagicMock(return_value=True)
         mock_object = MagicMock()
@@ -6721,6 +6825,8 @@ class TestXcvrdScript(object):
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
     def test_wrapper_is_flat_memory_no_xcvr_api(self, mock_chassis):
+        # A pluggable port: the CPO lookup tried first finds nothing there.
+        mock_chassis.get_cpo = MagicMock(return_value=None)
         mock_object = MagicMock()
         mock_object.get_xcvr_api = MagicMock(return_value=None)
         mock_chassis.get_sfp = MagicMock(return_value=mock_object)
