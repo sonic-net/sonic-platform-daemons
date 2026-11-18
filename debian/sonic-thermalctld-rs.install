@@ -1,1 +1,1 @@
-target/release/thermalctld-rs usr/bin
+target/release/thermalctld usr/bin

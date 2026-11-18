@@ -157,7 +157,10 @@ mod tests {
             assert!(!l.fail(format_args!("x")));
             assert!(!l.fail_warn(format_args!("x")));
             assert!(!l.fail_notice(format_args!("x")));
-            assert!(l.recover(format_args!("back")), "and recovery still clears it");
+            assert!(
+                l.recover(format_args!("back")),
+                "and recovery still clears it"
+            );
         }
     }
 

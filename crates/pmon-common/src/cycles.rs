@@ -320,9 +320,9 @@ impl SignalSources {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
     use super::*;
     use platform_api::PlatformError;
+    use std::future::Future;
     use tokio::signal::unix::SignalKind;
 
     /// A platform that counts the shutdowns it is told of, and can refuse.
@@ -345,7 +345,14 @@ mod tests {
     fn signal_waiter(code: Option<i32>) -> (Cycles, tokio::sync::watch::Sender<Option<i32>>) {
         let (sender, receiver) = tokio::sync::watch::channel(code);
         let (stop, _) = tokio::sync::watch::channel(false);
-        (Cycles::Signals(Box::new(Signals { receiver, stop, worker: None })), sender)
+        (
+            Cycles::Signals(Box::new(Signals {
+                receiver,
+                stop,
+                worker: None,
+            })),
+            sender,
+        )
     }
 
     #[tokio::test]
@@ -358,9 +365,12 @@ mod tests {
     async fn an_exit_wait_receives_a_signal_after_it_starts() {
         let (mut cycles, sender) = signal_waiter(None);
         let mut waiting = Box::pin(cycles.exit_requested());
-        assert!(std::future::poll_fn(|context| std::task::Poll::Ready(
-            waiting.as_mut().poll(context).is_pending()
-        )).await);
+        assert!(
+            std::future::poll_fn(|context| std::task::Poll::Ready(
+                waiting.as_mut().poll(context).is_pending()
+            ))
+            .await
+        );
         sender.send(Some(130)).unwrap();
         assert_eq!(waiting.await, 130);
     }
@@ -369,17 +379,28 @@ mod tests {
     async fn a_closed_signal_channel_ends_an_exit_wait_with_an_error() {
         let (mut cycles, sender) = signal_waiter(None);
         let mut waiting = Box::pin(cycles.exit_requested());
-        assert!(std::future::poll_fn(|context| std::task::Poll::Ready(
-            waiting.as_mut().poll(context).is_pending()
-        )).await);
+        assert!(
+            std::future::poll_fn(|context| std::task::Poll::Ready(
+                waiting.as_mut().poll(context).is_pending()
+            ))
+            .await
+        );
         drop(sender);
         assert_eq!(waiting.await, 1);
     }
 
     #[tokio::test]
     async fn exhausted_test_cycles_return_their_configured_exit_code() {
-        for mut cycles in [Cycles::Fixed { remaining: 0, code: 143 },
-                           Cycles::Paced { remaining: 0, code: 130 }] {
+        for mut cycles in [
+            Cycles::Fixed {
+                remaining: 0,
+                code: 143,
+            },
+            Cycles::Paced {
+                remaining: 0,
+                code: 130,
+            },
+        ] {
             let expected = match &cycles {
                 Cycles::Fixed { code, .. } | Cycles::Paced { code, .. } => *code,
                 _ => unreachable!(),
@@ -390,18 +411,34 @@ mod tests {
 
     #[tokio::test]
     async fn canceling_an_exit_wait_does_not_consume_a_poll_tick() {
-        for mut cycles in [Cycles::Fixed { remaining: 2, code: 143 },
-                           Cycles::Paced { remaining: 2, code: 143 }] {
+        for mut cycles in [
+            Cycles::Fixed {
+                remaining: 2,
+                code: 143,
+            },
+            Cycles::Paced {
+                remaining: 2,
+                code: 143,
+            },
+        ] {
             let mut waiting = Box::pin(cycles.exit_requested());
-            assert!(std::future::poll_fn(|context| std::task::Poll::Ready(
-                waiting.as_mut().poll(context).is_pending()
-            )).await);
+            assert!(
+                std::future::poll_fn(|context| std::task::Poll::Ready(
+                    waiting.as_mut().poll(context).is_pending()
+                ))
+                .await
+            );
             drop(waiting);
             let mut platform = Told::default();
-            assert_eq!(cycles.next(Duration::ZERO, &mut platform).await, Tick::Cycle);
+            assert_eq!(
+                cycles.next(Duration::ZERO, &mut platform).await,
+                Tick::Cycle
+            );
             assert_eq!(platform.notified, 0);
             match cycles {
-                Cycles::Fixed { remaining, .. } | Cycles::Paced { remaining, .. } => assert_eq!(remaining, 1),
+                Cycles::Fixed { remaining, .. } | Cycles::Paced { remaining, .. } => {
+                    assert_eq!(remaining, 1)
+                }
                 _ => unreachable!(),
             }
         }

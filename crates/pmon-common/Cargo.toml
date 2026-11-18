@@ -14,11 +14,11 @@ chrono = "0.4"
 log    = "0.4"
 syslog = "6.0"
 # The signal handlers and the timer every daemon's loop waits on.
-tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
 
 # The parity harness runs the Python daemon in an embedded interpreter; the
 # same pyo3 the platform API bridge links, so there is one interpreter.
-pyo3 = { version = "0.25", features = ["auto-initialize"], optional = true }
+pyo3 = { version = "0.30", features = ["auto-initialize"], optional = true }
 
 [features]
 # Lets a test drive a daemon's loop with a fixed number of cycles instead of a

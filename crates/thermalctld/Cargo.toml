@@ -10,7 +10,7 @@ repository = "https://github.com/sonic-net/sonic-platform-daemons"
 keywords = ["sonic", "thermal", "networking"]
 
 [[bin]]
-name = "thermalctld-rs"
+name = "thermalctld"
 path = "src/main.rs"
 
 [dependencies]
@@ -26,10 +26,8 @@ pmon-common     = { path = "../pmon-common" }
 # "rt", not "rt-multi-thread": one worker thread is plenty at ~0.4 polls/s, and
 # the thread count is part of what this daemon exists to measure.
 tokio   = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
-# Compatibility cap for release builders still using cargo-auditable 0.6.4,
-# which cannot read edition-2024 metadata. Current master uses 0.7.6 and
-# supports that edition; retain the cap while the older build baseline is supported.
-clap    = { version = ">=4.0, <4.6", features = ["derive"] }
+# Cargo.lock retains the validated graph; current master uses cargo-auditable 0.7.6.
+clap    = { version = "4", features = ["derive"] }
 chrono  = "0.4"
 serde_json = "1"
 log     = "0.4"
@@ -40,11 +38,10 @@ syslog  = "6.0"
 # rather than carried by the shipped binary, as every daemon in the workspace
 # does.
 pmon-common = { path = "../pmon-common", features = ["testing"] }
-# Retain the older dev-dependency graph for the same release-builder compatibility.
 tempfile = ">=3, <3.15"
 # "test-util" gives the tests `tokio::time::pause()`, which makes the polling
 # loop's wait arithmetic observable without any test sleeping.  It is a
-# dev-only feature: the shipped binary keeps the four features above.
+# dev-only feature: the shipped binary keeps the five features above.
 tokio = { version = "1", features = ["test-util"] }
 
 [features]
