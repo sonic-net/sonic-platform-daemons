@@ -1,0 +1,55 @@
+name: Bazel platform-daemons
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Platform-daemons source and installation (AMD64)
+    runs-on: [self-hosted, Linux, X64, debian-trixie-container]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build public installations and run original source suites
+        env:
+          BAZELISK_GITHUB_TOKEN: ""
+        run: |
+          test "$(bazel --version)" = "bazel 8.5.1"
+          test "$(uname -m)" = x86_64
+          test "$(. /etc/os-release; echo "$VERSION_CODENAME")" = trixie
+          bazel build //:daemons.runtime //:daemons.runtime_metadata
+          (
+            cd tests/bazel
+            bazel test \
+              //:chassisd_test //:ledd_test //:pcied_test //:psud_test \
+              //:syseepromd_test //:thermalctld_test //:xcvrd_test //:ycabled_test \
+              //:sensormond_test //:stormond_test //:bmcctld_test //:installed_runtime_test \
+              --local_test_jobs=1
+          )
+          git -c safe.directory="$GITHUB_WORKSPACE" diff --exit-code
+      - name: Collect installation and test evidence
+        if: always()
+        env:
+          BAZELISK_GITHUB_TOKEN: ""
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tests/bazel/collect_evidence.py
+      - name: Upload installation and test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sonic-platform-daemons-amd64
+          path: bazel-evidence
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

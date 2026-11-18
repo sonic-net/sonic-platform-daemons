@@ -21,3 +21,10 @@ test-results.xml
 leddc
 pciedc
 syseepromdc
+
+# Bazel outputs and validation artifacts
+/bazel-*
+/MODULE.bazel.lock
+/bazel-evidence/
+/tests/bazel/bazel-*
+/tests/bazel/MODULE.bazel.lock

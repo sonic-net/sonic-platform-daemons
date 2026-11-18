@@ -1,0 +1,13 @@
+module(name = "sonic-platform-daemons", version = "1.0.0")
+bazel_dep(name = "rules_python", version = "1.9.0.sonic.1")
+bazel_dep(name = "sonic-build-infra", version = "0.0.39-81476192bf2cdb70bb646e85935c5d698b6de8a0", repo_name = "sonic_build_infra")
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.13")
+bazel_dep(name = "grpc", version = "1.71.0")
+bazel_dep(name = "protobuf", version = "29.0")
+
+# BCR repairs the Python extension API without changing the upstream PGV release.
+bazel_dep(name = "protoc-gen-validate", version = "1.2.1.bcr.1")
+# Match the compiler embedded in the original grpcio-tools 1.71.0.
+single_version_override(module_name = "protobuf", version = "29.0")
+bazel_dep(name = "rules_cc", version = "0.2.20")
