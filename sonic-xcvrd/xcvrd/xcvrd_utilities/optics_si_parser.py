@@ -11,6 +11,41 @@ g_optics_si_dict = {}
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = syslogger.SysLogger(SYSLOG_IDENTIFIER, enable_runtime_config=True)
 
+MODULE_PRECODING_KEY = 'ModulePrecoding'
+MODULE_PRECODING_CONTROLS = ('TP1', 'TP4')
+
+
+def split_module_precoding(optics_si_dict):
+    """
+    Separate the ModulePrecoding block from fetched optics SI settings and
+    validate it.
+
+    Args:
+        optics_si_dict: Settings dictionary returned by fetch_optics_si_setting()
+
+    Returns:
+        (si_dict, precoding, error):
+            si_dict: the settings without ModulePrecoding
+            precoding: the ModulePrecoding dictionary, or None if not configured or invalid
+            error: description of an invalid ModulePrecoding value, or None
+    """
+    if not optics_si_dict:
+        return {}, None, None
+    si_dict = {key: value for key, value in optics_si_dict.items() if key != MODULE_PRECODING_KEY}
+    if MODULE_PRECODING_KEY not in optics_si_dict:
+        return si_dict, None, None
+
+    precoding = optics_si_dict[MODULE_PRECODING_KEY]
+    valid = isinstance(precoding, dict) and all(
+        key in MODULE_PRECODING_CONTROLS and isinstance(value, (bool, int)) and value in (0, 1)
+        for key, value in precoding.items())
+    if not valid:
+        error = "invalid {} {} in optics_si_settings.json, expected {} keys with true/false values; " \
+                "ignored".format(MODULE_PRECODING_KEY, precoding, '/'.join(MODULE_PRECODING_CONTROLS))
+        return si_dict, None, error
+    return si_dict, precoding, None
+
+
 def _match_optics_si_key(dict_key, key, vendor_name_str):
     """
     Helper function to match optics SI key using regex patterns or string comparison
