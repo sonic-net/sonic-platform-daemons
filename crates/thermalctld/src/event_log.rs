@@ -47,7 +47,7 @@ impl BmcEventLogger {
             return;
         };
         let line = format!(
-            "{} thermalctld[{}] {level}: {msg}\n",
+            "{} thermalctld.event_log[{}] {level}: {msg}\n",
             crate::fmt::event_timestamp(),
             std::process::id()
         );
@@ -77,7 +77,7 @@ impl EventLogger for BmcEventLogger {
 
     fn notice(&mut self, msg: &str) {
         pmon_common::notice!("{msg}");
-        self.tee("NOTICE", msg);
+        self.tee("INFO", &format!("NOTICE: {msg}"));
     }
 }
 
@@ -105,7 +105,8 @@ mod tests {
         let got = std::fs::read_to_string(&path).unwrap();
         assert_eq!(got.lines().count(), 2, "appended, not truncated");
         assert!(got.contains("ERROR: first"));
-        assert!(got.contains("NOTICE: second"));
+        assert!(got.contains("INFO: NOTICE: second"));
+        assert!(got.contains(" thermalctld.event_log["));
     }
 
     #[test]

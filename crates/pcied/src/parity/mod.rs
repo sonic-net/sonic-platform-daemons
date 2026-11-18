@@ -62,8 +62,9 @@ fn rust_half(
     for step in &steps {
         let kind: String = step.get_item(0).and_then(|k| k.extract()).unwrap();
         if kind == "pass" {
-            if let Err(e) = one_pass(&mut platform, &sysfs, &tables, &mut read) {
-                log::error!("{e}");
+            if let Err((_, error)) = one_pass(&mut platform, &sysfs, &tables, &mut read) {
+                log::error!("{error}");
+                break;
             }
         } else {
             step.get_item(1)

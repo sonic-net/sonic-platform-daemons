@@ -52,7 +52,12 @@ impl TemperatureStatus {
         self.temperature = Some(temperature);
     }
 
-    fn check_available(&self, temperature: Option<Number>, threshold: Option<Number>, current: bool) -> bool {
+    fn check_available(
+        &self,
+        temperature: Option<Number>,
+        threshold: Option<Number>,
+        current: bool,
+    ) -> bool {
         if temperature.is_none() || threshold.is_none() {
             if current {
                 log::warn!(
@@ -67,7 +72,11 @@ impl TemperatureStatus {
         true
     }
 
-    fn set_over_temperature(&mut self, temperature: Option<Number>, threshold: Option<Number>) -> bool {
+    fn set_over_temperature(
+        &mut self,
+        temperature: Option<Number>,
+        threshold: Option<Number>,
+    ) -> bool {
         if !self.check_available(temperature, threshold, self.over_temperature) {
             let old = self.over_temperature;
             self.over_temperature = false;
@@ -81,7 +90,11 @@ impl TemperatureStatus {
         true
     }
 
-    fn set_under_temperature(&mut self, temperature: Option<Number>, threshold: Option<Number>) -> bool {
+    fn set_under_temperature(
+        &mut self,
+        temperature: Option<Number>,
+        threshold: Option<Number>,
+    ) -> bool {
         if !self.check_available(temperature, threshold, self.under_temperature) {
             let old = self.under_temperature;
             self.under_temperature = false;
@@ -196,7 +209,9 @@ impl TemperatureUpdater {
                 return Ok(());
             }
             let seq = {
-                let n = seq_by_parent.entry(thermal.parent_name.clone()).or_insert(0);
+                let n = seq_by_parent
+                    .entry(thermal.parent_name.clone())
+                    .or_insert(0);
                 *n += 1;
                 *n
             };
@@ -257,7 +272,8 @@ impl TemperatureUpdater {
             }
             self.status.remove(stale);
         }
-        self.gate.retain(|name| name == "psu" || available.contains(name));
+        self.gate
+            .retain(|name| name == "psu" || available.contains(name));
         self.known = available;
 
         Ok(())
@@ -395,15 +411,28 @@ fn thermal_due(
 /// `thermalctld:TemperatureUpdater._refresh_temperature_status`, so publishing
 /// thresholds beside an unreadable temperature would be a row Python never
 /// writes.
-fn thermal_row(thermal: &ThermalInfo, temperature: Option<Number>, warning: bool) -> [(&'static str, String); 10] {
+fn thermal_row(
+    thermal: &ThermalInfo,
+    temperature: Option<Number>,
+    warning: bool,
+) -> [(&'static str, String); 10] {
     let na = || fmt::NOT_AVAILABLE.to_string();
     let readable = temperature.is_some();
     let when = |v: String| if readable { v } else { na() };
     [
         ("temperature", fmt::number(temperature)),
-        ("minimum_temperature", when(fmt::number(thermal.min_recorded))),
-        ("maximum_temperature", when(fmt::number(thermal.max_recorded))),
-        ("high_threshold", when(fmt::threshold(thermal.high_threshold))),
+        (
+            "minimum_temperature",
+            when(fmt::number(thermal.min_recorded)),
+        ),
+        (
+            "maximum_temperature",
+            when(fmt::number(thermal.max_recorded)),
+        ),
+        (
+            "high_threshold",
+            when(fmt::threshold(thermal.high_threshold)),
+        ),
         ("low_threshold", when(fmt::threshold(thermal.low_threshold))),
         ("warning_status", fmt::bool(warning)),
         (
@@ -504,7 +533,11 @@ mod tests {
     #[test]
     fn the_thermal_row_has_the_expected_fields_in_order() {
         assert_eq!(
-            keys(&thermal_row(&thermal("ASIC"), Some(Number::Float(45.0)), false)),
+            keys(&thermal_row(
+                &thermal("ASIC"),
+                Some(Number::Float(45.0)),
+                false
+            )),
             [
                 "temperature",
                 "minimum_temperature",
@@ -538,7 +571,11 @@ mod tests {
         assert_eq!(val(&row, "temperature"), "45.0", "a float keeps its point");
         assert_eq!(val(&row, "minimum_temperature"), "40.0");
         assert_eq!(val(&row, "maximum_temperature"), "50.0");
-        assert_eq!(val(&row, "high_threshold"), "105", "an int does not gain one");
+        assert_eq!(
+            val(&row, "high_threshold"),
+            "105",
+            "an int does not gain one"
+        );
         assert_eq!(val(&row, "low_threshold"), "N/A");
         assert_eq!(val(&row, "critical_high_threshold"), "120");
         assert_eq!(val(&row, "critical_low_threshold"), "N/A");
@@ -565,9 +602,21 @@ mod tests {
     #[test]
     fn an_int_threshold_is_not_written_as_a_float() {
         let mut th = thermal("ASIC");
-        assert_eq!(val(&thermal_row(&th, Some(Number::Float(45.0)), false), "high_threshold"), "105");
+        assert_eq!(
+            val(
+                &thermal_row(&th, Some(Number::Float(45.0)), false),
+                "high_threshold"
+            ),
+            "105"
+        );
         th.high_threshold = Some(Threshold::Float(43.0));
-        assert_eq!(val(&thermal_row(&th, Some(Number::Float(45.0)), false), "high_threshold"), "43.0");
+        assert_eq!(
+            val(
+                &thermal_row(&th, Some(Number::Float(45.0)), false),
+                "high_threshold"
+            ),
+            "43.0"
+        );
     }
 
     /// A sensor whose temperature could not be read reports N/A for everything
@@ -586,9 +635,17 @@ mod tests {
             "critical_high_threshold",
             "critical_low_threshold",
         ] {
-            assert_eq!(val(&row, field), "N/A", "{field} should be N/A without a temperature");
+            assert_eq!(
+                val(&row, field),
+                "N/A",
+                "{field} should be N/A without a temperature"
+            );
         }
-        assert_eq!(val(&row, "is_replaceable"), "False", "and the rest is still written");
+        assert_eq!(
+            val(&row, "is_replaceable"),
+            "False",
+            "and the rest is still written"
+        );
         assert_eq!(keys(&row).len(), 10, "the field set does not change");
     }
 
@@ -605,8 +662,20 @@ mod tests {
     #[test]
     fn the_warning_status_comes_from_the_caller_not_the_thresholds() {
         let th = thermal("ASIC");
-        assert_eq!(val(&thermal_row(&th, Some(Number::Float(45.0)), false), "warning_status"), "False");
-        assert_eq!(val(&thermal_row(&th, Some(Number::Float(200.0)), true), "warning_status"), "True");
+        assert_eq!(
+            val(
+                &thermal_row(&th, Some(Number::Float(45.0)), false),
+                "warning_status"
+            ),
+            "False"
+        );
+        assert_eq!(
+            val(
+                &thermal_row(&th, Some(Number::Float(200.0)), true),
+                "warning_status"
+            ),
+            "True"
+        );
     }
 
     // ── The write path, against a dictionary-backed database ──────────────────
@@ -620,7 +689,10 @@ mod tests {
     }
 
     impl platform_api::PlatformApi for FakePlatform {
-        fn get_chassis_info(&mut self, _cols: ChassisInfoCols) -> Result<platform_api::ChassisInfo, platform_api::PlatformError> {
+        fn get_chassis_info(
+            &mut self,
+            _cols: ChassisInfoCols,
+        ) -> Result<platform_api::ChassisInfo, platform_api::PlatformError> {
             Ok(platform_api::ChassisInfo {
                 is_modular_chassis: false,
                 is_smartswitch: false,
@@ -646,14 +718,24 @@ mod tests {
                 })
                 .collect())
         }
-        fn get_fan_drawers(&mut self, _cols: FanDrawerInfoCols) -> Result<Vec<platform_api::FanDrawerInfo>, platform_api::PlatformError> {
+        fn get_fan_drawers(
+            &mut self,
+            _cols: FanDrawerInfoCols,
+        ) -> Result<Vec<platform_api::FanDrawerInfo>, platform_api::PlatformError> {
             Ok(Vec::new())
         }
-        fn get_fans(&mut self, _cols: platform_api::FanInfoCols, _absorb: bool)
-            -> Result<Vec<platform_api::FanInfo>, platform_api::PlatformError> {
+        fn get_fans(
+            &mut self,
+            _cols: platform_api::FanInfoCols,
+            _absorb: bool,
+        ) -> Result<Vec<platform_api::FanInfo>, platform_api::PlatformError> {
             Ok(Vec::new())
         }
-        fn set_fan_led(&mut self, _: &platform_api::DeviceKey, _: platform_api::LedColor) -> Result<Option<bool>, platform_api::PlatformError> {
+        fn set_fan_led(
+            &mut self,
+            _: &platform_api::DeviceKey,
+            _: platform_api::LedColor,
+        ) -> Result<Option<bool>, platform_api::PlatformError> {
             Ok(Some(true))
         }
     }
@@ -666,7 +748,8 @@ mod tests {
         now: Instant,
     ) {
         let mut p = FakePlatform { thermals };
-        u.update(&mut p, &m.db, intervals, now, &never_stop).unwrap();
+        u.update(&mut p, &m.db, intervals, now, &never_stop)
+            .unwrap();
     }
 
     #[test]
@@ -680,7 +763,10 @@ mod tests {
             &PollingIntervals::default(),
             Instant::now(),
         );
-        assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("45.0")
+        );
         assert_eq!(
             m.physical_entity.field("ASIC", "parent_name").as_deref(),
             Some("chassis 1")
@@ -701,7 +787,13 @@ mod tests {
             now,
         );
         assert_eq!(m.temperature.len(), 2);
-        run(&mut u, &m, vec![thermal("ASIC")], &PollingIntervals::default(), now);
+        run(
+            &mut u,
+            &m,
+            vec![thermal("ASIC")],
+            &PollingIntervals::default(),
+            now,
+        );
         assert_eq!(m.temperature.keys(), ["ASIC"]);
     }
 
@@ -719,7 +811,13 @@ mod tests {
             now,
         );
         assert_eq!(m.chassis_temperature.row("ASIC"), m.temperature.row("ASIC"));
-        run(&mut u, &m, vec![thermal("ASIC")], &PollingIntervals::default(), now);
+        run(
+            &mut u,
+            &m,
+            vec![thermal("ASIC")],
+            &PollingIntervals::default(),
+            now,
+        );
         assert_eq!(m.chassis_temperature.keys(), ["ASIC"]);
     }
 
@@ -733,7 +831,10 @@ mod tests {
         let t0 = Instant::now();
 
         run(&mut u, &m, vec![thermal("ASIC")], &intervals, t0);
-        assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("45.0")
+        );
 
         let mut hot = thermal("ASIC");
         hot.temperature = Some(Number::Float(90.0));
@@ -833,7 +934,10 @@ mod tests {
         let t0 = Instant::now();
 
         run(&mut u, &m, vec![thermal("Ambient")], &intervals, t0);
-        assert_eq!(m.temperature.field("Ambient", "temperature").as_deref(), Some("45.0"));
+        assert_eq!(
+            m.temperature.field("Ambient", "temperature").as_deref(),
+            Some("45.0")
+        );
 
         // Ten seconds on: due under the 3 s the ASIC asked for, not due under
         // the 60 s this sensor inherits.
@@ -846,7 +950,10 @@ mod tests {
             &intervals,
             t0 + std::time::Duration::from_secs(10),
         );
-        assert_eq!(m.temperature.field("Ambient", "temperature").as_deref(), Some("45.0"));
+        assert_eq!(
+            m.temperature.field("Ambient", "temperature").as_deref(),
+            Some("45.0")
+        );
     }
 
     /// What decides the interval is the source a thermal came from, not what
@@ -1060,11 +1167,20 @@ mod tests {
     fn an_under_temperature_alarm_tracks_the_low_threshold() {
         let mut st = TemperatureStatus::default();
         // 20 degrees against a low threshold of 25 is under.
-        assert!(st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0))), "entering is a change");
+        assert!(
+            st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0))),
+            "entering is a change"
+        );
         assert!(st.under_temperature);
-        assert!(!st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0))), "staying is not");
+        assert!(
+            !st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0))),
+            "staying is not"
+        );
 
-        assert!(st.set_under_temperature(Some(Number::Float(30.0)), Some(Number::Float(25.0))), "leaving is a change");
+        assert!(
+            st.set_under_temperature(Some(Number::Float(30.0)), Some(Number::Float(25.0))),
+            "leaving is a change"
+        );
         assert!(!st.under_temperature);
     }
 
@@ -1075,7 +1191,10 @@ mod tests {
         let mut st = TemperatureStatus::default();
         st.set_under_temperature(Some(Number::Float(20.0)), Some(Number::Float(25.0)));
         assert!(st.under_temperature);
-        assert!(st.set_under_temperature(Some(Number::Float(20.0)), None), "clearing is a change");
+        assert!(
+            st.set_under_temperature(Some(Number::Float(20.0)), None),
+            "clearing is a change"
+        );
         assert!(!st.under_temperature);
     }
 
@@ -1090,8 +1209,14 @@ mod tests {
             thermals: vec![thermal("ASIC")],
         };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            Instant::now(),
+            &never_stop,
+        )
+        .unwrap();
 
         assert_eq!(remote.field("ASIC", "temperature").as_deref(), Some("45.0"));
         assert_eq!(
@@ -1114,14 +1239,30 @@ mod tests {
         };
         let now = Instant::now();
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
         assert_eq!(remote.len(), 2);
 
         p.thermals.retain(|t| t.name == "ASIC");
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
-        assert_eq!(remote.keys(), vec!["ASIC"], "the PSU sensor is gone from the BMC too");
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            remote.keys(),
+            vec!["ASIC"],
+            "the PSU sensor is gone from the BMC too"
+        );
     }
 
     /// A platform that is not the switch host has no mirror at all, and the
@@ -1133,9 +1274,18 @@ mod tests {
         let mut p = FakePlatform {
             thermals: vec![thermal("ASIC")],
         };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
-            .unwrap();
-        assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            Instant::now(),
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("45.0")
+        );
     }
 
     // ── Transitions through the updater, and the write failures ───────────
@@ -1154,26 +1304,59 @@ mod tests {
         let mut p = FakePlatform {
             thermals: vec![th.clone()],
         };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
-        assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("False"));
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            m.temperature.field("ASIC", "warning_status").as_deref(),
+            Some("False")
+        );
 
         // Above the high threshold.
         p.thermals[0].temperature = Some(Number::Float(110.0));
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
-        assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("True"));
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            m.temperature.field("ASIC", "warning_status").as_deref(),
+            Some("True")
+        );
 
         // Back into the band.
         p.thermals[0].temperature = Some(Number::Float(45.0));
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
-        assert_eq!(m.temperature.field("ASIC", "warning_status").as_deref(), Some("False"));
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            m.temperature.field("ASIC", "warning_status").as_deref(),
+            Some("False")
+        );
 
         // Below the low threshold.
         p.thermals[0].temperature = Some(Number::Float(5.0));
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
         assert_eq!(
             m.temperature.field("ASIC", "warning_status").as_deref(),
             Some("True"),
@@ -1193,13 +1376,28 @@ mod tests {
             thermals: vec![thermal("ASIC")],
         };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
         p.thermals[0].temperature = Some(Number::Float(200.0));
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
 
-        assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("200.0"));
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("200.0")
+        );
     }
 
     /// A reading that goes away publishes `N/A`, and a reading that comes back
@@ -1220,17 +1418,41 @@ mod tests {
             thermals: vec![thermal("ASIC")],
         };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
         p.thermals[0].temperature = None;
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
-        assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("N/A"));
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("N/A")
+        );
 
         p.thermals[0].temperature = Some(Number::Float(45.0));
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
-        assert_eq!(m.temperature.field("ASIC", "temperature").as_deref(), Some("45.0"));
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
+        assert_eq!(
+            m.temperature.field("ASIC", "temperature").as_deref(),
+            Some("45.0")
+        );
     }
 
     /// A database that refuses writes is logged and the pass carries on: one
@@ -1246,8 +1468,14 @@ mod tests {
         let mut p = FakePlatform {
             thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")],
         };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
-            .expect("a write failure is not an error the caller sees");
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            Instant::now(),
+            &never_stop,
+        )
+        .expect("a write failure is not an error the caller sees");
 
         assert!(m.temperature.is_empty());
         // The entity info goes to a different table, which is still writable.
@@ -1264,11 +1492,22 @@ mod tests {
         let m = MockDb::new(false);
         m.physical_entity.fail_writes("redis is down");
         let mut u = TemperatureUpdater::with_mirror(None);
-        let mut p = FakePlatform { thermals: vec![thermal("ASIC")] };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &never_stop)
-            .expect("not an error the caller sees");
+        let mut p = FakePlatform {
+            thermals: vec![thermal("ASIC")],
+        };
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            Instant::now(),
+            &never_stop,
+        )
+        .expect("not an error the caller sees");
         assert!(m.temperature.row("ASIC").is_some());
-        assert!(log.logged(log::Level::Warn, "failed to update PHYSICAL_ENTITY_INFO for ASIC"));
+        assert!(log.logged(
+            log::Level::Warn,
+            "failed to update PHYSICAL_ENTITY_INFO for ASIC"
+        ));
     }
 
     /// Deleting a sensor that has gone is best-effort for the same reason.
@@ -1280,13 +1519,25 @@ mod tests {
         let mut p = FakePlatform {
             thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp")],
         };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
 
         m.temperature.fail_writes("redis is down");
         p.thermals.retain(|t| t.name == "ASIC");
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .expect("a failed delete is not an error either");
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .expect("a failed delete is not an error either");
     }
 
     /// A pass that is never told to stop.
@@ -1310,8 +1561,14 @@ mod tests {
             thermals: vec![thermal("ASIC"), thermal("PSU-1 Temp"), thermal("Ambient")],
         };
 
-        u.update(&mut p, &m.db, &PollingIntervals::default(), now, &never_stop)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            now,
+            &never_stop,
+        )
+        .unwrap();
         assert_eq!(m.temperature.len(), 3);
 
         u.update(&mut p, &m.db, &PollingIntervals::default(), now, &|| true)
@@ -1331,8 +1588,14 @@ mod tests {
         let mut p = FakePlatform {
             thermals: vec![thermal("ASIC")],
         };
-        u.update(&mut p, &m.db, &PollingIntervals::default(), Instant::now(), &|| true)
-            .unwrap();
+        u.update(
+            &mut p,
+            &m.db,
+            &PollingIntervals::default(),
+            Instant::now(),
+            &|| true,
+        )
+        .unwrap();
         assert!(m.temperature.is_empty());
     }
 }

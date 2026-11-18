@@ -5,7 +5,8 @@ Priority: optional
 Build-Depends: debhelper-compat (= 13),
                 libswsscommon-dev,
                 libyang-dev,
-                python3-dev
+                python3-dev,
+                python3-jinja2
 Standards-Version: 1.0.0
 
 Package: sonic-thermalctld-rs

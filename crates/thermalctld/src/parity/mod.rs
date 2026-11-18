@@ -8,12 +8,11 @@
 //! the platform API bridge.  Then every table either wrote, and every line
 //! either logged at NOTICE or above, are compared.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use platform_api::{ChassisInfoCols, PlatformApi};
+use platform_api::{ChassisInfoCols, PlatformApi, PlatformError};
 use platform_provider::PlatformImpl;
 use pmon_common::parity::pyo3::prelude::*;
 use pmon_common::parity::pyo3::types::PyModule;
@@ -143,7 +142,20 @@ fn thermalctld_publishes_what_the_python_daemon_publishes() {
         let mut failures = Vec::new();
         for name in &names {
             let python = python_half(py, harness, &sc, name);
-            let rust = rust_half(py, harness, &sc, name);
+            let mut rust = rust_half(py, harness, &sc, name);
+            if name == "a_failed_drawer_led_does_not_hide_the_healthy_drawer" {
+                // Rust deliberately adds actionable context to Python's warning.
+                // Assert the exact name, error, level and two-cycle count before
+                // comparing the common message; every other log stays unchanged.
+                let contextual = "Failed to get status LED state for fan drawer drawer1 - i2c read failed: get_status_led";
+                assert_eq!(rust.1.iter().filter(|line| line.1 == contextual).count(), 2);
+                for line in &mut rust.1 {
+                    if line.1 == contextual {
+                        assert_eq!(line.0, "WARNING");
+                        line.1 = "Failed to get status LED state for fan drawer".into();
+                    }
+                }
+            }
             failures.extend(parity::differences(name, &python, &rust, &["timestamp"]));
         }
         failures
@@ -175,10 +187,12 @@ fn stop_while_starting(waiting: Py<PyAny>) -> (Published, Vec<Line>, f64) {
 
     // What `main`'s signal task does with a SIGTERM, once the daemon is where
     // the scenario wants it.
-    let (tx, rx) = watch::channel(false);
+    let (tx, _rx) = watch::channel(false);
+    let shutdown_tx = Arc::new(tx);
+    let tx = Arc::clone(&shutdown_tx);
     let (fan, temperature) = (db.fan.clone(), db.temperature.clone());
     let signal = std::thread::spawn(move || {
-        let waited = Python::with_gil(|py| {
+        let waited = Python::attach(|py| {
             waiting
                 .bind(py)
                 .call_method1("wait", (PROMPT,))
@@ -198,12 +212,6 @@ fn stop_while_starting(waiting: Py<PyAny>) -> (Published, Vec<Line>, f64) {
         sent
     });
 
-    let policy_request = Arc::new(AtomicBool::new(false));
-    monitor.policy_request = Some(Arc::clone(&policy_request));
-    let stopped = Arc::new(crate::TmStopped::default());
-    monitor.policy_stopped = Some(Arc::clone(&stopped));
-    let policy_interval = Arc::clone(&monitor.policy_interval);
-    let policy_shutdown = rx.clone();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -214,26 +222,13 @@ fn stop_while_starting(waiting: Py<PyAny>) -> (Published, Vec<Line>, f64) {
         &mut monitor,
         &args,
         chassis.as_ref(),
-        &|ready: Arc<AtomicBool>| {
-            let request = Arc::clone(&policy_request);
-            let interval = Arc::clone(&policy_interval);
-            let shutdown = policy_shutdown.clone();
-            let stopped = Arc::clone(&stopped);
+        &|shutdown, stopped| {
             std::thread::Builder::new()
                 .name("tm-init".into())
-                .spawn(move || {
-                    crate::tm_policy_thread_main(
-                        PlatformImpl::Pyo3,
-                        ready,
-                        request,
-                        interval,
-                        shutdown,
-                        &stopped,
-                    )
-                })
+                .spawn(move || crate::tm_policy_thread_main(PlatformImpl::Pyo3, shutdown, &stopped))
         },
         &|_interval, _rx| panic!("leak detection is off on this chassis"),
-        rx,
+        shutdown_tx,
     ));
     let done = Instant::now();
     let sent = signal
@@ -277,7 +272,7 @@ fn thermalctld_stops_while_starting_as_the_python_daemon_does() {
             .unbind();
         let rust = std::thread::spawn(move || stop_while_starting(waiting));
         let (tables, mut lines, secs) = py
-            .allow_threads(|| rust.join())
+            .detach(|| rust.join())
             .unwrap_or_else(|_| panic!("Rust thermalctld panicked"));
         took.1 = secs;
         // The vendor's own lines, logged from Python while the Rust daemon ran.
@@ -305,6 +300,15 @@ fn thermalctld_stops_while_starting_as_the_python_daemon_does() {
 
 #[test]
 fn policy_runs_on_the_facade_that_completed_initialization() {
+    policy_runs_on_the_initialized_facade(false);
+}
+
+#[test]
+fn policy_runs_on_the_facade_after_initialization_fails() {
+    policy_runs_on_the_initialized_facade(true);
+}
+
+fn policy_runs_on_the_initialized_facade(fail: bool) {
     parity::with_harness(|py, _| {
         let code = std::ffi::CString::new(
             r#"
@@ -312,6 +316,7 @@ import threading
 started = threading.Event()
 release = threading.Event()
 initialized = []
+constructed = []
 policies = []
 stopped = []
 class Manager:
@@ -322,7 +327,9 @@ class Manager:
     @classmethod
     def load(cls, path): pass
     @classmethod
-    def init_thermal_algorithm(cls, chassis): initialized.append(id(chassis))
+    def init_thermal_algorithm(cls, chassis):
+        initialized.append(id(chassis))
+        if FAIL: raise OSError('fan write failed')
     @classmethod
     def get_interval(cls): return 1
     @classmethod
@@ -334,83 +341,127 @@ class Manager:
 class Chassis:
     def get_thermal_manager(self): return Manager
 class Platform:
-    def get_chassis(self): return Chassis()
+    def get_chassis(self):
+        chassis = Chassis()
+        constructed.append(id(chassis))
+        return chassis
 "#,
         )
         .unwrap();
         let module = PyModule::from_code(py, &code, pyo3_name(), pyo3_name()).unwrap();
+        module.setattr("FAIL", fail).unwrap();
         let modules = py.import("sys").unwrap().getattr("modules").unwrap();
         let previous = modules.get_item("sonic_platform.platform").unwrap();
         modules
             .set_item("sonic_platform.platform", &module)
             .unwrap();
         let state = module.unbind();
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut main_handle =
                 platform_provider::open("policy-regression", PlatformImpl::Pyo3).unwrap();
-            let ready = Arc::new(AtomicBool::new(false));
-            let request = Arc::new(AtomicBool::new(false));
             let (shutdown, receiver) = watch::channel(false);
-            let mut monitor = crate::monitor::Monitor::new(0.01, 1.0, 30.0);
-            monitor.policy_request = Some(Arc::clone(&request));
             let stopped = Arc::new(crate::TmStopped::default());
             let worker_stopped = Arc::clone(&stopped);
-            let interval = Arc::clone(&monitor.policy_interval);
-            let worker_ready = Arc::clone(&ready);
+            let worker_shutdown = shutdown.clone();
             let worker = std::thread::spawn(move || {
-                crate::tm_policy_thread_main(
-                    PlatformImpl::Pyo3,
-                    worker_ready,
-                    request,
-                    interval,
-                    receiver,
-                    &worker_stopped,
-                )
-            });
-            Python::with_gil(|py| {
-                assert!(state
-                    .bind(py)
-                    .getattr("started")
-                    .unwrap()
-                    .call_method1("wait", (2,))
-                    .unwrap()
-                    .is_truthy()
-                    .unwrap());
-                assert!(!ready.load(std::sync::atomic::Ordering::Acquire));
-                main_handle.tm_run_policy().unwrap();
-                assert_eq!(
-                    state.bind(py).getattr("policies").unwrap().len().unwrap(),
-                    0
-                );
-                state
-                    .bind(py)
-                    .getattr("release")
-                    .unwrap()
-                    .call_method0("set")
-                    .unwrap();
-            });
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while !ready.load(std::sync::atomic::Ordering::Acquire) {
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            monitor.run_policy(&mut main_handle).unwrap();
-            loop {
-                let completed = Python::with_gil(|py| {
-                    state.bind(py).getattr("policies").unwrap().len().unwrap() == 1
-                });
-                if completed {
-                    break;
+                struct OnePolicy<P> {
+                    inner: P,
+                    shutdown: watch::Sender<bool>,
                 }
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            shutdown.send(true).unwrap();
-            main_handle.tm_stop().unwrap();
+                impl<P: PlatformApi> PlatformApi for OnePolicy<P> {
+                    fn tm_initialize(&mut self) -> Result<(), PlatformError> {
+                        self.inner.tm_initialize()
+                    }
+                    fn tm_get_interval(&mut self) -> Result<Option<f64>, PlatformError> {
+                        self.inner.tm_get_interval()
+                    }
+                    fn tm_run_policy(&mut self) -> Result<(), PlatformError> {
+                        let result = self.inner.tm_run_policy();
+                        self.shutdown.send_replace(true);
+                        result
+                    }
+                    fn tm_deinitialize(&mut self) -> Result<(), PlatformError> {
+                        self.inner.tm_deinitialize()
+                    }
+                }
+                let mut platform = OnePolicy {
+                    inner: platform_provider::open("policy-regression", PlatformImpl::Pyo3)
+                        .unwrap(),
+                    shutdown: worker_shutdown,
+                };
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .start_paused(true)
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let begin = tokio::time::Instant::now();
+                    crate::tm_policy_loop(&mut platform, receiver, &worker_stopped).await;
+                    assert_eq!(
+                        begin.elapsed(),
+                        Duration::from_secs(if fail { 60 } else { 1 })
+                    );
+                });
+            });
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Python::attach(|py| {
+                    assert!(state
+                        .bind(py)
+                        .getattr("started")
+                        .unwrap()
+                        .call_method1("wait", (2,))
+                        .unwrap()
+                        .is_truthy()
+                        .unwrap());
+                    assert_eq!(
+                        state
+                            .bind(py)
+                            .getattr("initialized")
+                            .unwrap()
+                            .len()
+                            .unwrap(),
+                        0
+                    );
+                    main_handle.tm_run_policy().unwrap();
+                    assert_eq!(
+                        state.bind(py).getattr("policies").unwrap().len().unwrap(),
+                        0
+                    );
+                    state
+                        .bind(py)
+                        .getattr("release")
+                        .unwrap()
+                        .call_method0("set")
+                        .unwrap();
+                });
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    let completed = Python::attach(|py| {
+                        state.bind(py).getattr("policies").unwrap().len().unwrap() == 1
+                    });
+                    if completed {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }));
+            shutdown.send_replace(true);
+            let stop = main_handle.tm_stop();
             stopped.notify();
-            worker.join().unwrap();
-            Python::with_gil(|py| {
+            let joined = worker.join();
+            if let Err(error) = outcome {
+                std::panic::resume_unwind(error);
+            }
+            stop.unwrap();
+            joined.unwrap();
+            Python::attach(|py| {
                 let state = state.bind(py);
+                assert_eq!(
+                    state.getattr("constructed").unwrap().len().unwrap(),
+                    2,
+                    "one chassis for each of the main and policy open calls"
+                );
                 assert_eq!(
                     state
                         .getattr("initialized")
@@ -423,10 +474,16 @@ class Platform:
                         .extract::<Vec<usize>>()
                         .unwrap()
                 );
-                assert_eq!(state.getattr("stopped").unwrap().extract::<Vec<String>>().unwrap(),
+                assert_eq!(
+                    state
+                        .getattr("stopped")
+                        .unwrap()
+                        .extract::<Vec<String>>()
+                        .unwrap(),
                     // The facade's tm_deinitialize also calls stop, matching
                     // Python's signal handler followed by its deinit path.
-                    ["stop", "stop", "deinitialize"]);
+                    ["stop", "stop", "deinitialize"]
+                );
             });
         });
         modules
@@ -439,66 +496,4 @@ fn pyo3_name() -> &'static std::ffi::CStr {
     c"policy_regression"
 }
 
-#[test]
-fn leak_aggregation_and_restart_match_the_current_python_daemon() {
-    use crate::leak_updater::{apply, LeakState};
-    use platform_api::{LeakProfile, LeakSensorInfo, LeakSeverity};
-    parity::with_harness(|py, harness| {
-        let scenarios = parity::module(py, "leak_parity", SCENARIOS);
-        scenarios.call_method1("setup", (harness, ROOT)).unwrap();
-        for case in ["two_minor", "zero_limit", "restart", "read_failure"] {
-            let expected: String = scenarios
-                .call_method1("leak_system_status", (case,))
-                .unwrap()
-                .extract()
-                .unwrap();
-            let tables = crate::db::mock::MockLeak::new();
-            let mut state = LeakState::new();
-            state.set_major_minimum(2);
-            let profiles = [LeakProfile {
-                r#type: "p".into(),
-                max_minor_duration_sec: Some(if case == "zero_limit" { 0 } else { 10 }),
-            }];
-            let sensor = |name: &str, severity| LeakSensorInfo {
-                name: name.into(),
-                is_ok: Some(true),
-                is_leak: Some(true),
-                severity: Some(severity),
-                profile_type: Some("p".into()),
-                ..Default::default()
-            };
-            let critical = matches!(case, "restart" | "read_failure");
-            let mut sensors = vec![sensor(
-                "a",
-                if critical {
-                    LeakSeverity::Critical
-                } else {
-                    LeakSeverity::Minor
-                },
-            )];
-            if case == "two_minor" {
-                sensors.push(sensor("b", LeakSeverity::Minor));
-            }
-            let mut events = crate::event_log::BmcEventLogger::new(false);
-            let _ = apply(
-                &tables.tables,
-                &state.refresh(&sensors, &profiles, Instant::now(), &mut events),
-            );
-            if case == "restart" {
-                state = LeakState::new();
-                state.restore(&tables.tables).unwrap();
-                state.set_major_minimum(2);
-                sensors[0].severity = Some(LeakSeverity::Minor);
-                let _ = apply(
-                    &tables.tables,
-                    &state.refresh(&sensors, &profiles, Instant::now(), &mut events),
-                );
-            }
-            assert_eq!(
-                tables.system.field("system", "device_leak_status"),
-                Some(expected),
-                "{case}"
-            );
-        }
-    });
-}
+mod leak;

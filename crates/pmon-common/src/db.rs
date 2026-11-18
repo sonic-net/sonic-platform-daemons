@@ -16,6 +16,11 @@ use swss_common::{CxxString, DbConnector, SonicV2Connector, Table};
 pub const STATE_DB: &str = "STATE_DB";
 const CONNECT_TIMEOUT_MS: u32 = 0;
 
+/// Python's swsscommon exposes the message without the C++ source location.
+pub fn swss_error(error: swss_common::Exception) -> String {
+    error.message().to_string()
+}
+
 pub trait TableLike: Send {
     fn set(&self, key: &str, fvs: &[(&str, String)]) -> Result<(), String>;
     fn del(&self, key: &str) -> Result<(), String>;
@@ -39,26 +44,26 @@ pub trait TableLike: Send {
 
 impl TableLike for Table {
     fn set(&self, key: &str, fvs: &[(&str, String)]) -> Result<(), String> {
-        Table::set(self, key, fvs.to_vec()).map_err(|e| format!("{e:?}"))
+        Table::set(self, key, fvs.to_vec()).map_err(swss_error)
     }
 
     fn del(&self, key: &str) -> Result<(), String> {
-        Table::del(self, key).map_err(|e| format!("{e:?}"))
+        Table::del(self, key).map_err(swss_error)
     }
 
     fn hdel(&self, key: &str, field: &str) -> Result<(), String> {
-        Table::hdel(self, key, field).map_err(|e| format!("{e:?}"))
+        Table::hdel(self, key, field).map_err(swss_error)
     }
 
     fn get(&self, key: &str) -> Result<Option<Vec<(String, String)>>, String> {
-        let Some(fvs) = Table::get(self, key).map_err(|e| format!("{e:?}"))? else {
+        let Some(fvs) = Table::get(self, key).map_err(swss_error)? else {
             return Ok(None);
         };
         Ok(Some(decode_row(fvs)))
     }
 
     fn get_keys(&self) -> Result<Vec<String>, String> {
-        Table::get_keys(self).map_err(|e| format!("{e:?}"))
+        Table::get_keys(self).map_err(swss_error)
     }
 }
 
@@ -102,19 +107,27 @@ pub struct Db {
 
 impl Db {
     pub fn connect(name: &str) -> Result<Self, String> {
-        let conn = SonicV2Connector::new(false, None).map_err(|e| format!("{e:?}"))?;
-        conn.connect(name, true).map_err(|e| format!("{e:?}"))?;
-        Ok(Self { conn, name: name.to_string() })
+        let conn = SonicV2Connector::new(false, None).map_err(swss_error)?;
+        conn.connect(name, true).map_err(swss_error)?;
+        Ok(Self {
+            conn,
+            name: name.to_string(),
+        })
     }
 }
 
 impl Keyspace for Db {
     fn keys(&self, pattern: &str) -> Result<Vec<String>, String> {
-        self.conn.keys(&self.name, Some(pattern), false).map_err(|e| format!("{e:?}"))
+        self.conn
+            .keys(&self.name, Some(pattern), false)
+            .map_err(swss_error)
     }
 
     fn del(&self, key: &str) -> Result<(), String> {
-        self.conn.del(&self.name, key, false).map(|_| ()).map_err(|e| format!("{e:?}"))
+        self.conn
+            .del(&self.name, key, false)
+            .map(|_| ())
+            .map_err(swss_error)
     }
 }
 
@@ -179,7 +192,9 @@ fn matches_glob(key: &str, parts: &[&str]) -> bool {
             _ => return false,
         }
     }
-    parts.last().is_none_or(|last| last.is_empty() || key.ends_with(last))
+    parts
+        .last()
+        .is_none_or(|last| last.is_empty() || key.ends_with(last))
 }
 
 /// How a daemon opens its tables.
@@ -214,7 +229,7 @@ pub fn open(db: &str, table: &str) -> Result<Box<dyn TableLike>, String> {
     DbConnector::new_named(db, true, CONNECT_TIMEOUT_MS)
         .and_then(|c| Table::new(c, table))
         .map(|t| Box::new(t) as Box<dyn TableLike>)
-        .map_err(|e| format!("{e:?}"))
+        .map_err(swss_error)
 }
 
 /// An opener that records what was asked for and hands back mock tables.
@@ -237,7 +252,10 @@ impl MockOpener {
 
     /// The same, with one table refusing to open.
     pub fn failing(table: &str) -> Self {
-        Self { fails: Some(table.to_string()), ..Self::default() }
+        Self {
+            fails: Some(table.to_string()),
+            ..Self::default()
+        }
     }
 
     /// `(database, table)` in the order they were asked for.
@@ -251,7 +269,10 @@ impl MockOpener {
     }
 
     pub fn open(&self, db: &str, table: &str) -> Result<Box<dyn TableLike>, String> {
-        self.asked.lock().unwrap().push((db.to_string(), table.to_string()));
+        self.asked
+            .lock()
+            .unwrap()
+            .push((db.to_string(), table.to_string()));
         if self.fails.as_deref() == Some(table) {
             return Err(format!("no such database: {db}"));
         }
@@ -375,7 +396,11 @@ impl MockTable {
 
     /// Whether one field of one row was ever written.
     pub fn wrote(&self, key: &str, field: &str) -> bool {
-        self.writes.lock().unwrap().iter().any(|(k, f)| k == key && f == field)
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(k, f)| k == key && f == field)
     }
 
     pub fn row(&self, key: &str) -> Option<Vec<(String, String)>> {
@@ -384,7 +409,10 @@ impl MockTable {
 
     /// The value of one field, for terse assertions.
     pub fn field(&self, key: &str, field: &str) -> Option<String> {
-        self.row(key)?.into_iter().find(|(k, _)| k == field).map(|(_, v)| v)
+        self.row(key)?
+            .into_iter()
+            .find(|(k, _)| k == field)
+            .map(|(_, v)| v)
     }
 
     pub fn len(&self) -> usize {
@@ -465,10 +493,13 @@ mod tests {
         let o = MockOpener::new();
         o.open(STATE_DB, "FAN_INFO").unwrap();
         o.open("CHASSIS_STATE_DB", "DPU_STATE").unwrap();
-        assert_eq!(o.asked(), vec![
-            ("STATE_DB".to_string(), "FAN_INFO".to_string()),
-            ("CHASSIS_STATE_DB".to_string(), "DPU_STATE".to_string()),
-        ]);
+        assert_eq!(
+            o.asked(),
+            vec![
+                ("STATE_DB".to_string(), "FAN_INFO".to_string()),
+                ("CHASSIS_STATE_DB".to_string(), "DPU_STATE".to_string()),
+            ]
+        );
     }
 
     /// The same handle comes back twice, so what a daemon wrote through the
@@ -494,14 +525,26 @@ mod tests {
         let t = MockTable::new();
         t.set("0x21", &[("Value", "MSN4700".to_string())]).unwrap();
 
-        assert!(t.get("nope").unwrap().is_none(), "an absent row is Ok(None)");
-        assert!(t.get("0x21").unwrap().is_some(), "a present one is Ok(Some)");
+        assert!(
+            t.get("nope").unwrap().is_none(),
+            "an absent row is Ok(None)"
+        );
+        assert!(
+            t.get("0x21").unwrap().is_some(),
+            "a present one is Ok(Some)"
+        );
         assert_eq!(t.get_keys().unwrap(), vec!["0x21".to_string()]);
 
         t.disconnect("redis is gone");
         assert!(t.get("0x21").is_err(), "a lost redis is Err, not Ok(None)");
-        assert!(t.get("nope").is_err(), "and so is a lookup that would have missed");
-        assert!(t.get_keys().is_err(), "the key scan too -- not an empty table");
+        assert!(
+            t.get("nope").is_err(),
+            "and so is a lookup that would have missed"
+        );
+        assert!(
+            t.get_keys().is_err(),
+            "the key scan too -- not an empty table"
+        );
     }
 
     /// The four failure modes are independent: a test that arms one must not
@@ -513,7 +556,10 @@ mod tests {
         t.set("k", &[("f", "v".to_string())]).unwrap();
 
         t.fail_writes("no writes");
-        assert_eq!(t.set("k", &[("f", "w".to_string())]), Err("no writes".to_string()));
+        assert_eq!(
+            t.set("k", &[("f", "w".to_string())]),
+            Err("no writes".to_string())
+        );
         assert_eq!(t.del("k"), Err("no writes".to_string()));
         assert_eq!(t.hdel("k", "f"), Err("no writes".to_string()));
         assert!(t.get("k").unwrap().is_some(), "reads still answer");
@@ -523,7 +569,11 @@ mod tests {
         t.fail_reads("no reads");
         assert!(t.get("k").is_err());
         assert!(t.get_keys().is_err());
-        assert_eq!(t.set("k", &[("f", "x".to_string())]), Ok(()), "writes still go through");
+        assert_eq!(
+            t.set("k", &[("f", "x".to_string())]),
+            Ok(()),
+            "writes still go through"
+        );
         assert_eq!(t.field("k", "f").as_deref(), Some("x"));
     }
 
@@ -548,7 +598,11 @@ mod tests {
         assert!(t.set("a", &[("f", "1".to_string())]).is_ok(), "first");
         assert!(t.hdel("a", "f").is_ok(), "second, a different kind");
         assert_eq!(t.del("a"), Err("spent".to_string()), "third is refused");
-        assert_eq!(t.set("b", &[]), Err("spent".to_string()), "and every one after");
+        assert_eq!(
+            t.set("b", &[]),
+            Err("spent".to_string()),
+            "and every one after"
+        );
         assert!(t.get("a").is_ok(), "reads are not counted and not refused");
     }
 
@@ -564,8 +618,14 @@ mod tests {
     fn a_failing_open_names_the_database() {
         let o = MockOpener::failing("PSU_INFO");
         assert!(o.open(STATE_DB, "FAN_INFO").is_ok());
-        let err = o.open(STATE_DB, "PSU_INFO").err().expect("this one refuses");
-        assert!(err.contains("STATE_DB"), "the message names the database: {err}");
+        let err = o
+            .open(STATE_DB, "PSU_INFO")
+            .err()
+            .expect("this one refuses");
+        assert!(
+            err.contains("STATE_DB"),
+            "the message names the database: {err}"
+        );
     }
 
     /// A value that is not UTF-8 keeps its field.  Filtering it out made the
@@ -578,7 +638,10 @@ mod tests {
         ]);
         assert_eq!(row.len(), 2, "both fields survive");
         assert_eq!(row[0].0, "model");
-        assert_eq!(row[0].1, "MSN\u{fffd}4700", "the bad byte is replaced, not the field dropped");
+        assert_eq!(
+            row[0].1, "MSN\u{fffd}4700",
+            "the bad byte is replaced, not the field dropped"
+        );
         assert_eq!(row[1], ("serial".to_string(), "MT1234".to_string()));
     }
 
@@ -588,7 +651,9 @@ mod tests {
     #[test]
     fn a_keyspace_matches_on_the_whole_key() {
         let k = MockKeyspace::new(&[
-            "DPU_STATE|DPU0", "REBOOT_CAUSE|DPU0|x", "TRANSCEIVER_INFO|DPU0|Ethernet0",
+            "DPU_STATE|DPU0",
+            "REBOOT_CAUSE|DPU0|x",
+            "TRANSCEIVER_INFO|DPU0|Ethernet0",
             "DPU_STATE|DPU1",
         ]);
         assert_eq!(k.keys("*DPU0*").unwrap().len(), 3);
@@ -604,7 +669,11 @@ mod tests {
         let k = MockKeyspace::new(&["DPU_STATE|DPU0"]);
         k.fail_reads("redis is gone");
         assert_eq!(k.keys("*DPU0*"), Err("redis is gone".to_string()));
-        assert_eq!(k.remaining().len(), 1, "a failed scan deletes nothing by itself");
+        assert_eq!(
+            k.remaining().len(),
+            1,
+            "a failed scan deletes nothing by itself"
+        );
     }
 
     #[test]
@@ -620,11 +689,15 @@ mod tests {
     #[test]
     fn deleting_one_field_leaves_the_others() {
         let t = MockTable::new();
-        t.set("k", &[("a", "1".to_string()), ("b", "2".to_string())]).unwrap();
+        t.set("k", &[("a", "1".to_string()), ("b", "2".to_string())])
+            .unwrap();
         t.hdel("k", "a").unwrap();
         assert_eq!(t.field("k", "a"), None);
         assert_eq!(t.field("k", "b").as_deref(), Some("2"));
-        assert!(t.hdel("nosuchkey", "a").is_ok(), "a row that is not there is not an error");
+        assert!(
+            t.hdel("nosuchkey", "a").is_ok(),
+            "a row that is not there is not an error"
+        );
     }
 
     /// Writes merge, as redis HSET does: a partial write such as the
