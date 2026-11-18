@@ -10,6 +10,7 @@ from natsort import natsorted
 
 from sonic_py_common import device_info, syslogger
 from swsscommon import swsscommon
+from xcvrd import xcvrd
 from .xcvr_table_helper import *
 from . import common
 from abc import ABC, abstractmethod
