@@ -1,0 +1,64 @@
+#!/usr/bin/make -f
+# See debhelper(7) (uncomment to enable)
+# output every command that modifies files on the build system.
+#export DH_VERBOSE = 1
+
+# One binary package per daemon, from one workspace build.  They are one
+# source package rather than one each because they share crates/pmon-common
+# and the generated facade: building them separately would compile both once
+# per daemon, and a deb per daemon is what keeps them independently
+# installable and switchable.
+#
+# Every daemon reaches the platform through platform-provider, which today
+# carries only the generated PyO3 bridge onto whatever sonic_platform the image
+# installs, so nothing here names a vendor.  A native implementation arrives as
+# another arm of platform-provider, through the same SONIC_CARGO_CONFIG [patch]
+# described below; neither this file nor any crate's Cargo.toml changes.
+
+%:
+	dh $@
+
+# cargo and rustc are deliberately absent from Build-Depends: the slave image
+# installs Rust with rustup under /usr/.cargo and puts it on PATH, so there are
+# no Debian packages for dpkg-checkbuilddeps to find.  src/sonic-ctrmgrd-rs,
+# the other Rust package in this tree, does the same.
+
+# sonic-buildimage builds the daemons against its own sonic-platform-common and
+# sonic-swss-common submodules rather than the commits Cargo.lock pins: the
+# PyO3 bridge has to match the Python facade the same image installs, and
+# swss-common the libswsscommon it links.  It sets SONIC_CARGO_CONFIG to a
+# cargo --config file whose [patch] entries point the git dependencies at those
+# submodules. Resolve that source replacement once during configure and check
+# all remaining external versions/checksums against the committed lock. Both
+# build and test then use --locked with the checked, patched lock.
+CARGO_ARGS := --locked
+ifdef SONIC_CARGO_CONFIG
+CARGO_ARGS += --config "$(SONIC_CARGO_CONFIG)"
+endif
+
+override_dh_auto_configure:
+ifdef SONIC_CARGO_CONFIG
+	[ -f debian/Cargo.lock.pinned ] || cp Cargo.lock debian/Cargo.lock.pinned
+	python3 debian/verify-cargo-lock.py --prepare --config "$(SONIC_CARGO_CONFIG)" debian/Cargo.lock.pinned Cargo.lock
+	cargo metadata --config "$(SONIC_CARGO_CONFIG)" --format-version=1 --filter-platform "$${CARGO_BUILD_TARGET:-$$(rustc -vV | sed -n 's/^host: //p')}" > /dev/null
+	python3 debian/verify-cargo-lock.py --config "$(SONIC_CARGO_CONFIG)" debian/Cargo.lock.pinned Cargo.lock
+else
+	:
+endif
+
+override_dh_auto_build:
+	cargo build $(CARGO_ARGS) --release --workspace
+
+override_dh_auto_install:
+	# do nothing
+	:
+
+# Deliberately not `cargo clean`: cargo has to load every workspace member's
+# manifest before it will do anything, and removing the directory is what
+# `cargo clean` would have done anyway, without needing one.
+override_dh_auto_clean:
+	rm -rf target
+	if [ -f debian/Cargo.lock.pinned ]; then mv debian/Cargo.lock.pinned Cargo.lock; fi
+
+override_dh_auto_test:
+	cargo test $(CARGO_ARGS) --release --workspace
