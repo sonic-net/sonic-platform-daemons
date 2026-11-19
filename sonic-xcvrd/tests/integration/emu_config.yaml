@@ -1,0 +1,48 @@
+transceivers:
+  1:
+    present: true
+    defaults:
+      SFF8024Identifier: QSFP_DD
+      SFF8024IdentifierCopy: QSFP_DD
+      VendorName: "xcvr-emu        "
+      VendorPN: "EMU-400G-DR4    "
+      VendorRev: "01"
+      VendorOUI: 0x010203
+      VendorSN: "EMU000000000001 "
+      DateCode:
+        Year: "26"
+        Month: "09"
+        DayOfMonth: "16"
+      CmisRevision:
+        Major: 5
+        Minor: 2
+      MemoryModel: PAGED
+      MediaType: OPTICAL_SMF
+      ModulePowerClass: CLASS_8
+      MaxPower: 40
+      BanksSupported: BANK_0_SUPPORTED
+      ConnectorType: MPO_1X16
+      OutputDisableTxSupported: SUPPORTED
+      SteppedConfigOnly: STEP_BY_STEP
+      MaxDurationDPInit: BETWEEN_1_AND_5_S
+      MaxDurationModulePwrUp: BETWEEN_100_AND_500_MS
+      MaxDurationModulePwrDn: BETWEEN_100_AND_500_MS
+      ApplicationDescriptor:
+        - HostInterfaceID: 79
+          MediaInterfaceID: 28
+          HostLaneCount: 4
+          MediaLaneCount: 4
+          HostLaneAssignmentOptions: 0x01
+        - HostInterfaceID: 75
+          MediaInterfaceID: 20
+          HostLaneCount: 1
+          MediaLaneCount: 1
+          HostLaneAssignmentOptions: 0x0f
+        - HostInterfaceID: 0xff
+      MediaLaneAssignmentOptions: [0x01, 0x0f]
+      TempMonSupported: SUPPORTED
+      VccMonSupported: SUPPORTED
+      TxOpticalPowerMonSupported: SUPPORTED
+      RxOpticalPowerMonSupported: SUPPORTED
+      TxBiasMonSupported: SUPPORTED
+      TxBiasCurrentScalingFactor: MULTIPLY_X1
