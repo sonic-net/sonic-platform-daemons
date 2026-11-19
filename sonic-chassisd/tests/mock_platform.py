@@ -39,6 +39,7 @@ class MockModule(MockDevice):
         self.midplane_down_reason = None
         self.asic_list = asic_list
         self.module_serial = module_serial
+        self.shutdown_allowed = True
 
     def get_name(self):
         return self.module_name
@@ -144,6 +145,9 @@ class MockModule(MockDevice):
 
     def set_presence(self, presence):
         self.presence = presence
+
+    def is_shutdown_allowed(self):
+        return self.shutdown_allowed
 
 class MockChassis:
     def __init__(self):
