@@ -340,8 +340,13 @@ def get_elsfp_bank_sibling_pports(physical_port: int) -> FrozenSet[int]:
 def is_copper(physical_port):
     """Check if the transceiver on the given physical port is copper"""
     if platform_chassis:
+        device = get_port_device(physical_port)
+        if device is None:
+            raise LookupError(
+                f"No transceiver device found for physical port {physical_port}"
+            )
         try:
-            return platform_chassis.get_sfp(physical_port).get_xcvr_api().is_copper()
+            return device.get_xcvr_api().is_copper()
         except (NotImplementedError, AttributeError):
             helper_logger.log_debug(f"No is_copper() defined for xcvr api on physical port {physical_port}, assuming Copper")
     return True

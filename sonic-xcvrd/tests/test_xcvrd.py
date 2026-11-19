@@ -3,7 +3,7 @@ from xcvrd.xcvrd_utilities.port_event_helper import *
 from xcvrd.xcvrd_utilities.sfp_status_helper import *
 from xcvrd.xcvrd_utilities.media_settings_parser import *
 from xcvrd.xcvrd_utilities.optics_si_parser import *
-from xcvrd.xcvrd_utilities import common
+from xcvrd.xcvrd_utilities import common, media_settings_parser
 from xcvrd.dom.dom_mgr import *
 from xcvrd.xcvrd import *
 from xcvrd.cmis import CmisManagerTask
@@ -1634,11 +1634,18 @@ class TestXcvrdScript(object):
     def test_load_optical_si_settings_missing_file(self):
         assert optics_si_parser.load_optics_si_settings() == {}
 
-    @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.xcvrd_utilities.common.is_cmis_api')
-    def test_get_media_settings_key(self, mock_is_cmis_api, mock_chassis):
+    @pytest.mark.parametrize('is_cpo', [False, True])
+    def test_get_media_settings_key(self, mock_is_cmis_api, monkeypatch, is_cpo):
+        mock_chassis = MagicMock()
+        mock_chassis.get_cpo.return_value = None
+        monkeypatch.setattr(common, "platform_chassis", mock_chassis)
         mock_sfp = MagicMock()
-        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        if is_cpo:
+            mock_chassis.get_cpo.return_value = mock_sfp
+            mock_chassis.get_sfp.side_effect = AssertionError('CPO port accessed through get_sfp')
+        else:
+            mock_chassis.get_sfp.return_value = mock_sfp
         mock_api = MagicMock()
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_api)
         mock_is_cmis_api.return_value = False
@@ -1721,6 +1728,18 @@ class TestXcvrdScript(object):
         mock_api.get_application_advertisement = MagicMock(return_value=mock_app_adv_value)
         result = media_settings_parser.get_media_settings_key(0, xcvr_info_dict, 100000, 2)
         assert result == { 'vendor_key': 'MOLEX-1064141421', 'media_key': 'QSFP-DD-sm_media_interface', 'lane_speed_key': 'speed:100GBASE-CR2', 'medium_lane_speed_key': 'COPPER50' }
+        if is_cpo:
+            mock_chassis.get_sfp.assert_not_called()
+        else:
+            mock_chassis.get_sfp.assert_called_with(0)
+
+    def test_media_settings_missing_device_retains_error(self, monkeypatch):
+        chassis = MagicMock()
+        chassis.get_cpo.return_value = None
+        chassis.get_sfp.return_value = None
+        monkeypatch.setattr(common, 'platform_chassis', chassis)
+        with pytest.raises(AttributeError):
+            media_settings_parser.get_lane_speed_key(1, 400000, 4)
 
     @pytest.mark.parametrize("data_found, data, expected", [
         (True, [('speed', '400000'), ('lanes', '1,2,3,4,5,6,7,8'), ('mtu', '9100')], (400000, 8, 0)),
@@ -1877,10 +1896,25 @@ class TestXcvrdScript(object):
             assert result == expected
 
     @patch('xcvrd.xcvrd_utilities.common.platform_chassis')
-    def test_is_copper_exception(self, mock_chassis):
+    @pytest.mark.parametrize('failure', ['missing_device', 'missing_api', 'unsupported'])
+    def test_is_copper_exception(self, mock_chassis, failure):
+        mock_chassis.get_cpo.return_value = None
         mock_sfp = MagicMock()
-        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp, side_effect=AttributeError)
-        result = common.is_copper(0)
+        mock_chassis.get_sfp.return_value = mock_sfp
+        if failure == 'missing_device':
+            mock_chassis.get_sfp.return_value = None
+            with pytest.raises(
+                    LookupError,
+                    match='No transceiver device found for physical port 0'):
+                common.is_copper(0)
+            return
+        if failure == 'missing_api':
+            mock_sfp.get_xcvr_api.return_value = None
+        else:
+            mock_sfp.get_xcvr_api.return_value.is_copper.side_effect = NotImplementedError
+        with patch.object(common.helper_logger, 'log_debug') as log:
+            result = common.is_copper(0)
+        log.assert_called_once_with('No is_copper() defined for xcvr api on physical port 0, assuming Copper')
         assert result == True
 
     @patch('xcvrd.xcvrd_utilities.common._wrapper_get_presence', MagicMock(return_value=True))

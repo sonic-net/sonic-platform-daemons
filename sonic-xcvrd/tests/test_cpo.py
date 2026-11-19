@@ -647,6 +647,49 @@ class TestCpoStateUpdateTask:
         assert [call.args[0] for call in mock_update_status.call_args_list] == ['Ethernet0']
         assert not task._is_owned_physical_port(PLUGGABLE_PORT)
 
+    def test_init_publishes_media_settings_through_cpo_api(self, monkeypatch):
+        info = dict(self.OE_INFO, cable_type='Length Cable Assembly(m)', cable_length=0,
+                    specification_compliance='sm_media_interface', type_abbrv_name='QSFP-DD')
+        device = self.make_cpo_device(info, self.ELSFP_INFO)
+        api = MagicMock(spec=common.CmisApi)
+        api.get_application_advertisement.return_value = {
+            1: {'host_lane_count': 4, 'host_electrical_interface_id': '400GAUI-4 C2M'},
+        }
+        api.is_copper.return_value = False
+        device.oe.get_api.return_value = api
+        api.get_transceiver_info.return_value = info
+        device.get_xcvr_api.side_effect = lambda: device.oe.get_api()
+        chassis = MagicMock()
+        chassis.get_cpo.return_value = device
+        chassis.get_sfp.side_effect = AssertionError('CPO port accessed through get_sfp')
+        monkeypatch.setattr(common, 'platform_chassis', chassis)
+        monkeypatch.setattr(xcvrd, 'platform_chassis', chassis)
+        port_mapping = self.make_port_mapping()
+        task = self.make_task(port_mapping, {1: device})
+        task.post_port_thresholds_to_db = MagicMock()
+        task.xcvr_table_helper.get_cfg_port_tbl(0).get.return_value = (
+            True, [('speed', '400000'), ('lanes', '1,2,3,4')])
+        monkeypatch.setattr(task.xcvr_table_helper, 'get_gearbox_line_lanes_dict', MagicMock(return_value={}))
+        monkeypatch.setattr(task.xcvr_table_helper, 'is_npu_si_settings_update_required', MagicMock(return_value=True))
+        settings = {'GLOBAL_MEDIA_SETTINGS': {'1-1': {
+            'FAKE_MANUFACTURER-FAKE_MODEL': {
+                'main': {'lane0': '0x11', 'lane1': '0x12', 'lane2': '0x13', 'lane3': '0x14'},
+            },
+        }}}
+        monkeypatch.setattr(xcvrd.media_settings_parser, 'g_dict', settings)
+
+        retry = task._post_port_sfp_info_and_dom_thr_to_db_once(
+            port_mapping, task.xcvr_table_helper, threading.Event())
+
+        assert retry == set()
+        chassis.get_sfp.assert_not_called()
+        api.is_copper.assert_called_once_with()
+        app_table = task.xcvr_table_helper.get_app_port_tbl(0)
+        app_table.set.assert_called_once()
+        port, values = app_table.set.call_args.args
+        assert port == 'Ethernet0'
+        assert dict(values) == {'main': '0x11,0x12,0x13,0x14'}
+
 
 class TestCpoDomInfoUpdateTask:
     @contextlib.contextmanager
