@@ -5,6 +5,7 @@ import threading
 import time
 import importlib.util
 import importlib.machinery
+from datetime import timedelta
 def load_source(module_name, module_path):
     loader = importlib.machinery.SourceFileLoader(module_name, module_path)
     spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
@@ -399,6 +400,164 @@ class TestFanUpdater(object):
         assert fan_updater._collect_fans.call_count == 1
 
 class TestLiquidCoolingUpdater(object):
+    @staticmethod
+    def _make_leak_updater(chassis, mock_try_get):
+        updater = thermalctld.LiquidCoolingUpdater(chassis, 0.5)
+        updater.log_error = mock.MagicMock()
+        updater.log_notice = mock.MagicMock()
+        updater.event_logger = mock.MagicMock()
+        updater.sensor_table = mock.MagicMock()
+        updater.system_table = mock.MagicMock()
+        mock_try_get.side_effect = lambda func, default: func()
+        return updater
+
+    @pytest.mark.parametrize('severity', [LeakSeverity.MINOR, LeakSeverity.CRITICAL])
+    @mock.patch('thermalctld.try_get')
+    def test_injected_leak_published_then_cleared(self, mock_try_get, severity):
+        """Publish the injection and its severity, then clear its test fields."""
+        chassis = MockChassis()
+        sensor = chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.leak_severity = severity
+        sensor.test_leak = True
+        sensor.set_leak(True)
+        updater = self._make_leak_updater(chassis, mock_try_get)
+
+        updater._refresh_leak_status()
+        system = updater.system_table.set.call_args[0][1].fv_dict
+        assert system['device_leak_status'] == severity.value
+        assert system['test_leak'] == 'Enabled'
+        fields = dict(updater.last_sensor_fvs[sensor.get_name()])
+        assert fields['test_leak'] == 'Enabled'
+        assert fields['test_leak_severity'] == severity.value
+        assert fields['leak_source'] == 'test'
+
+        sensor.set_leak(False)
+        updater._refresh_leak_status()
+        system = updater.system_table.set.call_args[0][1].fv_dict
+        assert system['device_leak_status'] == 'None'
+        assert system['test_leak'] == 'Disabled'
+        fields = dict(updater.last_sensor_fvs[sensor.get_name()])
+        assert fields['test_leak'] == 'Disabled'
+        assert fields['test_leak_severity'] == 'None'
+        assert fields['leak_source'] == 'none'
+
+    @pytest.mark.parametrize('test_index', [0, 1])
+    @pytest.mark.parametrize('test_severity', [LeakSeverity.MINOR, LeakSeverity.CRITICAL])
+    @pytest.mark.parametrize('physical_severity', [LeakSeverity.MINOR, LeakSeverity.CRITICAL])
+    @mock.patch('thermalctld.try_get')
+    def test_physical_leak_takes_precedence(self, mock_try_get, test_index,
+                                           test_severity, physical_severity):
+        """An injection cannot raise or suppress a real leak, in either sensor order."""
+        chassis = MockChassis()
+        sensors = chassis.get_liquid_cooling().leakage_sensors
+        injected, physical = sensors[test_index], sensors[1 - test_index]
+        injected.test_leak = True
+        injected.leak_severity = test_severity
+        physical.leak_severity = physical_severity
+        for sensor in sensors:
+            sensor.set_leak(True)
+        updater = self._make_leak_updater(chassis, mock_try_get)
+
+        updater._refresh_leak_status()
+        system = updater.system_table.set.call_args[0][1].fv_dict
+        assert system['device_leak_status'] == physical_severity.value
+        assert system['test_leak'] == 'Disabled'
+        assert injected.get_name() not in updater.critical_sensors
+        assert dict(updater.last_sensor_fvs[injected.get_name()])['leak_source'] == 'test'
+        assert dict(updater.last_sensor_fvs[physical.get_name()])['leak_source'] == 'physical'
+
+    @mock.patch('thermalctld.try_get')
+    def test_multiple_injected_minor_leaks_keep_test_flag(self, mock_try_get):
+        """The branch's multiple-leak escalation remains a test-only aggregate."""
+        chassis = MockChassis()
+        for sensor in chassis.get_liquid_cooling().leakage_sensors:
+            sensor.test_leak = True
+            sensor.leak_severity = LeakSeverity.MINOR
+            sensor.set_leak(True)
+        updater = self._make_leak_updater(chassis, mock_try_get)
+
+        updater._refresh_leak_status()
+        system = updater.system_table.set.call_args[0][1].fv_dict
+        assert system['device_leak_status'] == 'CRITICAL'
+        assert system['test_leak'] == 'Enabled'
+
+    @mock.patch('thermalctld.try_get')
+    def test_leak_sensor_read_once_per_cycle(self, mock_try_get):
+        """A physical leak appearing after the poll cannot mix sensor snapshots."""
+        chassis = MockChassis()
+        injected, physical = chassis.get_liquid_cooling().leakage_sensors
+        injected.test_leak = True
+        injected.set_leak(True)
+        physical.is_leak = mock.MagicMock(side_effect=[False, True])
+        updater = self._make_leak_updater(chassis, mock_try_get)
+
+        updater._refresh_leak_status()
+        physical.is_leak.assert_called_once_with()
+        assert updater.system_table.set.call_args[0][1].fv_dict['test_leak'] == 'Enabled'
+
+    @pytest.mark.parametrize('initial_test', [False, True])
+    @mock.patch('thermalctld.try_get')
+    def test_leak_source_change_restarts_escalation_timer(self, mock_try_get, initial_test):
+        """Changing source without a clear poll cannot inherit the old escalation."""
+        chassis = MockChassis()
+        sensor = chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.test_leak = initial_test
+        sensor.leak_severity = LeakSeverity.MINOR
+        sensor.set_leak(True)
+        updater = self._make_leak_updater(chassis, mock_try_get)
+        updater._refresh_leak_status()
+        updater.leaking_sensors[sensor.get_name()] -= timedelta(seconds=2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == LeakSeverity.CRITICAL
+
+        sensor.test_leak = not initial_test
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == LeakSeverity.MINOR
+        assert updater.last_test_leak is not initial_test
+        assert sensor.get_name() not in updater.critical_sensors
+
+        updater.leaking_sensors[sensor.get_name()] -= timedelta(seconds=2)
+        updater._refresh_leak_status()
+        assert updater.last_leak_status == LeakSeverity.CRITICAL
+
+    @mock.patch('thermalctld.try_get')
+    def test_leak_source_change_published_at_same_severity(self, mock_try_get):
+        """A physical CRITICAL replacing an injected CRITICAL enables policy."""
+        chassis = MockChassis()
+        sensor = chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.test_leak = True
+        sensor.set_leak(True)
+        updater = self._make_leak_updater(chassis, mock_try_get)
+        updater._refresh_leak_status()
+        updater.system_table.reset_mock()
+
+        sensor.test_leak = False
+        updater._refresh_leak_status()
+        updater.system_table.set.assert_called_once()
+        system = updater.system_table.set.call_args[0][1].fv_dict
+        assert system['device_leak_status'] == 'CRITICAL'
+        assert system['test_leak'] == 'Disabled'
+
+    @pytest.mark.parametrize('active', [False, True])
+    @mock.patch('thermalctld.try_get')
+    def test_first_refresh_replaces_stale_test_flag(self, mock_try_get, active):
+        """First refresh clears a stale test flag even if severity is unchanged."""
+        chassis = MockChassis()
+        sensor = chassis.get_liquid_cooling().leakage_sensors[0]
+        sensor.set_leak(active)
+        updater = self._make_leak_updater(chassis, mock_try_get)
+        updater.last_leak_status = LeakSeverity.CRITICAL if active else None
+        updater.system_table.get.return_value = (True, [('test_leak', 'Enabled')])
+
+        updater._refresh_leak_status()
+        updater.system_table.set.assert_called_once()
+        system = updater.system_table.set.call_args[0][1].fv_dict
+        assert system['test_leak'] == 'Disabled'
+        assert system['device_leak_status'] == ('CRITICAL' if active else 'None')
+        updater.system_table.reset_mock()
+        updater._refresh_leak_status()
+        updater.system_table.set.assert_not_called()
+
     def test_update(self):
         mock_chassis = MockChassis()
         liquid_cooling_updater = thermalctld.LiquidCoolingUpdater(mock_chassis, 0.5)

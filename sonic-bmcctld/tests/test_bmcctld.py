@@ -436,6 +436,18 @@ class TestPolicyReader:
 
 class TestCriticalEventChecker:
 
+    @pytest.mark.parametrize('test_flag', ['Enabled', 'Disabled'])
+    def test_injected_leak_does_not_block_power_on(self, critical_event_checker, test_flag):
+        """Only a physical CRITICAL leak blocks power-on or returns an active status."""
+        tbl = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
+        _set_table_entry(tbl, bmcctld.SYSTEM_LEAK_STATUS_KEY,
+                         {bmcctld.FIELD_DEVICE_LEAK_STATUS: bmcctld.SYSTEM_LEAK_CRITICAL,
+                          bmcctld.FIELD_TEST_LEAK: test_flag})
+        with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
+            assert critical_event_checker.has_any_critical_event() is (test_flag == 'Disabled')
+            expected = bmcctld.SYSTEM_LEAK_CRITICAL if test_flag == 'Disabled' else ''
+            assert critical_event_checker.get_system_leak_status() == expected
+
     def test_no_critical_system_leak(self, critical_event_checker):
         tbl = Table(None, bmcctld.SYSTEM_LEAK_STATUS_TABLE)
         with patch.object(bmcctld.swsscommon, 'Table', return_value=tbl):
@@ -685,6 +697,27 @@ class TestBmcEventHandlerChassisModule:
 # --------------------------------------------------------------------------
 
 class TestBmcEventHandlerSystemLeak:
+
+    @pytest.mark.parametrize('severity', [bmcctld.SYSTEM_LEAK_CRITICAL, bmcctld.SYSTEM_LEAK_MINOR])
+    @pytest.mark.parametrize('action', [bmcctld.ACTION_POWER_OFF, bmcctld.ACTION_GRACEFUL_SHUTDOWN])
+    def test_test_leak_audited_not_dispatched(self, event_handler, severity, action):
+        """Injected leaks audit the configured power action without queuing it."""
+        event_handler.policy_reader.get_leak_control_policy = MagicMock(
+            return_value=self._make_policy(system_critical_leak_action=action,
+                                           system_minor_leak_action=action))
+        event_handler._handle_system_leak(
+            bmcctld.SYSTEM_LEAK_STATUS_KEY,
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: severity, bmcctld.FIELD_TEST_LEAK: 'Enabled'})
+        assert event_handler.action_queue.empty()
+        message = event_handler.log_notice.call_args[0][0]
+        assert 'TEST SYSTEM LEAK' in message
+        assert 'action={} not dispatched'.format(action) in message
+
+        # A real leak at the same severity must still dispatch normally.
+        event_handler._handle_system_leak(
+            bmcctld.SYSTEM_LEAK_STATUS_KEY,
+            {bmcctld.FIELD_DEVICE_LEAK_STATUS: severity, bmcctld.FIELD_TEST_LEAK: 'Disabled'})
+        assert event_handler.action_queue.get_nowait().action == action
 
     def _make_policy(self, **kwargs):
         policy = {
