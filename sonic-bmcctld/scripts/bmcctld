@@ -160,13 +160,11 @@ class ActionItem:
     action finishes — used by Rack Manager command handlers to write the
     final CMD_STATUS_DONE / CMD_STATUS_FAILED back to STATE_DB. It is not
     called for a request that the daemon stop abandoned.
-    startup marks the automatic power-on.
     """
-    def __init__(self, action, event_desc, on_complete=None, startup=False):
+    def __init__(self, action, event_desc, on_complete=None):
         self.action = action
         self.event_desc = event_desc
         self.on_complete = on_complete
-        self.startup = startup
 
 
 class Operation:
@@ -726,11 +724,11 @@ class SwitchHostController(EventLogger):
         """
         deadline = time.monotonic() + timeout_secs
         while True:
-            if cancel.is_set():
-                return PowerCallResult.CANCELLED
             if self.get_oper_status() == expected_status:
                 self.log_info("{}: oper_status confirmed {}".format(context, expected_status))
                 return PowerCallResult.CONFIRMED
+            if cancel.is_set():
+                return PowerCallResult.CANCELLED
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -2065,24 +2063,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             self.log_warning("Unknown action '{}' in queue; skipping".format(item.action))
             self._fire(item.on_complete, "-", False)
             return
-        if item.startup:
-            try:
-                admin_status = self.policy_reader.get_switch_host_admin_status()
-                removal_first = self._rm_removal_recorded()
-            except Exception as e:
-                # An automatic raise whose preconditions cannot be read is not taken.
-                self._event_log.log_notice(
-                    "STARTUP power_on dropped: its preconditions could not be read ({})".format(
-                        repr(e)))
-                return
-            if admin_status != ADMIN_UP:
-                self._event_log.log_notice(
-                    "STARTUP power_on dropped: admin_status='{}'".format(admin_status))
-                return
-            if removal_first:
-                self._event_log.log_notice(
-                    "STARTUP power_on dropped: a Rack Manager power removal is recorded")
-                return
 
         live_status = self._guard_should_skip(item)
         if live_status is not None:
@@ -2128,23 +2108,6 @@ class BmcctldDaemon(daemon_base.DaemonBase):
             if result and result[0]:
                 yield key, fvs_to_dict(result[1])
 
-    def _rm_removal_recorded(self):
-        """True when a Rack Manager power-off or graceful shutdown row is recorded.
-
-        DONE or abandoned keeps the automatic power-on off across BMC restarts;
-        PENDING, no status or IN_PROGRESS means that removal is about to run. A removal
-        that failed otherwise does not count.
-        """
-        for key, entry in self._rm_rows():
-            if entry.get(FIELD_COMMAND, "") not in (CMD_POWER_OFF, CMD_GRACEFUL_SHUT):
-                continue
-            status = entry.get(FIELD_STATUS, "")
-            if status in (CMD_STATUS_PENDING, "", CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
-                return True
-            if status == CMD_STATUS_FAILED and entry.get(FIELD_RESULT, "") == OP_RESULT_ABANDONED:
-                return True
-        return False
-
     def _sweep_stale_rm_rows(self):
         """Close Rack Manager rows left IN_PROGRESS by a previous run (before the event thread starts)."""
         for key, entry in self._rm_rows():
@@ -2155,22 +2118,33 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                 "marking FAILED/{}".format(key, entry.get(FIELD_COMMAND, "-"), OP_RESULT_ABANDONED))
             self.event_handler._set_cmd_status(key, CMD_STATUS_FAILED, OP_RESULT_ABANDONED)
 
-    def _enqueue_startup_power_on(self):
-        """Queue the automatic power-on; its dispatch re-checks admin_status, removals and the gate."""
-        oper_status = self.controller.get_oper_status()
-        self.log_info("STARTUP: Switch-Host oper_status={}".format(oper_status))
-        if oper_status == SWITCH_HOST_ONLINE:
-            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
-            self.controller.init_host_state()
-            return
-        # The daemon admits its own request through the same gate as any other.
-        if self.critical_event_checker.is_power_on_blocked():
-            self._event_log.log_warning(
-                "STARTUP: Switch-Host power_on BLOCKED ({}: active alert blocks power-on)".format(
-                    POWER_ON_BLOCK_REASON))
-            return
-        self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
-        self.action_queue.put(ActionItem(ACTION_POWER_ON, "STARTUP", startup=True))
+    def _startup_power_on(self):
+        """Issue the automatic power-on in place, as one operation: recorded, gated and preemptible."""
+        self._execute_action_item(ActionItem(ACTION_POWER_ON, "STARTUP"))
+
+    def _rack_mgr_power_cmd_executed(self):
+        """
+        Return True if any RACK_MANAGER_COMMAND entry for POWER_ON or POWER_OFF
+        has status IN_PROGRESS or DONE — indicating the Rack Manager issued an
+        explicit power directive during the boot delay.
+        """
+        tbl = swsscommon.Table(self.event_handler.state_db, RACK_MANAGER_COMMAND_TABLE)
+        for key in tbl.getKeys():
+            result = tbl.get(key)
+            if not (result and result[0]):
+                continue
+            entry = fvs_to_dict(result[1])
+            command = entry.get(FIELD_COMMAND, "")
+            status = entry.get(FIELD_STATUS, "")
+            if command in (CMD_POWER_ON, CMD_POWER_OFF, CMD_GRACEFUL_SHUT) and \
+               status in (CMD_STATUS_IN_PROGRESS, CMD_STATUS_DONE):
+                return True
+            # A row that a previous run left IN_PROGRESS is closed as FAILED/ABANDONED
+            # by the startup sweep; it is the same directive.
+            if command in (CMD_POWER_ON, CMD_POWER_OFF, CMD_GRACEFUL_SHUT) and \
+               status == CMD_STATUS_FAILED and entry.get(FIELD_RESULT, "") == OP_RESULT_ABANDONED:
+                return True
+        return False
 
     def _initial_power_on_sequence(self):
         """
@@ -2182,9 +2156,12 @@ class BmcctldDaemon(daemon_base.DaemonBase):
              up and verify liquid flow (liquid-cooled) or simply stabilise (air-cooled).
              While sleeping, keep draining the action_queue so Rack Manager commands
              (e.g. POWER_OFF) arriving during the delay are acted on immediately.
-          3. After the delay, queue the automatic power-on. Its dispatch drops it
-             when admin_status is no longer up or a Rack Manager power removal is
-             recorded; the gate and the guard apply as for any request.
+          3. After the delay, check if Rack Manager issued an explicit POWER_ON,
+             POWER_OFF, or GRACEFUL_SHUT command (CMD_STATUS_IN_PROGRESS or DONE in
+             RACK_MANAGER_COMMAND table). If so, skip automatic power-on.
+          4. Check for CRITICAL leaks/alerts.
+          5. If none found and Switch-Host is OFFLINE, power it ON.
+          6. Update HOST_STATE.
         """
         admin_status = self.policy_reader.get_switch_host_admin_status()
         if admin_status != ADMIN_UP:
@@ -2240,7 +2217,30 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         if self.stop_event.is_set():
             return
 
-        self._enqueue_startup_power_on()
+        # After the boot delay, check whether a Rack Manager POWER_ON or POWER_OFF
+        # command was executed. We detect this by scanning the RACK_MANAGER_COMMAND
+        # table for any entry whose command is POWER_ON/POWER_OFF and whose status
+        # is IN_PROGRESS or DONE (set by the event handler and on_complete callback).
+        if self._rack_mgr_power_cmd_executed():
+            self.log_notice("STARTUP: Rack Manager POWER_ON/POWER_OFF command executed "
+                                       "during boot delay; skipping automatic power-on")
+            return
+
+        if self.critical_event_checker.is_power_on_blocked():
+            self._event_log.log_warning(
+                "STARTUP: {}: active leak or Rack Manager alert; NOT powering on Switch-Host".format(
+                    POWER_ON_BLOCK_REASON))
+            return
+
+        oper_status = self.controller.get_oper_status()
+        self.log_info("STARTUP: Switch-Host oper_status={}".format(oper_status))
+
+        if str(oper_status).upper() != SWITCH_HOST_ONLINE:
+            self._event_log.log_notice("STARTUP: Switch-Host OFFLINE — issuing power_on")
+            self._startup_power_on()
+        else:
+            self._event_log.log_notice("STARTUP: Switch-Host already ONLINE; refreshing HOST_STATE")
+            self.controller.init_host_state()
 
     def _execute_action_item(self, item):
         """
@@ -2340,8 +2340,8 @@ class BmcctldDaemon(daemon_base.DaemonBase):
                         admin_status))
             else:
                 self._event_log.log_notice("STARTUP: non-liquid-cooled system — "
-                                           "queueing power_on")
-                self._enqueue_startup_power_on()
+                                           "immediate power_on, no additional checks")
+                self._startup_power_on()
         else:
             # Liquid-cooled: wait for Rack Manager to verify liquid flow, check for
             # leaks/alerts, then power on if safe.
