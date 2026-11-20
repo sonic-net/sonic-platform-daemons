@@ -8,7 +8,7 @@ import grpc
 import pytest
 
 from harness.certs import SOC_NAME, Pki
-from harness.topology import LOOPBACK3_LOWER, LOOPBACK3_UPPER, Topology, soc_ip
+from harness.topology import LOOPBACK3_UPPER, LOOPBACK3_LOWER, Topology, soc_ip
 from harness.util import TIMESTAMP_RE, stays_true, wait_until
 
 # Ethernet0's SoC, 192.168.0.3 and fc02:1000::3.
@@ -17,10 +17,15 @@ SOC_V6 = soc_ip("Ethernet0", ipv6=True)
 CERT_DIR = "/etc/sonic/bbcerts"
 
 # read_side: index of this ToR in the SoC's port lists.
-READ_SIDES = [(LOOPBACK3_LOWER, 0), (LOOPBACK3_UPPER, 1)]
+READ_SIDES = [(LOOPBACK3_UPPER, 1), (LOOPBACK3_LOWER, 0)]
 
 
-def aa(dut, loopback3=LOOPBACK3_LOWER, soc=True, **kw):
+def add_cable_aa(dut, loopback3=LOOPBACK3_LOWER, soc=True, **kw):
+    """Configure Ethernet0 as an active-active port, its SoC at 192.168.0.3,
+    and return a plaintext SoC double started there. soc=False starts none,
+    for the tests that start a TLS double or need none: gRPC lets a second
+    double listen on the same address, and the two would share ycabled's
+    connections."""
     dut.configure(Topology(loopback3=loopback3).active_active("Ethernet0", soc_ipv4=SOC + "/32", **kw))
     return dut.soc(SOC) if soc else None
 
@@ -41,7 +46,7 @@ def test_toggle_self(dut, loopback3, read_side, state):
     the state, the read side, and the state again as active_side. It records
     the switch's start and end in MUX_METRICS_TABLE.
 
-    Cases: the lower ToR (read side 0) or the upper ToR (read side 1), from
+    Cases: the upper ToR (read side 1) or the lower ToR (read side 0), from
     Loopback3, toggled to active or standby.
 
     Steps:
@@ -58,7 +63,7 @@ def test_toggle_self(dut, loopback3, read_side, state):
     6. Expect MUX_METRICS_TABLE xcvrd_switch_self_<state>_start and _end in
        ycabled's timestamp format.
     """
-    soc = aa(dut, loopback3)
+    soc = add_cable_aa(dut, loopback3)
     soc.admin = [state != "active"] * 2
     dut.start()
     mark = soc.mark()
@@ -81,7 +86,7 @@ def test_toggle_peer(dut, loopback3, read_side, state):
     switch in MUX_METRICS_TABLE, and leaves this ToR's own HW_MUX_CABLE_TABLE
     row alone.
 
-    Cases: the lower ToR (read side 0) or the upper ToR (read side 1), from
+    Cases: the upper ToR (read side 1) or the lower ToR (read side 0), from
     Loopback3, with the peer toggled to active or standby.
 
     Steps:
@@ -100,7 +105,7 @@ def test_toggle_peer(dut, loopback3, read_side, state):
     6. Expect MUX_METRICS_TABLE xcvrd_switch_peer_<state>_start and _end, and
        the HW_MUX_CABLE_TABLE row unchanged.
     """
-    soc = aa(dut, loopback3)
+    soc = add_cable_aa(dut, loopback3)
     soc.admin = [state != "active"] * 2
     dut.start()
     self_before = dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")
@@ -132,7 +137,7 @@ def test_toggle_peer_failure(dut):
        read_side: 0, active_side: unknown}, and only
        xcvrd_switch_peer_unknown_start and _end in MUX_METRICS_TABLE.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     soc.script("SetAdminForwardingPortState", code=grpc.StatusCode.UNAVAILABLE)
     row = dut.peer_toggle("Ethernet0", "standby")
@@ -176,7 +181,7 @@ def test_toggle_failure(dut, script):
        unknown}, and only xcvrd_switch_self_unknown_start and _end in
        MUX_METRICS_TABLE.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     soc.script("SetAdminForwardingPortState", **script)
     assert dut.toggle("Ethernet0", "standby") == {"state": "unknown", "read_side": "0", "active_side": "unknown"}
@@ -196,7 +201,7 @@ def test_toggle_soc_hangs(dut):
     4. Toggle Ethernet0 to standby, and expect state unknown, answered 0.4 s to
        2 s after the request.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     soc.script("SetAdminForwardingPortState", delay=3)
     t0 = time.monotonic()
@@ -218,7 +223,7 @@ def test_toggle_ignores_other_states(dut):
        SetAdminForwardingPortState RPC.
     5. Toggle Ethernet0 to standby and expect state standby.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     mark = dut.monitor.mark()
     soc_mark = soc.mark()
@@ -237,22 +242,22 @@ def test_forwarding_state_probe(dut, loopback3, read_side):
     state, response_peer the peer's. A probe only answers: HW_MUX_CABLE_TABLE
     is not written.
 
-    Cases: the lower ToR (read side 0) or the upper ToR (read side 1), from
+    Cases: the upper ToR (read side 1) or the lower ToR (read side 0), from
     Loopback3.
 
     Steps:
     1. Configure Ethernet0 as an active-active port with the case's Loopback3
-       and a SoC double at 192.168.0.3, whose admin state is active for port id
-       0, the lower ToR, and standby for port id 1.
+       and a SoC double at 192.168.0.3, whose admin state is standby for port
+       id 1, the upper ToR, and active for port id 0, the lower ToR.
     2. Start ycabled.
     3. Send a forwarding state probe for Ethernet0, as linkmgrd does through
        FORWARDING_STATE_COMMAND.
-    4. Expect {response: active, response_peer: standby} on the lower ToR, and
-       the reverse on the upper ToR.
+    4. Expect {response: standby, response_peer: active} on the upper ToR, and
+       the reverse on the lower ToR.
     5. Expect one QueryAdminForwardingPortState RPC since the probe, {portid:
        [0, 1], state: [False, False]}, and no HW_MUX_CABLE_TABLE write.
     """
-    soc = aa(dut, loopback3)
+    soc = add_cable_aa(dut, loopback3)
     soc.admin = [True, False]
     dut.start()
     mark = soc.mark()
@@ -287,7 +292,7 @@ def test_forwarding_state_probe_failure(dut, script):
     4. Send a forwarding state probe for Ethernet0, and expect {response:
        unknown, response_peer: unknown}.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     soc.script("QueryAdminForwardingPortState", **script)
     assert dut.fwd_probe("Ethernet0") == {"response": "unknown", "response_peer": "unknown"}
@@ -305,7 +310,7 @@ def test_forwarding_state_probe_ignores_other_commands(dut):
     4. Expect no FORWARDING_STATE_RESPONSE write for 1.5 s.
     5. Send a forwarding state probe for Ethernet0 and expect response active.
     """
-    aa(dut)
+    add_cable_aa(dut)
     dut.start()
     mark = dut.monitor.mark()
     dut.appl.set("FORWARDING_STATE_COMMAND", "Ethernet0", {"command": "reset"})
@@ -395,7 +400,7 @@ def test_cable_absent_at_startup(dut):
     5. Toggle Ethernet0 to standby, and expect state standby and the SoC's
        admin state of port id 0 off.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.hw.port(1).present = False
     dut.start()
     assert dut.logs(contains="DAC cable not present while Channel setup Port Ethernet0")
@@ -466,7 +471,7 @@ def test_soc_comes_up_later(dut):
     5. Toggle Ethernet0 to standby, and expect state standby and the SoC's
        admin state of port id 0 off.
     """
-    soc = aa(dut, soc=False)
+    add_cable_aa(dut, soc=False)
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == {
         "state": "unknown", "read_side": "0", "active_side": "unknown"}
@@ -494,7 +499,7 @@ def test_connection_loss_reports_failure(dut):
     5. Start the SoC double again, and expect a forwarding state probe answered
        active within 15 s.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     assert dut.fwd_probe("Ethernet0")["response"] == "active"
     mark = dut.monitor.mark()
@@ -541,7 +546,7 @@ def test_tls(dut, pki, auth_level, require_client_auth):
     5. Toggle Ethernet0 to standby, and expect state standby and the SoC's
        admin state of port id 0 off.
     """
-    aa(dut, soc=False)
+    add_cable_aa(dut, soc=False)
     tls_config(dut, pki, auth_level)
     soc = dut.soc(SOC, tls=pki.server_tls(require_client_auth))
     dut.start()
@@ -570,7 +575,7 @@ def test_tls_handshake_failure(dut, pki, case):
     4. Expect Ethernet0's STATE_DB state unknown; toggle it to standby and
        expect unknown.
     """
-    aa(dut, soc=False)
+    add_cable_aa(dut, soc=False)
     tls_config(dut, pki, "server", ca="other-ca.crt" if case == "wrong-ca" else "ca.crt",
                target="other.bb.test" if case == "wrong-target-name" else SOC_NAME)
     dut.soc(SOC, tls=pki.server_tls(require_client_auth=case == "server-needs-client-cert"))
@@ -609,7 +614,7 @@ def test_tls_misconfiguration(dut, pki, case):
     7. Toggle Ethernet0 to standby, and expect state standby and the SoC's
        admin state of port id 0 off.
     """
-    aa(dut, soc=False)
+    add_cable_aa(dut, soc=False)
     client = {"mutual-without-client-cert": False, "mutual-without-client-key": "cert-only"}.get(case, True)
     tls_config(dut, pki, "mutual" if case.startswith("mutual") else "server",
                ca="/etc/sonic/bbcerts/missing.crt" if case == "missing-ca-file" else "ca.crt",
@@ -651,7 +656,7 @@ def test_tls_misconfiguration_keeps_running(dut, pki):
        the exit of the known issue.
     3. Expect ycabled still running 75 s later.
     """
-    aa(dut, soc=False)
+    add_cable_aa(dut, soc=False)
     tls_config(dut, pki, "server", target=None)
     dut.tolerate_python_failure(crash=True, exit=True)
     dut.start()
@@ -678,7 +683,7 @@ def test_tls_auth_level_client(dut, pki):
        the known issue.
     4. Expect Ethernet0's STATE_DB state active.
     """
-    aa(dut, soc=False)
+    add_cable_aa(dut, soc=False)
     tls_config(dut, pki, "client")
     dut.soc(SOC, tls=pki.server_tls(require_client_auth=True))
     dut.tolerate_python_failure(crash=True)
@@ -703,25 +708,24 @@ def test_tls_type_insecure_and_missing(dut, config):
     3. Expect Ethernet0's STATE_DB state active, and
        QueryAdminForwardingPortState RPCs at the SoC.
     """
-    aa(dut, soc=False)
+    soc = add_cable_aa(dut)
     dut.topo.grpcclient = {"config": config}
     dut.configure(dut.topo)
-    soc = dut.soc(SOC)
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")["state"] == "active"
     assert soc.rpcs("QueryAdminForwardingPortState")
 
 
-@pytest.mark.parametrize("loopback3,tor", [(LOOPBACK3_LOWER, 1), (LOOPBACK3_UPPER, 0)])
+@pytest.mark.parametrize("loopback3,tor", [(LOOPBACK3_UPPER, 0), (LOOPBACK3_LOWER, 1)])
 def test_graceful_restart_subscription(dut, loopback3, tor):
-    """One GracefulRestart stream per SoC. Python ycabled sends UPPER_TOR (1)
-    from the lower ToR (read side 0) and LOWER_TOR (0) from the upper ToR, the
-    opposite of the names. Which one the SoC expects is not confirmed, so this
-    keeps what Python sends. When the stream ends ycabled subscribes again
-    after the `period` of the last response.
+    """One GracefulRestart stream per SoC. The tor that Python ycabled sends is
+    the opposite of the names: the upper ToR (read side 1) sends LOWER_TOR (0),
+    and the lower ToR (read side 0) UPPER_TOR (1). Which one the SoC expects is
+    not confirmed, so this keeps what Python sends. When the stream ends
+    ycabled subscribes again after the `period` of the last response.
 
-    Cases: the lower ToR, which sends tor 1, or the upper ToR, which sends tor
-    0.
+    Cases: the upper ToR, which sends tor 0, or the lower ToR, which sends tor
+    1.
 
     Steps:
     1. Configure Ethernet0 as an active-active port with the case's Loopback3
@@ -729,10 +733,10 @@ def test_graceful_restart_subscription(dut, loopback3, tor):
        response with period 1 s and then end.
     2. Start ycabled.
     3. Wait up to 10 s for two NotifyGracefulRestartStart RPCs at the SoC.
-    4. Expect both with the request {tor: 1} on the lower ToR, or {tor: 0} on
-       the upper ToR, and the second 0.8 s to 4 s after the first.
+    4. Expect both with the request {tor: 0} on the upper ToR, or {tor: 1} on
+       the lower ToR, and the second 0.8 s to 4 s after the first.
     """
-    soc = aa(dut, loopback3)
+    soc = add_cable_aa(dut, loopback3)
     soc.gr_responses = [{"period": 1, "guid": "bb-1", "msgtype": 1, "notifytype": 2}]
     soc.gr_hold = False
     dut.start()
@@ -752,7 +756,7 @@ def test_graceful_restart_held_stream(dut):
     2. Start ycabled, and wait for its NotifyGracefulRestartStart RPC.
     3. Expect still only one such RPC 3 s later.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     dut.start()
     soc.wait_rpcs("NotifyGracefulRestartStart", 1)
     time.sleep(3)
@@ -776,7 +780,7 @@ def test_graceful_restart_retry_after_20s(dut, case):
     3. Wait up to 30 s for two NotifyGracefulRestartStart RPCs at the SoC, and
        expect the second 19 s to 25 s after the first.
     """
-    soc = aa(dut)
+    soc = add_cable_aa(dut)
     soc.gr_hold = False
     if case == "error":
         soc.script("NotifyGracefulRestartStart", code=grpc.StatusCode.UNAVAILABLE)
@@ -844,6 +848,9 @@ def test_slow_soc_does_not_delay_other_ports(dut):
         p.execute()
     for port in ports:
         dut.monitor.wait_access(mark, 10, kind="write", db="STATE_DB", table="HW_MUX_CABLE_TABLE", key=port)
+   # ycabled give each gRPC a 0.5s deadline, so the total delay for four
+   # ports is 2 s if served sequentially, but in this test we expect
+   # parallel handling within a cutoff of 1.2 s.
     assert time.monotonic() - t0 < 1.2
 
 
@@ -861,7 +868,7 @@ def test_no_toggle_without_read_side(dut):
        to standby and expect state unknown.
     4. Expect no SetAdminForwardingPortState RPC at the SoC.
     """
-    soc = aa(dut, loopback3=None)
+    soc = add_cable_aa(dut, loopback3=None)
     dut.start()
     soc_mark = soc.mark()
     assert dut.toggle("Ethernet0", "standby")["state"] == "unknown"

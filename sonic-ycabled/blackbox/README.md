@@ -30,7 +30,7 @@ user with sudo and with the `NET_ADMIN` capability, like the pipeline does;
 arguments go to pytest.
 
 ```sh
-sonic-ycabled/blackbox/run.sh                     # everything, about 16 minutes
+sonic-ycabled/blackbox/run.sh                     # everything, about 17 minutes
 sonic-ycabled/blackbox/run.sh -m "not slow"       # skip the cases that take a minute or more
 sonic-ycabled/blackbox/run.sh tests/test_cli.py -k firmware
 sonic-ycabled/blackbox/run.sh --bb-coverage                  # with Python ycabled's code coverage
@@ -41,10 +41,11 @@ sonic-ycabled/blackbox/run.sh --bb-coverage                  # with Python ycabl
 `pytest` in `sonic-ycabled` collects these tests too (`testpaths` in its
 `pytest.ini`). With `BB_ENABLE=1` they run after the unit tests, in the same
 results, and the coverage of Python ycabled under them adds to the unit tests' in
-pytest-cov's report; the run takes about 15 minutes instead of 15 seconds. The
-sonic-platform-daemons pipeline runs them this way, in its sonic-slave container,
-which it starts with `--cap-add=NET_ADMIN`, and where libswsscommon,
-python3-swsscommon and the SONiC wheels are installed for the unit tests already:
+pytest-cov's report; the run takes as long as with `run.sh`, about 17 minutes, instead
+of 15 seconds. The sonic-platform-daemons pipeline runs them this way, in its
+sonic-slave container, which it starts with `--cap-add=NET_ADMIN`, and where
+libswsscommon, python3-swsscommon and the SONiC wheels are installed for the unit
+tests already:
 
 ```sh
 sudo apt-get install -y redis-server python3-pytest-timeout
@@ -195,8 +196,8 @@ Markers:
 | Active-standby toggle and probe, driver selection, VS and the mux simulator (3.3.1, 3.3.2, 3.4.2) | `test_active_standby.py` |
 | Active-active toggles, forwarding state probe, channel, connectivity `failure`, TLS, GracefulRestart (3.3.3 to 3.3.6, 3.4.1) | `test_active_active.py` |
 | Cable insertion and removal (3.3.7) | `test_insert_remove.py` |
-| Telemetry (3.3.8) | `test_telemetry.py` |
-| Every CLI command family and its error paths (3.3.9, 3.5.5) | `test_cli.py` |
+| Telemetry, and the gRPC connection status in it, as grpc-core reports it for a SoC that answers, refuses connections, accepts them and never answers, goes away, comes back, or fails the TLS handshake (3.3.8) | `test_telemetry.py` |
+| Every CLI command family and its error paths, for active-standby ports and, since the CLI sends the commands for every mux port, for active-active ones (3.3.9, 3.5.5) | `test_cli.py` |
 | `XCVRD_LOG`, Loopback3, `grpc_secrets.json`, log compatibility, Redis connections (3.3.10, 3.4.1, C5, N5) | `test_config.py` |
 | Multi-ASIC namespaces (F1) | `test_multi_asic.py` |
 | Requests for one cable from different sources at the same time: toggles, insertion and removal, the CLI | `test_concurrency.py` |
@@ -282,7 +283,7 @@ sonic-ycabled/blackbox/
 │   ├── bbfake/           fake vendor driver modules, copied into the driver overlay
 │   └── sonic_platform/   fake platform API
 ├── tests/                the tests, one module per area of ycabled
-├── bench/                benchmarks, run on request
+├── bench/                benchmarks and the soak test, run on request
 └── report/               the reports of run.sh (not in git)
 ```
 
@@ -441,16 +442,16 @@ mark itself.
 | `FakeHardware.mark()`, `calls(since, port, method, op)` | The call log (`Call`). |
 | `FakeHardware.overlaps(since, port)` | Driver calls that started while another call to the same cable was still running (`Overlap`). |
 | `FakeHardware.platform_init_error` | Makes `Platform()` raise, for the startup failure path. |
-| `PortModel(index)` | One cable: presence, transceiver info, vendor, read side, mux direction, switch counts, eye heights, firmware versions and so on. By default it is present, read from ToR A, with the mux toward ToR A, so ycabled publishes it active. Its `m_<method>` methods, below, are the driver's default behavior. |
+| `PortModel(index)` | One cable: presence, transceiver info, vendor, read side, mux direction, switch counts, eye heights, firmware versions and so on. By default it is present, read from the upper ToR, with the mux toward the upper ToR, so ycabled publishes it active. Its `m_<method>` methods, below, are the driver's default behavior. |
 | `PortModel.run(op, method, args)` | Serves one call: presence or transceiver info for `platform` (no transceiver info when the cable is absent), an attribute for `attr`, the `initialized` flag for `init`, and `m_<method>` for `driver`. A driver method without one raises `NotImplementedError`. |
 | `m_get_vendor`, `m_get_read_side`, `m_get_mux_direction`, `m_get_active_linked_tor_side` | Return `vendor`, `read_side` and `mux_direction`. The active linked side is `active_linked_side` when a test sets it, otherwise the mux direction. |
-| `m_toggle_mux_to_tor_a`, `m_toggle_mux_to_tor_b` | Set the mux direction, clear `active_linked_side`, count a manual switch, and return True. |
+| `m_toggle_mux_to_tor_a`, `m_toggle_mux_to_tor_b` | Point the mux at the upper ToR (`_tor_a`) or the lower ToR (`_tor_b`), clear `active_linked_side`, count a manual switch, and return True. |
 | `m_set_switching_mode`, `m_set_anlt`, `m_set_fec_mode`, `m_enable_prbs_mode`, `m_disable_prbs_mode`, `m_enable_loopback_mode`, `m_disable_loopback_mode`, `m_reset` | Record the setting in the model (`switching_mode`, `anlt`, `fec_mode`, `prbs`, `loopback`) and return True. `m_reset` only returns True. |
 | `m_download_firmware`, `m_activate_firmware`, `m_rollback_firmware` | Return 0, success. The download also sets the download status back to not in progress. |
 | `m_get_switch_count_total`, `m_get_eye_heights`, `m_is_link_active`, `m_get_firmware_version`, `m_get_local_temperature`, `m_get_local_voltage`, `m_get_nic_temperature`, `m_get_nic_voltage`, `m_get_target_cursor_values`, `m_get_switching_mode`, `m_get_anlt`, `m_get_fec_mode`, `m_get_speed`, `m_get_event_log`, `m_get_ber_info`, `m_get_fec_stats`, `m_get_pcs_stats`, `m_get_alive_status`, `m_health_check`, `m_reset_cause`, `m_operation_time`, `m_debug_dump_registers`, `m_queue_info` | Return the model's value for their arguments (counter type, target, lane), with lists and dicts copied. |
 | `PortModel.script(method, value, raises, delay, func, times, block)` | Overrides a method: return a value, raise an exception (`"Type: message"`), sleep first, or compute the result with `func(model, args)`. `block=True` returns a gate that holds the calls until it is set, for 120 s at most; a held `download_firmware` also shows the download in progress. `times` limits the calls the script applies to. `unscript(method)` removes it. |
 | `Script` | One override. |
-| `TARGET_NIC`, `TARGET_TOR_A`, `TARGET_TOR_B`, `SWITCHING_MODE_MANUAL`, `SWITCHING_MODE_AUTO`, `FIRMWARE_DOWNLOAD_STATUS_NOT_INITIATED_OR_FINISHED`, `FIRMWARE_DOWNLOAD_STATUS_INPROGRESS`, `FIRMWARE_DOWNLOAD_STATUS_FAILED` | The values of the Y-cable driver API: targets 0, 1 and 2, the switching modes, and the download states. |
+| `TARGET_NIC`, `TARGET_UPPER_TOR`, `TARGET_LOWER_TOR`, `SWITCHING_MODE_MANUAL`, `SWITCHING_MODE_AUTO`, `FIRMWARE_DOWNLOAD_STATUS_NOT_INITIATED_OR_FINISHED`, `FIRMWARE_DOWNLOAD_STATUS_INPROGRESS`, `FIRMWARE_DOWNLOAD_STATUS_FAILED` | The values of the Y-cable driver API: targets 0, 1 and 2 (the NIC, and the upper and the lower ToR, which the API calls TOR A and TOR B), the switching modes, and the download states. |
 | `VENDOR`, `MODEL` | The fake vendor and model, which the overlay's vendor mapping maps to the fake driver. |
 
 ### harness/soc.py and mux_simulator.py: the SoCs and the KVM mux
@@ -458,7 +459,7 @@ mark itself.
 | Name | What it does |
 | --- | --- |
 | `Soc(ip, tls)` | A gRPC server on `<ip>:50075` serving `DualToRActive` and `GracefulRestart` from ycabled's proto, with TLS when `tls` is given (`Pki.server_tls`). `start()`, `stop()`, `running`. |
-| `Soc.admin`, `link`, `oper`, `version` | What the SoC reports for port ids 0 and 1, the lower and the upper ToR, and its server version. By default port 0 is active and port 1 standby, so the default device, the lower ToR, is active. |
+| `Soc.admin`, `link`, `oper`, `version` | What the SoC reports for each port id, 1 for the upper ToR and 0 for the lower, and its server version. By default port 0 is active and port 1 standby, so the default device, the lower ToR, is active. |
 | `Soc.gr_responses`, `gr_hold` | What each GracefulRestart stream sends, and whether it stays open afterwards. |
 | `Soc.script(rpc, delay, code, reply, times)`, `unscript(rpc)` | Make an RPC wait, fail with a gRPC status code, or answer with a reply the test builds. |
 | `Soc.mark()`, `rpcs(name, since)`, `wait_rpcs(name, count, since, timeout)` | The RPC log (`Rpc`). |
@@ -502,14 +503,14 @@ constants name `Ethernet0`'s, 192.168.0.3 (`SOC`, and `SOC_V6`, fc02:1000::3, in
 | Module | Helpers |
 | --- | --- |
 | `test_lifecycle.py` | `AS_ROW_KEYS`: the STATE_DB tables that stopping ycabled must keep. |
-| `test_active_standby.py` | `two_cables(dut, **kw)`: `Ethernet0` under test, with `kw` set on its `PortModel`, and a healthy `Ethernet4`, so that Python ycabled serves requests even when `Ethernet0` does not initialize. `UNKNOWN_TOGGLE_RESULT`: the `HW_MUX_CABLE_TABLE` row of a port whose state is unknown, which a toggle answers and startup publishes for a cable it cannot read. |
-| `test_active_active.py` | `aa(dut, loopback3, soc, **kw)`: an active-active `Ethernet0` and its SoC at 192.168.0.3. `pki` and `tls_config(dut, pki, ...)`: the `GRPCCLIENT` rows of the TLS cases. `_reply_wrong_port`, `_reply_empty`, `_reply_short`: malformed replies for `Soc.script`. `READ_SIDES`: each Loopback3 address with its read side. |
-| `test_insert_remove.py` | `two_cables(dut)`. `remove_ethernet4(dut)`: a removal that ycabled handles after the events written before it, used as a barrier before checking that something did not happen. |
+| `test_active_standby.py` | `add_two_cables_as(dut, **kw)`: `Ethernet0` under test, with `kw` set on its `PortModel`, and a healthy `Ethernet4`, so that Python ycabled serves requests even when `Ethernet0` does not initialize. `UNKNOWN_TOGGLE_RESULT`: the `HW_MUX_CABLE_TABLE` row of a port whose state is unknown, which a toggle answers and startup publishes for a cable it cannot read. |
+| `test_active_active.py` | `add_cable_aa(dut, loopback3, soc, **kw)`: an active-active `Ethernet0` and its SoC at 192.168.0.3, with a plaintext SoC double there unless `soc=False`. `pki` and `tls_config(dut, pki, ...)`: the `GRPCCLIENT` rows of the TLS cases. `_reply_wrong_port`, `_reply_empty`, `_reply_short`: malformed replies for `Soc.script`. `READ_SIDES`: each Loopback3 address with its read side. |
+| `test_insert_remove.py` | `add_two_cables_as(dut)`. `remove_ethernet4(dut)`: a removal that ycabled handles after the events written before it, used as a barrier before checking that something did not happen. |
 | `test_telemetry.py` | Marked `slow`. `run` and `_telemetry_pass(dut)`: one pass over `PORTS`, whose comments say each port's condition. `LAST_KNOWN`: the firmware versions left in STATE_DB for the cable being upgraded. `_cursors`, `_short_reply`: failing driver and SoC answers. `PASS_TIMEOUT`: how long `run` waits for the pass, 90 s. |
-| `test_cli.py` | `cable`. `no_driver(dut)`: transceiver info that no vendor mapping knows. `calls(dut, mark, method)`: `Ethernet0`'s driver calls. `_firmware_tor_b_fails`. Most tests are parametrized over a command family's variants and failures. |
+| `test_cli.py` | `cable`. `no_driver(dut)`: transceiver info that no vendor mapping knows. `calls(dut, mark, method)`: `Ethernet0`'s driver calls. `_firmware_lower_tor_fails`. `AA_COMMANDS`: each cable command the CLI sends, with ycabled's answer for an active-active port. Most tests are parametrized over a command family's variants and failures. |
 | `test_config.py` | `pki`. `secrets(pki, **config)`: the content of `grpc_secrets.json`. `set_log_verbosity(dut, key, level)`, `probe_logs_debug(dut)`. |
 | `test_multi_asic.py` | `multi_asic`. `_database_config(base, port, unix_socket)`: a namespace's `database_config.json`, pointing at its redis-server. `ENV_CHECK`: what a daemon that supports multi-ASIC does first, run in ycabled's environment to check the setup itself. `NAMESPACES`: each namespace's mux port, port index and redis port. `SONIC_DB_DIR`: where the database configs go. |
-| `test_scale.py` | Marked `slow`. `send(dut, requests)`: a round's requests in one transaction, as when many ports switch over at once. `answers(dut, since, table, ports)`: each port's answers after a mark, once every port has one. `check_round(got, r, table, state)`: exactly one answer per port, with the requested state. `settle(dut)`: wait until ycabled has sent nothing for 1 s, and the recorder has all it sent. `check_rounds(dut, marks, table, state_of, ports)`: after `settle()`, each round again, over every answer from its request to the next round's, or to the end. `round_state(r)`, `opposite(state)`, `port_names(n)`; `PORTS`, `ROUNDS`, `ROUND_TIMEOUT`. |
+| `test_scale.py` | Marked `slow`. Telemetry is off, so that only the toggles reach the cables: the rounds end before the first pass anyway, but on a slower host a pass would add cable calls and SoC RPCs that the tests do not count, and on Python ycabled a toggle could overlap one of them (a known issue: `test_toggle_waits_for_call_in_progress`). `bench/test_soak.py` toggles with telemetry on. `send(dut, requests)`: a round's requests in one transaction, as when many ports switch over at once. `answers(dut, since, table, ports)`: each port's answers after a mark, once every port has one. `check_round(got, r, table, state)`: exactly one answer per port, with the requested state. `settle(dut)`: wait until ycabled has sent nothing for 1 s, and the recorder has all it sent. `check_rounds(dut, marks, table, state_of, ports)`: after `settle()`, each round again, over every answer from its request to the next round's, or to the end. `round_state(r)`, `opposite(state)`, `port_names(n)`; `PORTS`, `ROUNDS`, `ROUND_TIMEOUT`. |
 | `test_concurrency.py` | `cable`. `hold_cli_call(dut, cable)`: a CLI command held in its first call to the cable. `remove_and_wait(dut)`, `state_writes`, `removed`. `maybe(predicate)` and `HELD`: how long a test gives ycabled to act on a second request while the first call is held. |
 
 ### Benchmarks
@@ -518,7 +519,8 @@ constants name `Ethernet0`'s, 192.168.0.3 (`SOC`, and `SOC_V6`, fc02:1000::3, in
 connections and CPU at steady state with 24 active-standby or 32 active-active ports,
 startup with unreachable SoCs, toggle latency with hanging SoCs or cables, probe
 latency, toggle throughput, 1000 toggles with ycabled's CPU, memory, threads and use of
-redis during them, and a telemetry pass with faulty SoCs. It is not part of the suite
+redis during them, a telemetry pass with faulty SoCs, and the latency of each kind of
+request, from its write to its answer, alone and in bursts of 100 ports. It is not part of the suite
 (`pytest.ini` collects `tests/` only). Run it once per implementation, with
 `run.sh bench/test_bench.py`, and the second time with `BB_YCABLED_CMD` set. Each run
 writes `bench-<implementation>.json` to the report directory, and
@@ -535,13 +537,41 @@ writes `bench-<implementation>.json` to the report directory, and
 | `test_thousand_toggles_burst`, `test_thousand_toggles_sequential` | 1000 toggles of active-standby or active-active ports: 100 ports toggled together in 10 rounds, or one port toggled 1000 times, each toggle sent once the previous one is answered. The time on redis's clock, and ycabled's CPU time, memory, threads and redis commands during the toggles. |
 | `test_toggle_throughput_active_standby` | 24 active-standby ports toggled together, 10 rounds, timed on redis's clock. |
 | `test_telemetry_pass_faulty_socs` | The first telemetry pass of 32 active-active ports whose SoCs are blackholed or hang: the time from its first `MUX_CABLE_INFO` write to its last. |
+| `test_request_latency` | 100 ports of each cable type: each kind of request (toggle and probe; or toggle, peer toggle and forwarding state probe) alone, 50 times for one port, then in rounds of every port at once, each kind and then all together. What the requester waits: the time from the request's write to APPL_DB to ycabled's answer on redis's clock (median, p99, maximum), the rounds' time, and the requests per second. For toggles, also the part before `xcvrd_switch_*_start` (waited), which `MUX_METRICS_TABLE` does not show, and the part between `_start` and `_end` (handled), which it shows. Active-active runs twice: with SoC doubles that answer at once, which the test process limits when many RPCs come together, and with doubles that take 50 ms per RPC, about production's median. |
 | `report`, `record(scenario, **values)`, `RESULTS` | Collect each scenario's numbers, and write `bench-<implementation>.json` when the module is done. |
 | `steady_state(dut, scenario, startup)`, `proc_stats(pid)`, `redis_connections(dut)` | The steady-state measurement: RSS, PSS, peak RSS, threads and CPU time from `/proc`, and ycabled's Redis connections. |
 | `resources(dut, scenario, toggles)`, `_peak_threads(pid, stop, peak)` | Measure a block: ycabled's CPU time and its share of the block's time, RSS, PSS and peak RSS, the peak thread count sampled every 20 ms, its Redis connections, and its Redis commands per toggle. |
 | `toggle_device(dut, cable_type, n)`, `TOGGLES` | The device of the toggle scenarios: `n` ports of one cable type, each active-active one with a SoC, and telemetry off so that only the toggles are measured. |
-| `first_writes(dut, since, table, field, keys)`, `request_ts(dut, mark, key)` | Times from the MONITOR record: the first write of a field to each key, and when the suite's request reached redis. |
+| `first_writes(dut, since, table, field, keys, db)`, `request_ts(dut, mark, key)` | Times from the MONITOR record: the first write of a field to each key, and when the suite's request reached redis. |
+| `REQUESTS`, `REQUEST_MIXES`, `METRIC_SIDES`, `request_value(kind, rnd)`, `request_round(dut, names, kinds, rnd)`, `alone_latencies(dut, name, kind)` | The requests of `test_request_latency`: each kind's APPL_DB table and field (`Dut.ANSWERS` says where it is answered), the mixes of each cable type, the `MUX_METRICS_TABLE` side of the toggles, a round's request values; one round of requests for every port, and one port's requests one at a time. |
+| `ms_stats(prefix, seconds, percentiles)`, `metric_ts(value)`, `harness_gc_off()`, `SOC_RPCS`, `SOC_RPC_MS`, `BURST_PORTS`, `BURST_ROUNDS`, `ALONE` | Percentiles and maximum in ms; a `MUX_METRICS_TABLE` time on redis's clock; no garbage collection in the test process while it measures; the SoC RPCs of the requests and their production-like time; the burst size, rounds, and requests alone. |
 | `ports(n)`, `impl_name()` | Port names; `python`, `rust` or the command's name, for the results file. |
 | `CLK_TCK`, `IDLE_WINDOW`, `TELEMETRY_RPCS` | Clock ticks per second, for CPU time; the 65 s idle window; the four RPCs of an active-active telemetry pass. |
 | `compare.py`: `main(argv)`, `load(path)` | Put two results files side by side in a Markdown table; read one. |
+
+`bench/test_soak.py` toggles the mux ports of one cable type together once a minute
+for hours, with telemetry on, as on a device, and checks every round as `test_scale.py`
+does: one answer per port and table, with the requested state; one toggle call per
+cable toward the requested side, and no overlapping calls to a cable (active-standby);
+the round's two `SetAdminForwardingPortState` RPCs at each SoC (active-active). Every
+round, it also records the answers' latency and ycabled's resources. It is not part of
+the suite or of the benchmarks: run it once per implementation, without a per-test time
+limit, with `run.sh --bb-test-timeout=0 bench/test_soak.py`. `BB_SOAK_SECONDS` (6 hours
+per cable type by default), `BB_SOAK_PERIOD` (60 s), `BB_SOAK_PORTS` (100) and
+`BB_SOAK_OUT` (the report directory) set it up. `BB_SOAK_GC_FREEZE=1` freezes the test
+process's garbage collector after each round, so that its growing records do not make
+its full collections, which stop its SoC doubles and syslog reader, longer and longer.
+Each cable type writes `soak-<implementation>-<cable type>.jsonl`: a `start` record, a
+`round` record per round, and an `end` record.
+
+| Name | What it does |
+| --- | --- |
+| `test_soak` | Active-active, with a SoC double per port and the peer toggled the other way; then active-standby, half of the cables read from the lower ToR. |
+| `Soak` | One cable type's soak: the device, the rounds' marks and the results. `check_window(r, nxt)`: everything of round `r` from its requests to the next round's, answers, cable or SoC calls and logs. `final_checks(last_state)`: each port's final rows, and its mux direction or SoC admin states. |
+| `proc_sample(pid)`, `PeakSampler` | ycabled's memory (RSS, peak RSS, anonymous, PSS, USS), threads, file descriptors, sockets, CPU time, context switches and read/write syscalls, from `/proc`; its peak threads and RSS, sampled every second. |
+| `redis_sample(dut)`, `table_counts(db)`, `redis_tables(dut)` | ycabled's Redis connections, redis's memory and the key count of each database; the keys of a database by table. |
+| `GcPauses` | The test process's longest garbage collection per generation since the previous round: while it runs, the SoC doubles and the syslog reader stop. |
+| `lat_stats(values)`, `normalized(text)`, `binary_md5()` | Minimum, median, p99 and maximum in ms; a log line with its numbers masked, to count ycabled's logs by kind; the md5 of the binary under test. |
+| `round_state(r)`, `opposite(state)`, `impl_name()`; `SECONDS`, `PERIOD`, `PORTS`, `ANSWER_TIMEOUT`, `SAMPLE_INTERVAL` | As in `test_scale.py` and `test_bench.py`; the environment's settings, the 30 s a round's answers may take, and the sampling interval. |
 
 [HLD]: https://github.com/sonic-net/SONiC/blob/master/doc/dualtor/ycabled_to_rust_hld.md

@@ -9,7 +9,7 @@ from separate threads that share the driver and the port's STATE_DB entry.
 
 import pytest
 
-from harness.fake_hw import TARGET_TOR_A, TARGET_TOR_B
+from harness.fake_hw import TARGET_UPPER_TOR, TARGET_LOWER_TOR
 from harness.topology import Topology
 from harness.util import eventually, wait_until
 
@@ -135,19 +135,19 @@ def test_toggle_during_insertion_keeps_cable_direction(dut, cable):
        which keeps ycabled serving.
     2. Start ycabled, then remove Ethernet0's cable, as xcvrd reports it, and
        wait for ycabled's write for the removal.
-    3. Script get_mux_direction() of the cable to return ToR A, held, once.
-       Insert the cable, and wait for the held call: the insertion has read the
-       direction and not yet written it.
+    3. Script get_mux_direction() of the cable to return the upper ToR, held,
+       once. Insert the cable, and wait for the held call: the insertion has
+       read the direction and not yet written it.
     4. Toggle Ethernet0 to standby without waiting, and give ycabled 2 s to
        call toggle_mux_to_tor_b() meanwhile.
     5. Release the held call. Wait for two HW_MUX_CABLE_TABLE state writes for
        Ethernet0, one for each request, and wait for ycabled to go quiet.
-    6. Expect the cable's mux on ToR B, and Ethernet0's state standby.
+    6. Expect the cable's mux on the lower ToR, and Ethernet0's state standby.
     """
     dut.start()
     remove_and_wait(dut)
-    # The insertion reads the direction (ToR A) and is held before it writes it.
-    gate = cable.script("get_mux_direction", value=TARGET_TOR_A, block=True, times=1)
+    # The insertion reads the direction (the upper ToR) and is held before it writes it.
+    gate = cable.script("get_mux_direction", value=TARGET_UPPER_TOR, block=True, times=1)
     hw_mark = dut.hw.mark()
     dut.insert("Ethernet0")
     wait_until(lambda: dut.hw.calls(hw_mark, port=1, method="get_mux_direction"), 5)
@@ -158,7 +158,7 @@ def test_toggle_during_insertion_keeps_cable_direction(dut, cable):
     # One write for the insertion and one for the toggle, in either order.
     wait_until(lambda: len(state_writes(dut, mark)) >= 2, 10)
     dut.monitor.wait_settled()
-    assert cable.mux_direction == TARGET_TOR_B
+    assert cable.mux_direction == TARGET_LOWER_TOR
     assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "standby"
 
 

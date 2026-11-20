@@ -9,7 +9,7 @@ from harness.util import eventually, wait_until
 SOC = soc_ip("Ethernet0")
 
 
-def two_cables(dut):
+def add_two_cables_as(dut):
     dut.configure(Topology().active_standby("Ethernet0", "Ethernet4"))
     return dut.hw.port(1)
 
@@ -43,7 +43,7 @@ def test_remove_active_standby(dut):
        {state: unknown, read_side: -1, active_side: -1}.
     6. Toggle Ethernet4 to standby and expect standby.
     """
-    two_cables(dut)
+    add_two_cables_as(dut)
     dut.start()
     info = dut.state.get("MUX_CABLE_INFO", "Ethernet0")
     static = dut.state.get("MUX_CABLE_STATIC_INFO", "Ethernet0")
@@ -71,14 +71,14 @@ def test_insert_after_remove(dut):
     2. Start ycabled. Remove Ethernet0's cable, as xcvrd reports it
        (TRANSCEIVER_INFO deleted, the cable absent), and wait for ycabled's
        HW_MUX_CABLE_TABLE write for it.
-    3. Plug in a cable read from the other side, read side B: insert it, as
+    3. Plug in a cable read from the other side, the lower ToR: insert it, as
        xcvrd reports it, and wait for ycabled's MUX_CABLE_STATIC_INFO write.
     4. Expect the driver loaded again (a constructor call), Ethernet0's row
        {state: standby, read_side: 2, active_side: 1}, and the new cable's
        MUX_CABLE_STATIC_INFO.
     5. Toggle Ethernet0 to active and expect active.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     dut.start()
     mark = dut.monitor.mark()
     dut.remove("Ethernet0")
@@ -110,7 +110,7 @@ def test_update_for_initialized_cable_is_ignored(dut):
     5. Expect no write for Ethernet0, and no call to its cable, through the
        driver or the platform API, since the update.
     """
-    two_cables(dut)
+    add_two_cables_as(dut)
     dut.start()
     hw_mark = dut.hw.mark()
     mark = dut.monitor.mark()
@@ -137,7 +137,7 @@ def test_update_for_uninitialized_driver_loads_it_again(dut):
        the update before it has been handled too.
     5. Expect no constructor call since the second update.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.initialized = False
     dut.start()
     cable.initialized = True
@@ -170,7 +170,7 @@ def test_absent_at_startup_then_inserted(dut):
     5. Expect Ethernet0's state active and the cable's MUX_CABLE_STATIC_INFO;
        toggle Ethernet0 to standby and expect standby.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.present = False
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == {
@@ -265,7 +265,7 @@ def test_first_transceiver_event_without_fields(dut):
        active_side -1.
     5. Expect no crash in syslog or in ycabled's output.
     """
-    two_cables(dut)
+    add_two_cables_as(dut)
     dut.start(publish_transceivers=False)
     dut.tolerate_python_failure(crash=True)
     mark = dut.monitor.mark()

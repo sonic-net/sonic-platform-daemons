@@ -8,7 +8,7 @@ import time
 import pytest
 
 from harness import expect
-from harness.fake_hw import TARGET_TOR_B
+from harness.fake_hw import TARGET_LOWER_TOR
 from harness.topology import CONTAINER_PLATFORM_DIR, Topology, soc_ip
 from harness.util import TIMESTAMP_RE, eventually, wait_until
 
@@ -25,7 +25,7 @@ def test_startup_active_standby(dut):
 
     Steps:
     1. Configure active-standby ports Ethernet0 and Ethernet4. Both muxes point
-       at ToR A, and this ToR reads Ethernet4's cable as ToR B.
+       at the upper ToR, and this ToR reads Ethernet4's cable as the lower ToR.
     2. Start ycabled.
     3. Expect HW_MUX_CABLE_TABLE Ethernet0 {state: active, read_side: 1,
        active_side: 1} and Ethernet4 {state: standby, read_side: 2,
@@ -37,8 +37,8 @@ def test_startup_active_standby(dut):
        {log_verbosity: notice}.
     """
     dut.configure(Topology().active_standby("Ethernet0", "Ethernet4"))
-    # Ethernet4: this ToR reads the cable as ToR B while the mux points to ToR A.
-    dut.hw.port(2).read_side = TARGET_TOR_B
+    # Ethernet4: this ToR reads the cable as the lower ToR while the mux points to the upper ToR.
+    dut.hw.port(2).read_side = TARGET_LOWER_TOR
     dut.start()
 
     assert dut.state.table("HW_MUX_CABLE_TABLE") == {
@@ -364,8 +364,8 @@ def test_restart_reads_cable_then_replays_last_request(dut):
     1. Configure Ethernet0 as the only active-standby port.
     2. Start ycabled, toggle Ethernet0 to standby and expect standby, then stop
        ycabled.
-    3. While it is down, point the mux back at this ToR, ToR A, and set
-       XCVRD_LOG|Y_CABLE log_verbosity to debug.
+    3. While it is down, point the mux back at this ToR, the upper ToR, and
+       set XCVRD_LOG|Y_CABLE log_verbosity to debug.
     4. Start ycabled again, and wait for two HW_MUX_CABLE_TABLE state writes
        for Ethernet0.
     5. Expect active, read from the cable, then standby, from the replayed

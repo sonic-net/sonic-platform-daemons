@@ -6,7 +6,7 @@ import bisect
 
 import pytest
 
-from harness.fake_hw import TARGET_TOR_A, TARGET_TOR_B
+from harness.fake_hw import TARGET_UPPER_TOR, TARGET_LOWER_TOR
 from harness.topology import Topology, soc_ip
 from harness.util import wait_until
 
@@ -79,16 +79,16 @@ def check_rounds(dut, marks, table, state_of, ports):
 
 
 def test_active_standby_ports_toggled_many_times(dut):
-    """100 active-standby cables, half of them read from ToR B, all toggled
-    together 100 times. Every toggle is answered once, with the requested
-    state; each cable gets one toggle call per round, toward the side the round
-    asks for; two calls to one cable never overlap.
+    """100 active-standby cables, half of them read from the lower ToR, all
+    toggled together 100 times. Every toggle is answered once, with the
+    requested state; each cable gets one toggle call per round, toward the side
+    the round asks for; two calls to one cable never overlap.
 
     Steps:
     1. Configure 100 active-standby ports, Ethernet0 to Ethernet396, with
        telemetry disabled, so that only the toggles reach the cables. Half of
-       the cables are read from ToR A and half from ToR B, each with its mux on
-       its own side.
+       the cables are read from the upper ToR and half from the lower ToR, each
+       with its mux on its own side.
     2. Start ycabled, waiting up to 120 s until it is ready.
     3. 100 rounds: in one transaction, request standby (even rounds) or active
        (odd rounds) for every port. Expect, within 60 s, exactly one
@@ -109,7 +109,7 @@ def test_active_standby_ports_toggled_many_times(dut):
     read_sides = {}
     for i, port in enumerate(ports):
         cable = dut.hw.port(topo.index(port))
-        cable.read_side = cable.mux_direction = TARGET_TOR_A if i % 2 == 0 else TARGET_TOR_B
+        cable.read_side = cable.mux_direction = TARGET_UPPER_TOR if i % 2 == 0 else TARGET_LOWER_TOR
         read_sides[port] = cable.read_side
     dut.start(timeout=120)
     hw_mark = dut.hw.mark()
@@ -126,14 +126,14 @@ def test_active_standby_ports_toggled_many_times(dut):
     final = round_state(ROUNDS - 1)
     for port in ports:
         read_side = read_sides[port]
-        other = TARGET_TOR_B if read_side == TARGET_TOR_A else TARGET_TOR_A
+        other = TARGET_LOWER_TOR if read_side == TARGET_UPPER_TOR else TARGET_UPPER_TOR
 
         def side(state):
             return read_side if state == "active" else other
         assert dut.state.get("HW_MUX_CABLE_TABLE", port) == {
             "state": final, "read_side": str(read_side), "active_side": str(side(final))}, port
         assert dut.hw.port(topo.index(port)).mux_direction == side(final), port
-        expected = ["toggle_mux_to_tor_a" if side(round_state(r)) == TARGET_TOR_A else "toggle_mux_to_tor_b"
+        expected = ["toggle_mux_to_tor_a" if side(round_state(r)) == TARGET_UPPER_TOR else "toggle_mux_to_tor_b"
                     for r in range(ROUNDS)]
         toggles = [c.method for c in dut.hw.calls(hw_mark, port=topo.index(port))
                    if c.method.startswith("toggle_mux_to_tor_")]

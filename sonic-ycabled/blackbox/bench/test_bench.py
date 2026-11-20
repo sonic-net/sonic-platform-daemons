@@ -14,7 +14,10 @@ test process), so the numbers compare the daemons, not real hardware.
 """
 
 import contextlib
+import datetime
+import gc
 import json
+import math
 import os
 import re
 import threading
@@ -22,6 +25,7 @@ import time
 
 import pytest
 
+from harness.dut import Dut
 from harness.redisdb import HARNESS_ADDRESS
 from harness.topology import Topology, soc_ip
 from harness.util import wait_until
@@ -96,10 +100,10 @@ def steady_state(dut, scenario, startup):
            cpu_percent=round((after["cpu_ticks"] - before["cpu_ticks"]) / CLK_TCK / IDLE_WINDOW * 100, 2))
 
 
-def first_writes(dut, since, table, field, keys):
+def first_writes(dut, since, table, field, keys, db=None):
     """The first write of `field` to each key of `table` since `since`, or None."""
     firsts = {}
-    for a in dut.writes(since=since, table=table, field=field):
+    for a in dut.writes(since=since, db=db, table=table, field=field):
         firsts.setdefault(a.key, a)
     return firsts if set(keys) <= set(firsts) else None
 
@@ -488,3 +492,183 @@ def test_thousand_toggles_sequential(dut, cable_type):
                        median_ms=round(lat[len(lat) // 2] * 1000, 2),
                        p99_ms=round(lat[int(len(lat) * 0.99) - 1] * 1000, 2),
                        max_ms=round(lat[-1] * 1000, 2))
+
+
+# Requests as orchagent and linkmgrd write them to APPL_DB, (table, field), by
+# the name of the Dut helper that sends the same request: Dut.ANSWERS says
+# where ycabled answers each one.
+REQUESTS = {
+    "toggle": ("HW_MUX_CABLE_TABLE", "state"),
+    "peer_toggle": ("HW_FORWARDING_STATE_PEER", "state"),
+    "probe": ("MUX_CABLE_COMMAND_TABLE", "command"),
+    "fwd_probe": ("FORWARDING_STATE_COMMAND", "command"),
+}
+# Each kind of request of a cable type alone, then all of them together, as
+# when many ports switch over at once.
+REQUEST_MIXES = {
+    "active-standby": [("toggle",), ("probe",), ("toggle", "probe")],
+    "active-active": [("toggle",), ("peer_toggle",), ("fwd_probe",), ("toggle", "peer_toggle", "fwd_probe")],
+}
+# The MUX_METRICS_TABLE side of the requests that ycabled records metrics for.
+METRIC_SIDES = {("active-standby", "toggle"): "", ("active-active", "toggle"): "self_",
+                ("active-active", "peer_toggle"): "peer_"}
+# The SoC RPCs of active-active requests, and about the median time of
+# SetAdminForwardingPortState on production SoCs (47-51 ms).
+SOC_RPCS = ("SetAdminForwardingPortState", "QueryAdminForwardingPortState")
+SOC_RPC_MS = 50
+BURST_PORTS = 100
+BURST_ROUNDS = 10
+ALONE = 50
+
+
+def request_value(kind, rnd):
+    """Round `rnd`'s request: a toggle's state, alternating, and the opposite
+    state for the peer; a probe's command."""
+    state = "standby" if rnd % 2 == 0 else "active"
+    if kind == "toggle":
+        return state
+    if kind == "peer_toggle":
+        return "active" if state == "standby" else "standby"
+    return "probe"
+
+
+def metric_ts(value):
+    """A MUX_METRICS_TABLE time (UTC) in seconds since the epoch, like MONITOR's."""
+    return datetime.datetime.strptime(value, "%Y-%b-%d %H:%M:%S.%f").replace(
+        tzinfo=datetime.timezone.utc).timestamp()
+
+
+def ms_stats(prefix, seconds, percentiles=(50, 99)):
+    """The percentiles (nearest rank) and the maximum of `seconds`, in ms."""
+    s = sorted(seconds)
+    out = {"{}_p{}_ms".format(prefix, p): round(s[max(0, math.ceil(p / 100 * len(s)) - 1)] * 1000, 1)
+           for p in percentiles}
+    out["{}_max_ms".format(prefix)] = round(s[-1] * 1000, 1)
+    return out
+
+
+@contextlib.contextmanager
+def harness_gc_off():
+    """No garbage collection in the test process while it measures: a
+    collection there stops the SoC doubles and the MONITOR reader."""
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+
+
+def alone_latencies(dut, name, kind):
+    """`ALONE` requests of `kind` for port `name`, each sent once the previous
+    one is answered: their latencies on redis's clock."""
+    table, field = REQUESTS[kind]
+    db, answer_table, answer_field = Dut.ANSWERS[kind]
+    lat = []
+    for i in range(ALONE):
+        mark = dut.monitor.mark()
+        dut.appl.set(table, name, {field: request_value(kind, i)})
+        answer = wait_until(lambda: dut.writes(since=mark, db=db, table=answer_table, key=name, field=answer_field),
+                            10, interval=0.001)[0]
+        lat.append(answer.ts - request_ts(dut, mark, "{}:{}".format(table, name)))
+    return lat
+
+
+def request_round(dut, names, kinds, rnd):
+    """Round `rnd`: the requests of `kinds` for every port, in one transaction.
+    Once each has an answer, returns when each request reached redis, by key;
+    each kind's first answer, by port; and ycabled's MUX_METRICS_TABLE writes
+    since the requests, by (port, field)."""
+    mark = dut.monitor.mark()
+    with dut.appl.r.pipeline(transaction=True) as p:
+        for name in names:
+            for kind in kinds:
+                table, field = REQUESTS[kind]
+                p.hset("{}:{}".format(table, name), field, request_value(kind, rnd))
+        p.execute()
+    answers = {}
+    for kind in kinds:
+        db, table, field = Dut.ANSWERS[kind]
+        answers[kind] = wait_until(lambda: first_writes(dut, mark, table, field, names, db=db), 60)
+    requested = {op.args[0]: op.ts for op in dut.monitor.ops(mark, clients=("harness",)) if op.cmd == "HSET"}
+    metrics = {(a.key, a.field): a.value for a in dut.writes(since=mark, db="STATE_DB", table="MUX_METRICS_TABLE")}
+    return requested, answers, metrics
+
+
+@pytest.mark.parametrize("cable_type,soc_ms,rounds", [
+    ("active-standby", 0, BURST_ROUNDS), ("active-active", 0, BURST_ROUNDS), ("active-active", SOC_RPC_MS, 4),
+], ids=["active-standby", "active-active", "active-active-soc-{}ms".format(SOC_RPC_MS)])
+def test_request_latency(dut, cable_type, soc_ms, rounds):
+    """What orchagent and linkmgrd wait for: the time from a request's write
+    to APPL_DB to ycabled's answer, on redis's clock. That includes the time
+    the request waits in ycabled before it is handled, which
+    MUX_METRICS_TABLE does not show: its xcvrd_switch_*_start is when ycabled
+    starts to handle a toggle.
+
+    Cases: active-standby (toggles and probes), or active-active with a SoC
+    per port (toggles, peer toggles and forwarding state probes), whose
+    doubles answer at once, or after 50 ms as production SoCs do. At once,
+    the doubles, all in the test process, limit a daemon that sends many RPCs
+    together; after 50 ms, the time is the SoCs', as on a device.
+
+    Steps:
+    1. Configure 100 ports of the cable type, the active-active ones each with
+       a SoC double, with telemetry disabled. Start ycabled, and wait until it
+       has been quiet for 1 s. In the 50 ms case, make every SoC double answer
+       SetAdminForwardingPortState and QueryAdminForwardingPortState after
+       50 ms.
+    2. Each kind of request alone: 50 times, send it for Ethernet0, and wait
+       for the answer. Record the median and maximum latency.
+    3. Each mix of requests, each kind alone and then all together: 10 rounds
+       (4 in the 50 ms case), each with the mix's requests for every port in
+       one transaction, waiting for every answer and then for ycabled to be
+       quiet. Expect each toggle answered with the requested state.
+    4. Record, for each mix: each kind's median, p99 and maximum latency; the
+       rounds' mean and longest time, from the requests to the last answer;
+       the requests per second. For toggles, from MUX_METRICS_TABLE, the
+       median and maximum of the time from the request to xcvrd_switch_*_start
+       (waited) and from _start to _end (handled).
+    """
+    names = toggle_device(dut, cable_type, BURST_PORTS)
+    if soc_ms:
+        for soc in dut.socs.values():
+            for rpc in SOC_RPCS:
+                soc.script(rpc, delay=soc_ms / 1000)
+    label = cable_type + ("-soc-{}ms".format(soc_ms) if soc_ms else "")
+    kinds = [k for k in REQUESTS if any(k in mix for mix in REQUEST_MIXES[cable_type])]
+    numbers = {}
+    with harness_gc_off():
+        for kind in kinds:
+            numbers.update(ms_stats(kind, alone_latencies(dut, names[0], kind), percentiles=(50,)))
+    record("request-latency-alone-{}".format(label), **numbers)
+    for mix in REQUEST_MIXES[cable_type]:
+        lat, waited, handled = ({kind: [] for kind in mix} for _ in range(3))
+        durations = []
+        for rnd in range(rounds):
+            dut.monitor.wait_settled(quiet=0.5, timeout=30)
+            with harness_gc_off():
+                requested, answers, metrics = request_round(dut, names, mix, rnd)
+            for kind in mix:
+                side = METRIC_SIDES.get((cable_type, kind))
+                for name, answer in answers[kind].items():
+                    t_req = requested["{}:{}".format(REQUESTS[kind][0], name)]
+                    lat[kind].append(answer.ts - t_req)
+                    if side is None:
+                        continue
+                    assert answer.value == request_value(kind, rnd), (kind, name, answer.value)
+                    start, end = (metric_ts(metrics[(name, "xcvrd_switch_{}{}_{}".format(side, answer.value, edge))])
+                                  for edge in ("start", "end"))
+                    waited[kind].append(start - t_req)
+                    handled[kind].append(end - start)
+            durations.append(max(a.ts for kind in mix for a in answers[kind].values()) - min(requested.values()))
+        requests = len(names) * len(mix) * rounds
+        numbers = {"requests": requests,
+                   "requests_per_s": round(requests / sum(durations), 1),
+                   "round_mean_ms": round(sum(durations) / len(durations) * 1000, 1),
+                   "round_max_ms": round(max(durations) * 1000, 1)}
+        for kind in mix:
+            numbers.update(ms_stats(kind, lat[kind]))
+            if handled[kind]:
+                numbers.update(ms_stats(kind + "_waited", waited[kind], percentiles=(50,)))
+                numbers.update(ms_stats(kind + "_handled", handled[kind], percentiles=(50,)))
+        record("request-latency-{}-{}x{}-{}".format(label, len(names), rounds, "+".join(mix)), **numbers)

@@ -5,12 +5,14 @@ These encode the contract (HLD section 3.6.4): which side of the cable is
 is written to STATE_DB.
 """
 
-from .fake_hw import TARGET_NIC, TARGET_TOR_A, TARGET_TOR_B
+from .fake_hw import TARGET_NIC, TARGET_UPPER_TOR, TARGET_LOWER_TOR
 
 
 def sides(read_side):
     """(self, peer) targets for a ToR that reads the cable from `read_side`."""
-    return (TARGET_TOR_A, TARGET_TOR_B) if read_side == TARGET_TOR_A else (TARGET_TOR_B, TARGET_TOR_A)
+    if read_side == TARGET_UPPER_TOR:
+        return TARGET_UPPER_TOR, TARGET_LOWER_TOR
+    return TARGET_LOWER_TOR, TARGET_UPPER_TOR
 
 
 def _up(value):
@@ -59,7 +61,7 @@ for _name in ("self", "peer", "nic"):
 
 def mux_cable_static_info(model):
     self_t, peer_t = sides(model.read_side)
-    info = {"read_side": "tor1" if model.read_side == TARGET_TOR_A else "tor2"}
+    info = {"read_side": "tor1" if model.read_side == TARGET_UPPER_TOR else "tor2"}
     names = ("precursor1", "precursor2", "maincursor", "postcursor1", "postcursor2")
     for lane in (1, 2):
         for prefix, target in (("nic", TARGET_NIC), ("tor_self", self_t), ("tor_peer", peer_t)):

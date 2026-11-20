@@ -17,9 +17,12 @@ import threading
 import time
 from collections import namedtuple
 
+# The driver API's targets. sonic_y_cable calls the two ToRs TOR A and TOR B;
+# TOR A is the upper ToR, as the simulated driver (y_cable_simulated) has it,
+# so toggle_mux_to_tor_a() points the mux at the upper ToR.
 TARGET_NIC = 0
-TARGET_TOR_A = 1
-TARGET_TOR_B = 2
+TARGET_UPPER_TOR = 1
+TARGET_LOWER_TOR = 2
 
 SWITCHING_MODE_MANUAL = 0
 SWITCHING_MODE_AUTO = 1
@@ -64,16 +67,16 @@ class PortModel(object):
                                  "serial": "BB{:04d}".format(index)}
         self.vendor = VENDOR
         self.initialized = True
-        self.read_side = TARGET_TOR_A
-        self.mux_direction = TARGET_TOR_A
+        self.read_side = TARGET_UPPER_TOR
+        self.mux_direction = TARGET_UPPER_TOR
         self.active_linked_side = None
         self.switch_count = {"manual": 3, "auto": 5}
-        self.eye_heights = {TARGET_NIC: [601, 602], TARGET_TOR_A: [611, 612], TARGET_TOR_B: [621, 622]}
-        self.link_active = {TARGET_NIC: True, TARGET_TOR_A: True, TARGET_TOR_B: False}
+        self.eye_heights = {TARGET_NIC: [601, 602], TARGET_UPPER_TOR: [611, 612], TARGET_LOWER_TOR: [621, 622]}
+        self.link_active = {TARGET_NIC: True, TARGET_UPPER_TOR: True, TARGET_LOWER_TOR: False}
         self.firmware = {
             TARGET_NIC: {"version_active": "1.0.0", "version_inactive": "0.9.0", "version_next": "1.0.0"},
-            TARGET_TOR_A: {"version_active": "1.1.0", "version_inactive": "1.0.9", "version_next": "1.1.0"},
-            TARGET_TOR_B: {"version_active": "1.2.0", "version_inactive": "1.1.9", "version_next": "1.2.0"},
+            TARGET_UPPER_TOR: {"version_active": "1.1.0", "version_inactive": "1.0.9", "version_next": "1.1.0"},
+            TARGET_LOWER_TOR: {"version_active": "1.2.0", "version_inactive": "1.1.9", "version_next": "1.2.0"},
         }
         self.local_temperature = 35
         self.local_voltage = 3.3
@@ -81,17 +84,18 @@ class PortModel(object):
         self.nic_voltage = 5.1
         self.cursor_values = {}
         for lane in (1, 2):
-            for target in (TARGET_NIC, TARGET_TOR_A, TARGET_TOR_B):
+            for target in (TARGET_NIC, TARGET_UPPER_TOR, TARGET_LOWER_TOR):
                 base = lane * 100 + target * 10
                 self.cursor_values[(lane, target)] = [base + 1, base + 2, base + 3, base + 4, base + 5]
         self.switching_mode = SWITCHING_MODE_AUTO
-        self.fec_mode = {TARGET_NIC: 1, TARGET_TOR_A: 1, TARGET_TOR_B: 2}
-        self.anlt = {TARGET_NIC: False, TARGET_TOR_A: True, TARGET_TOR_B: False}
+        self.fec_mode = {TARGET_NIC: 1, TARGET_UPPER_TOR: 1, TARGET_LOWER_TOR: 2}
+        self.anlt = {TARGET_NIC: False, TARGET_UPPER_TOR: True, TARGET_LOWER_TOR: False}
         self.speed = 100000
         self.event_log = ["evt-0 link down", "evt-1 link up", "evt-2 switch"]
-        self.ber_info = {t: [1e-9 * (t + 1), 2e-9 * (t + 1)] for t in (TARGET_NIC, TARGET_TOR_A, TARGET_TOR_B)}
-        self.fec_stats = {t: {"corrected": 10 + t, "uncorrected": t} for t in (TARGET_NIC, TARGET_TOR_A, TARGET_TOR_B)}
-        self.pcs_stats = {t: {"errors": 20 + t} for t in (TARGET_NIC, TARGET_TOR_A, TARGET_TOR_B)}
+        self.ber_info = {t: [1e-9 * (t + 1), 2e-9 * (t + 1)] for t in (TARGET_NIC, TARGET_UPPER_TOR, TARGET_LOWER_TOR)}
+        self.fec_stats = {t: {"corrected": 10 + t, "uncorrected": t}
+                          for t in (TARGET_NIC, TARGET_UPPER_TOR, TARGET_LOWER_TOR)}
+        self.pcs_stats = {t: {"errors": 20 + t} for t in (TARGET_NIC, TARGET_UPPER_TOR, TARGET_LOWER_TOR)}
         self.alive_status = True
         self.health = True
         self.reset_cause_value = 2
@@ -158,10 +162,10 @@ class PortModel(object):
         return True
 
     def m_toggle_mux_to_tor_a(self):
-        return self._toggle(TARGET_TOR_A)
+        return self._toggle(TARGET_UPPER_TOR)
 
     def m_toggle_mux_to_tor_b(self):
-        return self._toggle(TARGET_TOR_B)
+        return self._toggle(TARGET_LOWER_TOR)
 
     def m_get_switch_count_total(self, switch_count_type, clear_on_read=False):
         return self.switch_count[switch_count_type]

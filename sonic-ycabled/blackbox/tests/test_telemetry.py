@@ -9,8 +9,9 @@ import time
 import pytest
 
 from harness import expect
+from harness.certs import SOC_NAME, Pki
 from harness.contract import MUX_CABLE_INFO_ACTIVE_ACTIVE, MUX_CABLE_INFO_ACTIVE_STANDBY
-from harness.fake_hw import FIRMWARE_DOWNLOAD_STATUS_INPROGRESS, TARGET_TOR_B
+from harness.fake_hw import FIRMWARE_DOWNLOAD_STATUS_INPROGRESS, TARGET_LOWER_TOR
 from harness.topology import LOOPBACK3_UPPER, Topology, soc_ip
 from harness.util import TIMESTAMP_RE, wait_until
 
@@ -20,20 +21,21 @@ LAST_KNOWN = {"version_{}_{}".format(s, v): "9.9.{}".format(i)
               for i, (s, v) in enumerate((s, v) for s in ("self", "peer", "nic")
                                          for v in ("active", "inactive", "next"))}
 PASS_TIMEOUT = 90
+CERT_DIR = "/etc/sonic/bbcerts"
 
 PORTS = {
-    "Ethernet0": 1,    # active-standby, read from ToR A
-    "Ethernet4": 2,    # active-standby, read from ToR B, driver calls fail
+    "Ethernet0": 1,    # active-standby, read from the upper ToR
+    "Ethernet4": 2,    # active-standby, read from the lower ToR, driver calls fail
     "Ethernet8": 3,    # active-standby, cable absent
     "Ethernet12": 4,   # active-standby, firmware download in progress
     "Ethernet16": 5,   # active-active, SoC answers
     "Ethernet20": 6,   # active-active, SoC unreachable
     "Ethernet24": 7,   # active-standby, no driver for the cable
-    "Ethernet28": 8,   # active-standby, read from ToR A, every driver call raises
+    "Ethernet28": 8,   # active-standby, read from the upper ToR, every driver call raises
 }
 
 
-# Ethernet28: per target, cursor values raise (NIC, ToR B) or are not a list (ToR A).
+# Ethernet28: per target, cursor values raise (the NIC, the lower ToR) or are not a list (the upper ToR).
 def _cursors(model, args):
     lane, target = args
     if target == 1:
@@ -73,8 +75,8 @@ def _telemetry_pass(dut):
 
     Steps:
     1. Configure six active-standby ports and two active-active ones, as PORTS
-       lists them. Ethernet4's cable is read from ToR B, and some of its driver
-       methods raise or return invalid values; the driver methods of
+       lists them. Ethernet4's cable is read from the lower ToR, and some of
+       its driver methods raise or return invalid values; the driver methods of
        Ethernet28's cable raise or return invalid values; Ethernet8's cable is
        absent; Ethernet24's has no driver. Ethernet16's SoC answers, with mixed
        link and operation states; nothing listens at Ethernet20's SoC address.
@@ -96,7 +98,7 @@ def _telemetry_pass(dut):
     topo.active_active("Ethernet20", soc_ipv4=soc_ip("Ethernet20") + "/32")
     dut.configure(topo)
     b = dut.hw.port(2)
-    b.read_side = TARGET_TOR_B
+    b.read_side = TARGET_LOWER_TOR
     b.script("get_eye_heights", raises="OSError")
     b.script("get_local_temperature", value=-1)
     b.script("get_nic_voltage", value="bad")
@@ -145,7 +147,7 @@ def _telemetry_pass(dut):
         "soc_rpcs": soc.rpcs(since=soc_mark),
         "delay": passed - started,
         "expected": expect.mux_cable_info(dut.hw.port(1)),
-        "eye_tor_b": list(dut.hw.port(1).eye_heights[TARGET_TOR_B]),
+        "eye_lower_tor": list(dut.hw.port(1).eye_heights[TARGET_LOWER_TOR]),
     }
 
 
@@ -177,9 +179,9 @@ def test_active_standby(run):
 
     Steps:
     1. Take the module's telemetry pass (the run fixture).
-    2. Expect the MUX_CABLE_INFO of Ethernet0, read from ToR A, whose driver
-       answers every call: a time_post timestamp and the cable's values,
-       besides peer_eye_height_lane2 (test_peer_eye_height_lane2).
+    2. Expect the MUX_CABLE_INFO of Ethernet0, read from the upper ToR, whose
+       driver answers every call: a time_post timestamp and the cable's
+       values, besides peer_eye_height_lane2 (test_peer_eye_height_lane2).
     """
     info = dict(run["info"]["Ethernet0"])
     assert re.match(TIMESTAMP_RE, info.pop("time_post"))
@@ -196,9 +198,10 @@ def test_peer_eye_height_lane2(run):
     Steps:
     1. Take the module's telemetry pass (the run fixture).
     2. Expect Ethernet0's peer_eye_height_lane2 to be the second eye height its
-       cable reports for ToR B, the peer of read side A.
+       cable reports for the lower ToR, the peer of the upper ToR it is read
+       from.
     """
-    assert run["info"]["Ethernet0"]["peer_eye_height_lane2"] == str(run["eye_tor_b"][1])
+    assert run["info"]["Ethernet0"]["peer_eye_height_lane2"] == str(run["eye_lower_tor"][1])
 
 
 def test_active_standby_driver_failures(run):
@@ -207,14 +210,14 @@ def test_active_standby_driver_failures(run):
 
     Steps:
     1. Take the module's telemetry pass (the run fixture). Ethernet4's cable is
-       read from ToR B. Its get_eye_heights(), get_switch_count_total() and
-       is_link_active() raise; get_local_temperature() returns -1,
+       read from the lower ToR. Its get_eye_heights(), get_switch_count_total()
+       and is_link_active() raise; get_local_temperature() returns -1,
        get_nic_voltage() 'bad', get_active_linked_tor_side() -1, and
        get_firmware_version() None.
     2. Expect N/A in the switch counts, internal_temperature, nic_voltage,
        every eye height and every version, and in no other field.
     3. Expect tor_active unknown, the three link statuses down, mux_direction
-       peer (the mux points at ToR A), and the values the driver read:
+       peer (the mux points at the upper ToR), and the values the driver read:
        internal_voltage 3.3 and nic_temperature 45.
     """
     info = run["info"]["Ethernet4"]
@@ -227,7 +230,7 @@ def test_active_standby_driver_failures(run):
                        "version_nic_active", "version_nic_inactive", "version_nic_next"}, na
     assert info["tor_active"] == "unknown"
     assert info["link_status_self"] == info["link_status_peer"] == info["link_status_nic"] == "down"
-    # read side B: the mux points to A, the peer.
+    # Read from the lower ToR: the mux points to the upper ToR, the peer.
     assert info["mux_direction"] == "peer"
     assert info["internal_voltage"] == "3.3" and info["nic_temperature"] == "45"
 
@@ -309,14 +312,18 @@ def test_active_active(run):
 
 def test_active_active_soc_unreachable(run):
     """For an active-active port whose SoC cannot be reached, the pass writes
-    unknown states, server_version N/A, and a failing connection status.
+    unknown states, server_version N/A, and grpc_connection_status
+    TRANSIENT_FAILURE, which grpc-core keeps while it retries: the pass's
+    failing RPCs do not report the failure to linkmgrd again.
 
     Steps:
     1. Take the module's telemetry pass (the run fixture). Nothing listens at
-       Ethernet20's SoC address.
+       Ethernet20's SoC address: its connections are refused.
     2. Expect the self and peer link, operation and mux direction states
        unknown, server_version N/A, and grpc_connection_status
-       TRANSIENT_FAILURE, CONNECTING or IDLE.
+       TRANSIENT_FAILURE.
+    3. Expect no FORWARDING_STATE_RESPONSE write for Ethernet20 during the
+       pass.
     """
     info = run["info"]["Ethernet20"]
     assert {k: info[k] for k in ("self_link_state", "peer_link_state", "self_oper_state", "peer_oper_state",
@@ -324,7 +331,8 @@ def test_active_active_soc_unreachable(run):
         ("self_link_state", "peer_link_state", "self_oper_state", "peer_oper_state", "self_mux_direction",
          "peer_mux_direction"), "unknown")
     assert info["server_version"] == "N/A"
-    assert info["grpc_connection_status"] in ("TRANSIENT_FAILURE", "CONNECTING", "IDLE")
+    assert info["grpc_connection_status"] == "TRANSIENT_FAILURE"
+    assert not [a for a in run["writes"] if a.table == "FORWARDING_STATE_RESPONSE" and a.key == "Ethernet20"]
 
 
 def test_active_standby_driver_exceptions(run):
@@ -356,7 +364,7 @@ def test_static_info_driver_failures(run):
     Steps:
     1. Take the module's telemetry pass (the run fixture).
        get_target_cursor_values() of Ethernet28's cable raises for the NIC and
-       ToR B, and returns -1 for ToR A.
+       the lower ToR, and returns -1 for the upper ToR.
     2. Expect Ethernet28's MUX_CABLE_STATIC_INFO read_side tor1, and N/A in
        every other field.
     """
@@ -464,3 +472,84 @@ def test_active_active_port_without_soc_address(dut):
         "the telemetry pass did not reach Ethernet4"
     dut.syslog.barrier()
     assert not dut.crash_evidence()
+
+
+def test_active_active_connection_status_follows_soc(dut):
+    """grpc_connection_status, which `show muxcable hwmode muxdirection` shows
+    as ConnectivityState, is the state of the port's channel at the pass, as
+    grpc-core reports it: TRANSIENT_FAILURE for a SoC that went away after
+    startup and for one that accepts TCP connections but never answers, READY
+    for one that came up after startup.
+
+    Steps:
+    1. Configure Ethernet0, Ethernet4 and Ethernet8 as active-active ports,
+       with a SoC double at Ethernet0's SoC address, nothing listening at
+       Ethernet4's, and a blackhole, which accepts TCP connections and sends
+       nothing, at Ethernet8's.
+    2. Start ycabled, and expect a forwarding state probe of Ethernet0
+       answered active: its channel is up.
+    3. Stop Ethernet0's SoC double. Start one at Ethernet4's SoC address, and
+       send forwarding state probes of Ethernet4, as linkmgrd keeps doing,
+       until one is answered active, within 15 s.
+    4. Wait up to 90 s for the pass's writes of grpc_connection_status for
+       the three ports.
+    5. Expect Ethernet0's and Ethernet8's TRANSIENT_FAILURE, and Ethernet4's
+       READY.
+    """
+    ports = ("Ethernet0", "Ethernet4", "Ethernet8")
+    topo = Topology()
+    for port in ports:
+        topo.active_active(port, soc_ipv4=soc_ip(port) + "/32")
+    dut.configure(topo)
+    gone = dut.soc(soc_ip("Ethernet0"))
+    dut.blackhole(soc_ip("Ethernet8"))
+    dut.start()
+    assert dut.fwd_probe("Ethernet0")["response"] == "active"
+    gone.stop()
+    dut.soc(soc_ip("Ethernet4"))
+    # gRPC reconnects with backoff; linkmgrd keeps probing.
+    wait_until(lambda: dut.fwd_probe("Ethernet4")["response"] == "active", 15)
+    mark = dut.monitor.mark()
+    for port in ports:
+        dut.monitor.wait_access(mark, PASS_TIMEOUT, kind="write", table="MUX_CABLE_INFO", key=port,
+                                field="grpc_connection_status")
+    assert {port: dut.state.field("MUX_CABLE_INFO", port, "grpc_connection_status") for port in ports} == {
+        "Ethernet0": "TRANSIENT_FAILURE", "Ethernet4": "READY", "Ethernet8": "TRANSIENT_FAILURE"}
+
+
+def test_active_active_connection_status_tls_handshake_failure(dut):
+    """A channel whose TLS handshake fails is not up: its
+    grpc_connection_status is TRANSIENT_FAILURE, as grpc-core reports it, while
+    a channel whose handshake succeeds is READY.
+
+    Steps:
+    1. Configure Ethernet0 and Ethernet4 as active-active ports, and
+       GRPCCLIENT {type: secure, auth_level: server} with the test PKI's CA,
+       the SoC's name and a client certificate and key.
+    2. Start TLS SoC doubles with the PKI's server certificate at both SoC
+       addresses. Ethernet4's requires a client certificate, which auth_level
+       server does not present, so its handshakes fail.
+    3. Start ycabled.
+    4. Wait up to 90 s for the pass's writes of grpc_connection_status for
+       both ports.
+    5. Expect Ethernet0's READY and Ethernet4's TRANSIENT_FAILURE.
+    """
+    ports = ("Ethernet0", "Ethernet4")
+    pki = Pki(CERT_DIR, soc_ips=[soc_ip(port) for port in ports])
+    dut.files.append(CERT_DIR)
+    topo = Topology()
+    for port in ports:
+        topo.active_active(port, soc_ipv4=soc_ip(port) + "/32")
+    topo.grpcclient = {"config": {"type": "secure", "auth_level": "server"},
+                       "certs": {"ca_crt": pki.paths["ca.crt"], "grpc_ssl_credential": SOC_NAME,
+                                 "client_crt": pki.paths["client.crt"], "client_key": pki.paths["client.key"]}}
+    dut.configure(topo)
+    dut.soc(soc_ip("Ethernet0"), tls=pki.server_tls())
+    dut.soc(soc_ip("Ethernet4"), tls=pki.server_tls(require_client_auth=True))
+    dut.start()
+    mark = dut.monitor.mark()
+    for port in ports:
+        dut.monitor.wait_access(mark, PASS_TIMEOUT, kind="write", table="MUX_CABLE_INFO", key=port,
+                                field="grpc_connection_status")
+    assert {port: dut.state.field("MUX_CABLE_INFO", port, "grpc_connection_status") for port in ports} == {
+        "Ethernet0": "READY", "Ethernet4": "TRANSIENT_FAILURE"}

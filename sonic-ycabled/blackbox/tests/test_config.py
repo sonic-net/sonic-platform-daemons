@@ -7,7 +7,7 @@ import pytest
 from harness.certs import SOC_NAME, Pki
 from harness.dut import GRPC_SECRETS
 from harness.redisdb import HARNESS_ADDRESS
-from harness.topology import (LOOPBACK3_LOWER, LOOPBACK3_LOWER_NIC, LOOPBACK3_UPPER, LOOPBACK3_UPPER_NIC,
+from harness.topology import (LOOPBACK3_UPPER, LOOPBACK3_LOWER, LOOPBACK3_UPPER_NIC, LOOPBACK3_LOWER_NIC,
                               VS_PLATFORM, Topology, soc_ip)
 from harness.util import eventually
 
@@ -16,32 +16,32 @@ CERT_DIR = "/etc/sonic/bbcerts"
 
 
 @pytest.mark.parametrize("loopback3,read_side", [
-    (LOOPBACK3_LOWER, 0), (LOOPBACK3_UPPER, 1), (LOOPBACK3_LOWER_NIC, 0), (LOOPBACK3_UPPER_NIC, 1),
+    (LOOPBACK3_UPPER, 1), (LOOPBACK3_LOWER, 0), (LOOPBACK3_UPPER_NIC, 1), (LOOPBACK3_LOWER_NIC, 0),
     ("10.212.64.9/32", -1), (None, -1), ("fc00::1/128", -1),
-], ids=["lower", "upper", "lower-nic", "upper-nic", "other-address", "none", "ipv6-only"])
+], ids=["upper", "lower", "upper-nic", "lower-nic", "other-address", "none", "ipv6-only"])
 def test_read_side_from_loopback3(dut, loopback3, read_side):
     """ycabled takes its read side, this ToR's index in the SoC's port lists,
-    from its Loopback3 address: 0 for the lower ToR's addresses, 1 for the
-    upper ToR's, -1 for any other address or none. The read side decides which
+    from its Loopback3 address: 1 for the upper ToR's addresses, 0 for the
+    lower ToR's, -1 for any other address or none. The read side decides which
     of the SoC's admin states is this ToR's and which the peer's, in
     HW_MUX_CABLE_TABLE, HW_MUX_CABLE_TABLE_PEER and the forwarding state probe,
     and the tor of the GracefulRestart request. Without a read side, both
     states are unknown.
 
-    Cases: the lower and the upper ToR's addresses, 10.212.64.2 and 10.212.64.1
-    (lower, upper), and the pair sonic-mgmt assigns, 10.1.0.39 and 10.1.0.38
-    (lower-nic, upper-nic); another address (other-address); no Loopback3
+    Cases: the upper and the lower ToR's addresses, 10.212.64.1 and 10.212.64.2
+    (upper, lower), and the pair sonic-mgmt assigns, 10.1.0.38 and 10.1.0.39
+    (upper-nic, lower-nic); another address (other-address); no Loopback3
     (none); an IPv6 address only (ipv6-only).
 
     Steps:
     1. Configure Ethernet0 as an active-active port with the case's Loopback3,
-       and a SoC double at 192.168.0.3 whose admin state is active for port id
-       0, the lower ToR, and standby for port id 1.
+       and a SoC double at 192.168.0.3 whose admin state is standby for port id
+       1, the upper ToR, and active for port id 0, the lower ToR.
     2. Start ycabled.
     3. Expect HW_MUX_CABLE_TABLE {state: this ToR's state, read_side: 0, 1 or
        -1, active_side: the same state}, and HW_MUX_CABLE_TABLE_PEER likewise
-       with the peer's state: active and standby on the lower ToR, the reverse
-       on the upper ToR, unknown without a read side.
+       with the peer's state: standby and active on the upper ToR, the reverse
+       on the lower ToR, unknown without a read side.
     4. Send a forwarding state probe, and expect the same two states.
     5. Expect the first NotifyGracefulRestartStart request {tor: 1} for read
        side 0, and {tor: 0} otherwise, as Python sends it.

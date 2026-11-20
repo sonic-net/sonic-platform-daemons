@@ -14,7 +14,7 @@ import pytest
 
 from harness import expect
 from harness.dut import FIRMWARE_DIR
-from harness.fake_hw import FIRMWARE_DOWNLOAD_STATUS_FAILED, FIRMWARE_DOWNLOAD_STATUS_INPROGRESS, TARGET_TOR_B
+from harness.fake_hw import FIRMWARE_DOWNLOAD_STATUS_FAILED, FIRMWARE_DOWNLOAD_STATUS_INPROGRESS, TARGET_LOWER_TOR
 from harness.topology import Topology, soc_ip
 from harness.util import stays_true, wait_until
 
@@ -37,6 +37,11 @@ def calls(dut, mark, method=None):
 
 
 # show muxcable hwmode muxdirection --------------------------------------------
+# For an active-active port, show muxcable hwmode muxdirection does not send
+# this command: it shows the self_mux_direction, peer_mux_direction and
+# grpc_connection_status of MUX_CABLE_INFO as Direction, PeerDirection and
+# ConnectivityState, which test_telemetry.py checks. show muxcable status sends
+# it for every port, for its HWSTATUS column.
 
 @pytest.mark.parametrize("read_side,mux,state", [(1, 1, "active"), (1, 2, "standby"), (2, 2, "active"),
                                                  (2, 1, "standby")])
@@ -46,7 +51,8 @@ def test_show_mux_direction(dut, cable, read_side, mux, state):
     ToR's read side, standby otherwise, with presence True in the result. The
     command key is deleted once answered.
 
-    Cases: read side A or B, with the mux on the same side or the other.
+    Cases: the cable read from the upper or the lower ToR, with the mux on the
+    same side or the other.
 
     Steps:
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
@@ -228,8 +234,8 @@ def test_config_mux_state(dut, cable, read_side, state, method):
     toggles the mux to the requested state's side, answering result True. The
     CLI toggles the cable only: HW_MUX_CABLE_TABLE is left alone.
 
-    Cases: read side A or B, set to active or standby, which selects
-    toggle_mux_to_tor_a() or toggle_mux_to_tor_b().
+    Cases: the cable read from the upper or the lower ToR, set to active or
+    standby, which selects toggle_mux_to_tor_a() or toggle_mux_to_tor_b().
 
     Steps:
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
@@ -258,8 +264,8 @@ def test_config_mux_state_toggle_fails(dut, cable, read_side, state, method, scr
     """When the toggle fails, config muxcable hwmode state answers result False
     if the driver returned False, or -1 if it raised.
 
-    Cases: read side A or B, set to active or standby; the toggle method
-    returns False or raises OSError.
+    Cases: the cable read from the upper or the lower ToR, set to active or
+    standby; the toggle method returns False or raises OSError.
 
     Steps:
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
@@ -425,7 +431,7 @@ def test_show_firmware(dut, cable, read_side):
     side's, peer the other side's. ycabled writes the result row before the
     response, and deletes the command key last.
 
-    Cases: read side A or B.
+    Cases: the cable read from the upper or the lower ToR.
 
     Steps:
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
@@ -452,8 +458,8 @@ def test_show_firmware(dut, cable, read_side):
     assert res < rsp < deleted
 
 
-def _firmware_tor_b_fails(model, args):
-    if args[0] == TARGET_TOR_B:
+def _firmware_lower_tor_fails(model, args):
+    if args[0] == TARGET_LOWER_TOR:
         raise OSError("I2C failure")
     return dict(model.firmware[args[0]])
 
@@ -466,13 +472,14 @@ def test_show_firmware_one_side_fails(dut, cable):
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4,
        which keeps ycabled serving.
     2. Start ycabled, then script get_firmware_version() of Ethernet0's cable
-       to raise OSError for ToR B, the peer of read side A.
+       to raise OSError for the lower ToR, the peer of the upper ToR it is
+       read from.
     3. Send XCVRD_SHOW_FW_CMD probe for Ethernet0.
     4. Expect the response {status: True}, with N/A in version_peer_active,
        version_peer_inactive and version_peer_next only.
     """
     dut.start()
-    cable.script("get_firmware_version", func=_firmware_tor_b_fails)
+    cable.script("get_firmware_version", func=_firmware_lower_tor_fails)
     r = dut.cli("XCVRD_SHOW_FW_CMD", "probe", "Ethernet0")
     assert r.rsp == {"status": "True"}
     assert {k for k, v in r.res.items() if v == "N/A"} == {"version_peer_active", "version_peer_inactive",
@@ -1195,6 +1202,97 @@ def test_command_cable_gone(dut, cable, cmd, value, args, rsp):
     mark = dut.hw.mark()
     assert dut.cli(cmd, value, "Ethernet0", args=args).rsp == rsp
     assert not dut.hw.calls(mark, port=1)
+
+
+# Cable commands for an active-active port -------------------------------------------
+# The CLI sends them for every mux port, on an active-active ToR too.
+
+AA_COMMANDS = [
+    ("XCVRD_SHOW_HWMODE_SWMODE_CMD", "probe", None, {"state": "not Y-Cable port"}),
+    ("XCVRD_CONFIG_HWMODE_DIR_CMD", "standby", None, {"result": "False"}),
+    ("XCVRD_CONFIG_HWMODE_SWMODE_CMD", "manual", None, {"result": "False"}),
+    ("XCVRD_SHOW_FW_CMD", "probe", None, {"status": "False"}),
+    ("XCVRD_DOWN_FW_CMD", "bb-fw.bin", None, {"status": "-1"}),
+    ("XCVRD_ACTI_FW_CMD", "bb-fw.bin", None, {"status": "False"}),
+    ("XCVRD_EVENT_LOG_CMD", "probe", None, {"status": "False"}),
+    ("XCVRD_GET_FEC_CMD", "probe", None, {"status": "False"}),
+] + [("XCVRD_GET_BER_CMD", mode, args, {"status": "False"}) for mode, args in [
+    ("ber", {"target": "1"}), ("eye", {"target": "1"}), ("fec_stats", {"target": "1"}),
+    ("pcs_stats", {"target": "1"}), ("cable_alive", None), ("health_check", None), ("reset_cause", None),
+    ("operation_time", None), ("debug_dump", {"option": "all"}), ("queue_info", None)]
+] + [("XCVRD_CONFIG_PRBS_CMD", mode, args, {"status": "False"}) for mode, args in [
+    ("enable", {"target": "1", "mode_value": "3", "lane_mask": "15"}), ("disable", {"target": "1"}),
+    ("reset", {"target": "1"}), ("anlt", {"target": "1", "mode": "1"}), ("fec", {"target": "1", "mode": "1"})]
+] + [("XCVRD_CONFIG_LOOP_CMD", mode, args, {"status": "False"}) for mode, args in [
+    ("enable", {"target": "1", "mode_value": "2", "lane_mask": "15"}), ("disable", {"target": "1"})]]
+
+
+@pytest.mark.parametrize("cmd,value,args,rsp", AA_COMMANDS,
+                         ids=["{}-{}".format(c[len("XCVRD_"):-len("_CMD")].lower(), v) for c, v, _, _ in AA_COMMANDS])
+def test_cable_commands_for_active_active_port(dut, cmd, value, args, rsp):
+    """An active-active port has no Y-cable driver: ycabled answers each cable
+    command for it as for a cable without a driver, asks the SoC nothing, and
+    keeps serving the CLI.
+
+    Cases: every command and value the CLI sends, but the mux direction probe,
+    which test_show_mux_direction_active_active covers, and the firmware
+    rollback, which test_rollback_firmware_for_active_active_port covers.
+
+    Steps:
+    1. Configure Ethernet0 as an active-active port of the lower ToR, with a SoC
+       double at 192.168.0.3, and write the firmware image bb-fw.bin to the
+       firmware directory.
+    2. Start ycabled.
+    3. Send the command for Ethernet0, with its arguments, and expect the
+       response, and every version N/A for the firmware version or no result
+       for the other commands.
+    4. Expect no RPC at the SoC since the command.
+    5. Send XCVRD_SHOW_HWMODE_SWMODE_CMD probe for Ethernet0, and expect the
+       response {state: not Y-Cable port}: the CLI thread still serves.
+    """
+    dut.configure(Topology().active_active("Ethernet0", soc_ipv4=SOC + "/32"))
+    soc = dut.soc(SOC)
+    dut.firmware_file("bb-fw.bin")
+    dut.start()
+    mark = soc.mark()
+    r = dut.cli(cmd, value, "Ethernet0", args)
+    assert r.rsp == rsp
+    if cmd == "XCVRD_SHOW_FW_CMD":
+        assert set(r.res.values()) == {"N/A"} and len(r.res) == 9
+    else:
+        assert r.res == {}
+    assert not soc.rpcs(since=mark)
+    assert dut.cli("XCVRD_SHOW_HWMODE_SWMODE_CMD", "probe", "Ethernet0").rsp == {"state": "not Y-Cable port"}
+
+
+@pytest.mark.known_issue("rollback for a port without a driver answers, then kills the CLI thread "
+                         "(no lock for the port)")
+def test_rollback_firmware_for_active_active_port(dut):
+    """An active-active port has no Y-cable driver either: a rollback for it
+    answers status False, and the CLI commands after it are still served.
+
+    Steps:
+    1. Configure Ethernet0 as an active-active port of the lower ToR, with a SoC
+       double at 192.168.0.3, and write the firmware image bb-fw.bin to the
+       firmware directory.
+    2. Start ycabled. On Python ycabled, let the teardown accept the crash of
+       the known issue.
+    3. Send XCVRD_ROLL_FW_CMD bb-fw.bin for Ethernet0, and expect the response
+       {status: False}.
+    4. Send XCVRD_SHOW_HWMODE_SWMODE_CMD probe for Ethernet0 without waiting,
+       and expect its response {state: not Y-Cable port} within 5 s.
+    """
+    dut.configure(Topology().active_active("Ethernet0", soc_ipv4=SOC + "/32"))
+    dut.soc(SOC)
+    dut.firmware_file("bb-fw.bin")
+    dut.start()
+    dut.tolerate_python_failure(crash=True)
+    assert dut.cli("XCVRD_ROLL_FW_CMD", "bb-fw.bin", "Ethernet0").rsp == {"status": "False"}
+    # A command sent after it shows whether the CLI thread is still serving.
+    mark = dut.cli("XCVRD_SHOW_HWMODE_SWMODE_CMD", "probe", "Ethernet0", wait=False)
+    assert dut.monitor.eventually(mark, 5, kind="write", db="STATE_DB", table="XCVRD_SHOW_HWMODE_SWMODE_RSP",
+                                  key="Ethernet0", field="state"), "the next command was not answered"
+    assert dut.state.get("XCVRD_SHOW_HWMODE_SWMODE_RSP", "Ethernet0") == {"state": "not Y-Cable port"}
 
 
 # Malformed commands --------------------------------------------------------------

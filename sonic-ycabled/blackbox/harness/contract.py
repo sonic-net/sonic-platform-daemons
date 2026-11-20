@@ -26,9 +26,10 @@ Entry = namedtuple("Entry", "db table kind field values note")
 ANY = None
 STATE = r"^(active|standby|unknown)$"
 # HW_MUX_CABLE_TABLE and HW_MUX_CABLE_TABLE_PEER. An active-standby port has
-# the cable's sides: ToR A 1, ToR B 2, the NIC 0, or -1. An active-active port
-# has this ToR's index in the SoC's lists (0 or 1, -1 without Loopback3) and
-# the SoC's states. A removal writes active_side -1 for both.
+# the cable's sides: the upper ToR 1, the lower ToR 2, the NIC 0, or -1. An
+# active-active port has this ToR's index in the SoC's lists (0 or 1, -1
+# without Loopback3) and the SoC's states. A removal writes active_side -1 for
+# both.
 # Pairs, not a dict: entries are hashable.
 READ_SIDE = (("active-standby", r"^(-1|0|1|2)$"), ("active-active", r"^(-1|0|1)$"))
 ACTIVE_SIDE = (("active-standby", r"^(-1|0|1|2)$"), ("active-active", r"^(-1|active|standby|unknown)$"))

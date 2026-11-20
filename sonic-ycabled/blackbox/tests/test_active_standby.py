@@ -6,8 +6,8 @@ import re
 import pytest
 
 from harness import expect
-from harness.fake_hw import MODEL, TARGET_TOR_A, TARGET_TOR_B
-from harness.mux_simulator import LOWER_TOR, UPPER_TOR
+from harness.fake_hw import MODEL, TARGET_UPPER_TOR, TARGET_LOWER_TOR
+from harness.mux_simulator import UPPER_TOR, LOWER_TOR
 from harness.topology import VS_PLATFORM, Topology, soc_ip
 from harness.util import TIMESTAMP_RE, eventually, stays_true
 
@@ -16,7 +16,7 @@ from harness.util import TIMESTAMP_RE, eventually, stays_true
 UNKNOWN_TOGGLE_RESULT = {"state": "unknown", "read_side": "-1", "active_side": "-1"}
 
 
-def two_cables(dut, **kw):
+def add_two_cables_as(dut, **kw):
     """Ethernet0 under test, Ethernet4 healthy: Python serves toggles and
     probes only if at least one cable initialized."""
     dut.configure(Topology().active_standby("Ethernet0", "Ethernet4"))
@@ -26,10 +26,10 @@ def two_cables(dut, **kw):
 
 
 @pytest.mark.parametrize("read_side,request_state,method,active_side", [
-    (TARGET_TOR_A, "active", "toggle_mux_to_tor_a", "1"),
-    (TARGET_TOR_A, "standby", "toggle_mux_to_tor_b", "2"),
-    (TARGET_TOR_B, "active", "toggle_mux_to_tor_b", "2"),
-    (TARGET_TOR_B, "standby", "toggle_mux_to_tor_a", "1"),
+    (TARGET_UPPER_TOR, "active", "toggle_mux_to_tor_a", "1"),
+    (TARGET_UPPER_TOR, "standby", "toggle_mux_to_tor_b", "2"),
+    (TARGET_LOWER_TOR, "active", "toggle_mux_to_tor_b", "2"),
+    (TARGET_LOWER_TOR, "standby", "toggle_mux_to_tor_a", "1"),
 ])
 def test_toggle(dut, read_side, request_state, method, active_side):
     """orchagent's toggle request moves the mux to the requested side with a
@@ -37,8 +37,8 @@ def test_toggle(dut, read_side, request_state, method, active_side):
     the new state, the cable's read side and the side the mux now points to. It
     records when the switch started and ended in MUX_METRICS_TABLE.
 
-    Cases: the cable's read side (ToR A or B) and the requested state (active
-    or standby), which together select toggle_mux_to_tor_a() or
+    Cases: the cable's read side (the upper or the lower ToR) and the requested
+    state (active or standby), which together select toggle_mux_to_tor_a() or
     toggle_mux_to_tor_b() and the active side.
 
     Steps:
@@ -58,7 +58,7 @@ def test_toggle(dut, read_side, request_state, method, active_side):
        later than the end.
     """
     # The mux starts on the other side.
-    cable = two_cables(dut, read_side=read_side, mux_direction=3 - int(active_side))
+    cable = add_two_cables_as(dut, read_side=read_side, mux_direction=3 - int(active_side))
     dut.start()
     mark = dut.hw.mark()
     row = dut.toggle("Ethernet0", request_state)
@@ -100,7 +100,7 @@ def test_toggle_failure(dut, request_state, method, side, failure):
     7. Expect 'Could not toggle the mux for port 1 to torA' (or torB) in syslog
        within 5 s.
     """
-    cable = two_cables(dut, mux_direction=2 if request_state == "active" else 1)
+    cable = add_two_cables_as(dut, mux_direction=2 if request_state == "active" else 1)
     cable.script(method, **failure)
     dut.start()
     mark = dut.syslog.mark()
@@ -126,7 +126,7 @@ def test_toggle_reads_side_again_when_unknown(dut):
        driver calls get_read_side() and toggle_mux_to_tor_b(), in that order,
        and no other.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.script("get_read_side", raises="OSError: EEPROM busy", times=1)
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == UNKNOWN_TOGGLE_RESULT
@@ -154,7 +154,7 @@ def test_toggle_read_side_still_unreadable(dut, script):
     5. Expect the row {state: unknown, read_side: -1, active_side: -1}, and
        get_read_side() as the only driver call since the request.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.script("get_read_side", **script)
     dut.start()
     mark = dut.hw.mark()
@@ -177,7 +177,7 @@ def test_read_side_nic(dut):
     4. Probe Ethernet0 and expect unknown.
     5. Toggle Ethernet0 to standby and expect state unknown.
     """
-    two_cables(dut, read_side=0)
+    add_two_cables_as(dut, read_side=0)
     dut.start()
     assert dut.state.field("HW_MUX_CABLE_TABLE", "Ethernet0", "state") == "unknown"
     assert dut.probe("Ethernet0") == "unknown"
@@ -205,7 +205,7 @@ def test_startup_mux_direction_unreadable(dut, script, row):
     4. Expect Ethernet0's STATE_DB row {state: unknown, read_side: 1,
        active_side: -1}, or active_side 0 when the cable returned 0.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.script("get_mux_direction", **script)
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == row
@@ -226,7 +226,7 @@ def test_toggle_request_without_state_is_ignored(dut):
     5. Toggle Ethernet0 to standby and expect state standby: the toggles are
        still served.
     """
-    two_cables(dut)
+    add_two_cables_as(dut)
     dut.start()
     mark = dut.monitor.mark()
     hw_mark = dut.hw.mark()
@@ -250,7 +250,7 @@ def test_toggle_cable_gone(dut):
     4. Toggle Ethernet0 to standby and expect the row {state: unknown,
        read_side: -1, active_side: -1}.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     dut.start()
     cable.present = False
     assert dut.toggle("Ethernet0", "standby") == UNKNOWN_TOGGLE_RESULT
@@ -269,7 +269,7 @@ def test_toggle_without_driver(dut):
        active_side: -1}.
     4. Toggle Ethernet0 to active and expect the same row.
     """
-    two_cables(dut, transceiver_info={"manufacturer": "Nobody", "model": "X1"})
+    add_two_cables_as(dut, transceiver_info={"manufacturer": "Nobody", "model": "X1"})
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0") == UNKNOWN_TOGGLE_RESULT
     assert dut.toggle("Ethernet0", "active") == UNKNOWN_TOGGLE_RESULT
@@ -293,7 +293,7 @@ def test_toggle_to_other_state_is_ignored(dut):
     5. Expect no write for Ethernet0 since the init request, and no crash in
        syslog or in ycabled's output.
     """
-    two_cables(dut)
+    add_two_cables_as(dut)
     dut.start()
     dut.tolerate_python_failure(crash=True)
     mark = dut.monitor.mark()
@@ -307,10 +307,10 @@ def test_toggle_to_other_state_is_ignored(dut):
 
 
 @pytest.mark.parametrize("read_side,mux_direction,response", [
-    (TARGET_TOR_A, TARGET_TOR_A, "active"),
-    (TARGET_TOR_A, TARGET_TOR_B, "standby"),
-    (TARGET_TOR_B, TARGET_TOR_B, "active"),
-    (TARGET_TOR_B, TARGET_TOR_A, "standby"),
+    (TARGET_UPPER_TOR, TARGET_UPPER_TOR, "active"),
+    (TARGET_UPPER_TOR, TARGET_LOWER_TOR, "standby"),
+    (TARGET_LOWER_TOR, TARGET_LOWER_TOR, "active"),
+    (TARGET_LOWER_TOR, TARGET_UPPER_TOR, "standby"),
 ])
 def test_probe(dut, read_side, mux_direction, response):
     """linkmgrd's probe reads the mux direction from the cable and is answered
@@ -318,7 +318,8 @@ def test_probe(dut, read_side, mux_direction, response):
     ToR's read side, standby otherwise. A probe only answers:
     HW_MUX_CABLE_TABLE is not written.
 
-    Cases: read side A or B, with the mux on the same side or the other one.
+    Cases: the cable read from the upper or the lower ToR, with the mux on the
+    same side or the other one.
 
     Steps:
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4, a
@@ -330,7 +331,7 @@ def test_probe(dut, read_side, mux_direction, response):
     4. Expect get_mux_direction() as the only driver call since the probe, and
        no write to HW_MUX_CABLE_TABLE.
     """
-    cable = two_cables(dut, read_side=read_side)
+    cable = add_two_cables_as(dut, read_side=read_side)
     dut.start()
     cable.mux_direction = mux_direction
     mark = dut.hw.mark()
@@ -356,7 +357,7 @@ def test_probe_unreadable_mux(dut, script):
     3. Script get_mux_direction() of Ethernet0's cable to fail that way.
     4. Probe Ethernet0 and expect unknown.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     dut.start()
     cable.script("get_mux_direction", **script)
     assert dut.probe("Ethernet0") == "unknown"
@@ -374,7 +375,7 @@ def test_probe_cable_gone(dut):
        TRANSCEIVER_INFO in place.
     4. Probe Ethernet0 and expect unknown.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     dut.start()
     cable.present = False
     assert dut.probe("Ethernet0") == "unknown"
@@ -390,7 +391,7 @@ def test_probe_without_driver(dut):
     2. Start ycabled.
     3. Probe Ethernet0 and expect unknown.
     """
-    two_cables(dut, transceiver_info={"manufacturer": "Nobody", "model": "X1"})
+    add_two_cables_as(dut, transceiver_info={"manufacturer": "Nobody", "model": "X1"})
     dut.start()
     assert dut.probe("Ethernet0") == "unknown"
 
@@ -436,7 +437,7 @@ def test_vendor_and_model_are_normalized(dut):
     3. Expect Ethernet0's STATE_DB state active, read through the driver, and a
        get_vendor() call to the cable: the driver was loaded and checked.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.transceiver_info = dict(cable.transceiver_info, manufacturer="  bb   VENDOR ", model=" " + MODEL.upper())
     dut.start()
     assert dut.state.get("HW_MUX_CABLE_TABLE", "Ethernet0")["state"] == "active"
@@ -451,8 +452,8 @@ def test_vendor_and_model_are_normalized(dut):
     ({"manufacturer": "BB Vendor", "model": "BB Model NoModule"}, None),
     ({"manufacturer": "BB Vendor", "model": "BB Model NoClass"}, None),
     ({"manufacturer": 123, "model": MODEL}, None),
-    ("none", None),
-    (None, "Other Vendor"),
+    (None, None),
+    ({"manufacturer": "BB Vendor", "model": MODEL}, "Other Vendor"),
 ], ids=["unknown-vendor", "unknown-model", "no-vendor", "no-model", "no-module", "no-class", "vendor-not-a-string",
         "no-transceiver-info", "vendor-mismatch"])
 def test_no_usable_driver(dut, info, vendor):
@@ -466,12 +467,13 @@ def test_no_usable_driver(dut, info, vendor):
     (no-vendor, no-model); the mapping names a module that does not exist or
     has no YCable class (no-module, no-class); the vendor is not a string
     (vendor-not-a-string); there is no transceiver info (no-transceiver-info);
-    the driver's get_vendor() names another vendor (vendor-mismatch).
+    the transceiver info matches the mapping, but the driver's get_vendor()
+    names another vendor (vendor-mismatch).
 
     Steps:
     1. Configure active-standby ports Ethernet0, under test, and Ethernet4, a
-       healthy second cable. Ethernet0's cable gets the case's transceiver info
-       or vendor.
+       healthy second cable. Ethernet0's cable gets the case's transceiver
+       info, or none, and for vendor-mismatch the other vendor.
     2. Start ycabled.
     3. Expect Ethernet0's STATE_DB HW_MUX_CABLE_TABLE row {state: unknown,
        read_side: -1, active_side: -1}, MUX_CABLE_INFO with the placeholder
@@ -480,9 +482,7 @@ def test_no_usable_driver(dut, info, vendor):
     5. Toggle Ethernet0 to standby and expect the same unknown row; probe it
        and expect unknown.
     """
-    cable = two_cables(dut)
-    if info is not None:
-        cable.transceiver_info = None if info == "none" else info
+    cable = add_two_cables_as(dut, transceiver_info=info)
     if vendor is not None:
         cable.vendor = vendor
     dut.start()
@@ -521,7 +521,7 @@ def test_get_vendor_failure(dut):
     5. Wait until ycabled is ready, toggle Ethernet4 to standby and expect
        state standby.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.script("get_vendor", raises="OSError: EEPROM busy")
     dut.start(ready=False)
     assert eventually(lambda: len(dut.state.keys("HW_MUX_CABLE_TABLE")) == 2, 5), "startup did not publish both ports"
@@ -548,7 +548,7 @@ def test_driver_constructor_failure(dut):
     4. Expect ycabled still running, Ethernet0's STATE_DB row {state: unknown,
        read_side: -1, active_side: -1}, and Ethernet4's state active.
     """
-    cable = two_cables(dut)
+    cable = add_two_cables_as(dut)
     cable.script("__init__", raises="OSError: EEPROM unreadable")
     dut.tolerate_python_failure(crash=True, exit=True)
     dut.start(ready=False)
