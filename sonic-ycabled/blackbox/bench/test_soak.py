@@ -302,6 +302,9 @@ class Soak(object):
         rec = {"type": "round", "round": r, "state": state, "t": ctx["t"], "complete_s": ctx["complete_s"]}
         t_req = self.request_ts(m0["monitor"], until)
         problems = []
+        # An answer after the wait gave up still counts below: say the round was late.
+        if ctx["complete_s"] is None:
+            problems.append("not every port answered within {} s".format(ANSWER_TIMEOUT))
         for table, want in self.answer_tables(state).items():
             got = self.answers(m0["monitor"], until, table)
             missing = [p for p in self.ports if p not in got]
@@ -436,12 +439,13 @@ def test_soak(dut, cable_type, request):
        or active (odd rounds) for every port, and wait until every port has
        answered, up to 30 s.
     3. At the next round's requests, check the round over everything from its
-       requests on: one answer per port and table with the requested state;
-       one toggle call per cable toward the requested side, no overlapping
-       cable calls (active-standby); the two SetAdminForwardingPortState RPCs
-       of the round at each SoC (active-active). Record the answers' latency,
-       ycabled's CPU time, memory, threads, file descriptors, sockets, redis
-       connections and commands, the keys in redis, and its logs by severity.
+       requests on: every port answered within 30 s; one answer per port and
+       table with the requested state; one toggle call per cable toward the
+       requested side, no overlapping cable calls (active-standby); the two
+       SetAdminForwardingPortState RPCs of the round at each SoC
+       (active-active). Record the answers' latency, ycabled's CPU time,
+       memory, threads, file descriptors, sockets, redis connections and
+       commands, the keys in redis, and its logs by severity.
     4. After the last round, wait until ycabled has been quiet for 2 s, check
        the last round, then each port's final rows, cable or SoC.
     5. Expect no problem in any round.

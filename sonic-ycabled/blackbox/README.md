@@ -551,9 +551,10 @@ writes `bench-<implementation>.json` to the report directory, and
 
 `bench/test_soak.py` toggles the mux ports of one cable type together once a minute
 for hours, with telemetry on, as on a device, and checks every round as `test_scale.py`
-does: one answer per port and table, with the requested state; one toggle call per
-cable toward the requested side, and no overlapping calls to a cable (active-standby);
-the round's two `SetAdminForwardingPortState` RPCs at each SoC (active-active). Every
+does: every port answered within 30 s; one answer per port and table, with the
+requested state; one toggle call per cable toward the requested side, and no
+overlapping calls to a cable (active-standby); the round's two
+`SetAdminForwardingPortState` RPCs at each SoC (active-active). Every
 round, it also records the answers' latency and ycabled's resources. It is not part of
 the suite or of the benchmarks: run it once per implementation, without a per-test time
 limit, with `run.sh --bb-test-timeout=0 bench/test_soak.py`. `BB_SOAK_SECONDS` (6 hours
