@@ -12,6 +12,9 @@
 #   BB_REPORT_DIR   where the reports go (default sonic-ycabled/blackbox/report)
 #   BB_YCABLED_CMD  command of another ycabled implementation, run instead of
 #                   Python ycabled from this tree; must exist in the image
+#   BB_SOAK_SECONDS, BB_SOAK_PERIOD, BB_SOAK_PORTS, BB_SOAK_OUT, BB_SOAK_GC_FREEZE
+#                   the settings of bench/test_soak.py, passed into the container
+#                   when set (BB_SOAK_OUT is a path in it)
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +38,10 @@ extra=()
 if [ -n "${BB_YCABLED_CMD:-}" ]; then
     extra+=(-e "BB_YCABLED_CMD=$BB_YCABLED_CMD")
 fi
+# Without a value, docker passes a variable only if it is set here.
+for name in BB_SOAK_SECONDS BB_SOAK_PERIOD BB_SOAK_PORTS BB_SOAK_OUT BB_SOAK_GC_FREEZE; do
+    extra+=(-e "$name")
+done
 tty=()
 if [ -t 1 ]; then
     tty=(-t)

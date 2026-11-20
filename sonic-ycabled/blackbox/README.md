@@ -558,7 +558,8 @@ round, it also records the answers' latency and ycabled's resources. It is not p
 the suite or of the benchmarks: run it once per implementation, without a per-test time
 limit, with `run.sh --bb-test-timeout=0 bench/test_soak.py`. `BB_SOAK_SECONDS` (6 hours
 per cable type by default), `BB_SOAK_PERIOD` (60 s), `BB_SOAK_PORTS` (100) and
-`BB_SOAK_OUT` (the report directory) set it up. `BB_SOAK_GC_FREEZE=1` freezes the test
+`BB_SOAK_OUT` (the report directory) set it up, and `run.sh` passes them into the
+container, where `BB_SOAK_OUT` is a path. `BB_SOAK_GC_FREEZE=1` freezes the test
 process's garbage collector after each round, so that its growing records do not make
 its full collections, which stop its SoC doubles and syslog reader, longer and longer.
 Each cable type writes `soak-<implementation>-<cable type>.jsonl`: a `start` record, a
