@@ -50,7 +50,7 @@ single_version_override(
 
 single_version_override(
     module_name = "sonic-build-infra",
-    version = "0.0.39-81476192bf2cdb70bb646e85935c5d698b6de8a0",
+    version = "0.0.40-6c9cd9477816ad129bf8d4501c9259504f3f85ca",
 )
 
 single_version_override(
@@ -61,7 +61,7 @@ single_version_override(
 bazel_dep(name = "rules_python", version = "1.9.0.sonic.1")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "sonic-build-infra", version = "0.0.39-81476192bf2cdb70bb646e85935c5d698b6de8a0", repo_name = "sonic_build_infra")
+bazel_dep(name = "sonic-build-infra", version = "0.0.40-6c9cd9477816ad129bf8d4501c9259504f3f85ca", repo_name = "sonic_build_infra")
 bazel_dep(name = "sonic-swss-common", version = "0.0.7-f7fda40c02b3a8b4bbbff3d17fca3dff83f4cbad", repo_name = "sonic_swss_common")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
@@ -100,6 +100,3 @@ use_repo(pip, "daemon_codegen_pip")
 
 # The original Azure suites explicitly install the legacy SWSS SDK wheel.
 bazel_dep(name = "sonic-py-swsssdk", version = "2.0.1-5878f93779df1bfdfe58ea00c8d34fe8261d362e", repo_name = "sonic_py_swsssdk")
-
-# Keep the original grpcio-tools compiler version in this application root.
-single_version_override(module_name = "protobuf", version = "29.0")

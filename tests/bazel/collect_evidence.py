@@ -14,7 +14,10 @@ PROJECTS = ("chassisd", "ledd", "pcied", "psud", "syseepromd", "thermalctld", "x
 
 
 def bazel(directory, root):
-    return ["bazel"]
+    command = ["bazel"]
+    if directory != root and os.environ.get("BAZEL_TEST_OUTPUT_BASE"):
+        command.append("--output_base=" + os.environ["BAZEL_TEST_OUTPUT_BASE"])
+    return command
 
 
 def info(command, directory, root, key):
@@ -47,7 +50,7 @@ def main():
     for scope, directory in (("owner", root), ("tested", test_root)):
         command = bazel(directory, root)
         execution_root = Path(info(command, directory, root, "execution_root"))
-        for role in ("runtime", "runtime_metadata"):
+        for role in ("wheels", "runtime", "runtime_metadata"):
             label = ("@sonic_platform_daemons" if scope == "tested" else "") + "//:daemons." + role
             paths = subprocess.check_output(command + ["cquery", label, "--output=files"], cwd=directory, text=True).splitlines()
             for name in paths:

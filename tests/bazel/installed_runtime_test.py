@@ -1,4 +1,4 @@
-"""Validate direct installations against the original per-daemon setup contracts."""
+"""Validate installed owner wheels against the original per-daemon setup contracts."""
 
 import argparse
 import base64
@@ -15,12 +15,14 @@ import subprocess
 import shutil
 import tarfile
 import unittest
+import zipfile
 
 from tools.bazel.tests.integration.installed_wheel_fixture import installed_wheels, write_wheel_receipt
 from tools.bazel.tests.integration.wheel_contract import setup_contract, expected_sources, normalized_requirement
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--source", type=Path, required=True)
+parser.add_argument("--owner-wheel", type=Path, action="append", required=True)
 parser.add_argument("--runtime", type=Path, action="append", required=True)
 parser.add_argument("--metadata", type=Path, action="append", required=True)
 parser.add_argument("--dependency-wheel", type=Path, action="append", required=True)
@@ -75,6 +77,7 @@ class InstalledRuntimeTest(unittest.TestCase):
 
     def test_original_payload_metadata_and_record(self):
         metadata = {json.loads(p.read_text())["distribution"]: (p, json.loads(p.read_text())) for p in ARGS.metadata}
+        wheels = {path.name: path for path in ARGS.owner_wheel}
         observed = []
         site = "usr/local/lib/python3.13/dist-packages"
         for files in self.payloads:
@@ -128,7 +131,13 @@ class InstalledRuntimeTest(unittest.TestCase):
             self.assertEqual(info["version"], contract["version"])
             self.assertEqual(set(map(normalized_requirement, info["requires_dist"])), requires)
             self.assertEqual(info["requires_python"], contract.get("python_requires", ""))
-            self.assertEqual(info["entry_points"], contract.get("entry_points", {}))
+            wheel = wheels.pop(info["wheel"]["filename"])
+            self.assertEqual(info["wheel"]["sha256"], hashlib.sha256(wheel.read_bytes()).hexdigest())
+            with zipfile.ZipFile(wheel) as archive:
+                wheel_metadata = archive.read(Path(prefix).name + "/METADATA")
+            self.assertEqual(files[header], wheel_metadata)
+            self.assertEqual(info["wheel"]["metadata_sha256"], hashlib.sha256(wheel_metadata).hexdigest())
+            self.assertEqual(info["wheel"]["tags"], ["py3-none-any"])
             record = prefix + "/RECORD"
             rows = list(csv.reader(io.StringIO(files[record].decode())))
             recorded = set()
@@ -145,6 +154,7 @@ class InstalledRuntimeTest(unittest.TestCase):
             self.assertEqual(recorded, set(files))
             observed.append({"distribution": name, "files": len(files), "runtime_metadata_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
         self.assertEqual(set(metadata), {v["distribution"] for v in observed})
+        self.assertFalse(wheels)
         DETAILS["distributions"] = observed
 
     def test_installed_interfaces_and_generated_grpc(self):
