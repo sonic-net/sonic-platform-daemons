@@ -45,6 +45,7 @@ jobs:
           bazel build //:daemons.wheels //:daemons.runtime //:daemons.runtime_metadata
           (
             cd tests/bazel
+            test "$(bazel --version)" = "bazel 8.5.1"
             bazel --output_base="$BAZEL_TEST_OUTPUT_BASE" test \
               //:chassisd_test //:ledd_test //:pcied_test //:psud_test \
               //:syseepromd_test //:thermalctld_test //:xcvrd_test //:ycabled_test \
