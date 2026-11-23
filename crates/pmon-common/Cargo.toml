@@ -37,4 +37,4 @@ tokio = { version = "1", features = ["rt", "macros", "time", "signal", "test-uti
 # release builders using cargo-auditable 0.6.4; sonic-buildimage master
 # sonic-slave-trixie/Dockerfile.j2 installs 0.7.6. Remove these compatibility
 # caps once every supported release builder uses cargo-auditable >= 0.7.6.
-tempfile = ">=3, <3.15"
+tempfile = ">=3, <3.28"
