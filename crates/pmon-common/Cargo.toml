@@ -12,7 +12,7 @@ swss-common = { workspace = true }
 platform-api = { workspace = true }
 chrono = "0.4"
 log    = "0.4"
-syslog = "6.0"
+syslog = "7.0"
 # The signal handlers and the timer every daemon's loop waits on.
 tokio = { version = "1", features = ["rt", "macros", "time", "signal", "sync"] }
 
