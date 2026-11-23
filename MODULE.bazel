@@ -1,7 +1,7 @@
 module(name = "sonic-platform-daemons", version = "1.0.0")
 
-bazel_dep(name = "rules_python", version = "1.9.0.sonic.1")
-bazel_dep(name = "sonic-build-infra", version = "0.0.40-6c9cd9477816ad129bf8d4501c9259504f3f85ca", repo_name = "sonic_build_infra")
+bazel_dep(name = "rules_python", version = "1.9.0.sonic.2")
+bazel_dep(name = "sonic-build-infra", version = "0.0.44-35726399908a3beb947174e9359f902077928289", repo_name = "sonic_build_infra")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.13")

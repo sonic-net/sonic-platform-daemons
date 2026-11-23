@@ -31,7 +31,7 @@ bazel test //:chassisd_test //:ledd_test //:pcied_test //:psud_test \
 
 Run the native tests in the Trixie userland declared by `.github/workflows/bazel.yml`. Each original Azure project runs in its own process, preserving automatic pytest discovery, `pytest.ini`, fixtures, mocks and assertions. Writable copies of declared test fixtures keep the original fixture-adjacent writes away from the checkout. Reports and inventories go to Bazel test outputs. The installation test consumes the public raw TARs, compares all eleven setup contracts and RECORD entries, imports installed interfaces with the owner's source excluded, and exercises the generated gRPC request/reply API. The existing Azure workflow remains intact.
 
-The test application retains a compatible minimum request for `rules_distroless@0.9.4.sonic.20`. The published infrastructure requests `0.9.4.sonic.21`, which the formal owner and test module graphs select. Source builds and registered consumption are verified separately.
+The test application requests `rules_distroless@0.9.4.sonic.25` and uses published registry entries for the platform API and SWSS dependencies of the image test workspace.
 
 The test application also supplies the original Azure suite's registered `sonic-py-swsssdk` 2.0.1 source interface. The installation probe supplies `blkinfo==0.2.0` and the same `PyYAML==6.0.2` used by the selected platform-common runtime. These are test prerequisites, with fixed archive hashes in `tests/bazel/requirements_lock.txt`; they do not change daemon distribution requirements. Preserve existing test pins when refreshing this lock:
 

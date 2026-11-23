@@ -46,7 +46,11 @@ jobs:
           (
             cd tests/bazel
             test "$(bazel --version)" = "bazel 8.5.1"
+            # The collector hashes the public outputs from this workspace after the tests.
             bazel --output_base="$BAZEL_TEST_OUTPUT_BASE" test \
+              @sonic_platform_daemons//:daemons.wheels \
+              @sonic_platform_daemons//:daemons.runtime \
+              @sonic_platform_daemons//:daemons.runtime_metadata \
               //:chassisd_test //:ledd_test //:pcied_test //:psud_test \
               //:syseepromd_test //:thermalctld_test //:xcvrd_test //:ycabled_test \
               //:sensormond_test //:stormond_test //:bmcctld_test //:installed_runtime_test \
