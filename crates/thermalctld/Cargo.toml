@@ -38,7 +38,7 @@ syslog  = "6.0"
 # rather than carried by the shipped binary, as every daemon in the workspace
 # does.
 pmon-common = { path = "../pmon-common", features = ["testing"] }
-tempfile = ">=3, <3.15"
+tempfile = ">=3, <3.28"
 # "test-util" gives the tests `tokio::time::pause()`, which makes the polling
 # loop's wait arithmetic observable without any test sleeping.  It is a
 # dev-only feature: the shipped binary keeps the five features above.
