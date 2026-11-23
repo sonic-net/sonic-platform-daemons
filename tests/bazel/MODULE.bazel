@@ -86,7 +86,7 @@ rust = use_extension("@rules_rs//rs:rules_rust_reexported_extensions.bzl", "rust
 rust.toolchain(versions = [])
 
 # All test application owners use the selected producer's reviewed APT graph.
-bazel_dep(name = "rules_distroless", version = "0.9.4.sonic.25")
+bazel_dep(name = "rules_distroless", version = "0.9.4.sonic.26")
 apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
 apt.import_lock(
     lock = "@sonic_build_infra//apt:apt.lock.json",
