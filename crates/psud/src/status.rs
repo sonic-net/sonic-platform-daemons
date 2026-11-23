@@ -4,6 +4,8 @@
 //! looked yet, and a PSU reported absent on the cycle before anything read it
 //! would raise an absence alarm on every boot.
 
+use platform_api::{Number, Threshold};
+
 /// Whether one PSU or PDB is present, powered, in voltage range and cool
 /// enough, plus the system-wide power-overload latch it carries.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,42 +59,47 @@ impl PsuStatus {
     pub fn set_voltage(
         &mut self,
         name: &str,
-        voltage: Option<f64>,
-        high: Option<f64>,
-        low: Option<f64>,
+        voltage: Option<Number>,
+        high: Option<Threshold>,
+        low: Option<Threshold>,
     ) -> bool {
         let (Some(v), Some(hi), Some(lo)) = (voltage, high, low) else {
             if !self.voltage_good {
                 log::warn!(
                     "PSU {name} voltage or high_threshold or low_threshold become unavailable, \
                      voltage={}, high_threshold={}, low_threshold={}",
-                    pmon_common::fmt::opt_float(voltage),
-                    pmon_common::fmt::opt_float(high),
-                    pmon_common::fmt::opt_float(low),
+                    pmon_common::fmt::number(voltage),
+                    pmon_common::fmt::threshold(high),
+                    pmon_common::fmt::threshold(low),
                 );
                 self.voltage_good = true;
             }
             return false;
         };
-        let good = lo <= v && v <= hi;
+        let good = lo.as_f64() <= v.as_f64() && v.as_f64() <= hi.as_f64();
         std::mem::replace(&mut self.voltage_good, good) != good
     }
 
     /// Temperature against its limit, with the same treatment of a missing one.
-    pub fn set_temperature(&mut self, name: &str, temperature: Option<f64>, high: Option<f64>) -> bool {
+    pub fn set_temperature(
+        &mut self,
+        name: &str,
+        temperature: Option<Number>,
+        high: Option<Threshold>,
+    ) -> bool {
         let (Some(t), Some(hi)) = (temperature, high) else {
             if !self.temperature_good {
                 log::warn!(
                     "PSU {name} temperature or high_threshold become unavailable, \
                      temperature={}, high_threshold={}",
-                    pmon_common::fmt::opt_float(temperature),
-                    pmon_common::fmt::opt_float(high),
+                    pmon_common::fmt::number(temperature),
+                    pmon_common::fmt::threshold(high),
                 );
                 self.temperature_good = true;
             }
             return false;
         };
-        let good = t < hi;
+        let good = t.as_f64() < hi.as_f64();
         std::mem::replace(&mut self.temperature_good, good) != good
     }
 
@@ -127,13 +134,33 @@ mod tests {
     #[test]
     fn a_voltage_inside_the_band_is_good_and_either_edge_is_not() {
         let mut s = PsuStatus::default();
-        assert!(!s.set_voltage("PSU 1", Some(12.0), Some(13.0), Some(11.0)));
+        assert!(!s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(12.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0))
+        ));
         assert!(s.is_ok());
-        assert!(s.set_voltage("PSU 1", Some(14.0), Some(13.0), Some(11.0)));
+        assert!(s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(14.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0))
+        ));
         assert!(!s.voltage_good);
-        assert!(s.set_voltage("PSU 1", Some(12.0), Some(13.0), Some(11.0)));
+        assert!(s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(12.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0))
+        ));
         assert!(s.voltage_good);
-        assert!(s.set_voltage("PSU 1", Some(10.0), Some(13.0), Some(11.0)));
+        assert!(s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(10.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0))
+        ));
         assert!(!s.voltage_good);
     }
 
@@ -142,9 +169,19 @@ mod tests {
     #[test]
     fn the_band_includes_its_own_edges() {
         let mut s = PsuStatus::default();
-        assert!(!s.set_voltage("PSU 1", Some(13.0), Some(13.0), Some(11.0)));
+        assert!(!s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(13.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0))
+        ));
         assert!(s.voltage_good);
-        assert!(!s.set_voltage("PSU 1", Some(11.0), Some(13.0), Some(11.0)));
+        assert!(!s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(11.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0))
+        ));
         assert!(s.voltage_good);
     }
 
@@ -154,7 +191,11 @@ mod tests {
     #[test]
     fn a_temperature_at_its_limit_is_already_too_hot() {
         let mut s = PsuStatus::default();
-        assert!(s.set_temperature("PSU 1", Some(60.0), Some(60.0)));
+        assert!(s.set_temperature(
+            "PSU 1",
+            Some(Number::Float(60.0)),
+            Some(Threshold::Float(60.0))
+        ));
         assert!(!s.temperature_good);
     }
 
@@ -164,15 +205,54 @@ mod tests {
     #[test]
     fn a_vanished_reading_clears_the_flag_without_reporting_a_recovery() {
         let mut s = PsuStatus::default();
-        s.set_voltage("PSU 1", Some(14.0), Some(13.0), Some(11.0));
+        s.set_voltage(
+            "PSU 1",
+            Some(Number::Float(14.0)),
+            Some(Threshold::Float(13.0)),
+            Some(Threshold::Float(11.0)),
+        );
         assert!(!s.voltage_good);
-        assert!(!s.set_voltage("PSU 1", None, Some(13.0), Some(11.0)), "no recovery is claimed");
-        assert!(s.voltage_good, "but nothing is being reported as wrong either");
+        assert!(
+            !s.set_voltage(
+                "PSU 1",
+                None,
+                Some(Threshold::Float(13.0)),
+                Some(Threshold::Float(11.0))
+            ),
+            "no recovery is claimed"
+        );
+        assert!(
+            s.voltage_good,
+            "but nothing is being reported as wrong either"
+        );
 
         let mut s = PsuStatus::default();
-        s.set_temperature("PSU 1", Some(80.0), Some(60.0));
-        assert!(!s.set_temperature("PSU 1", Some(80.0), None));
+        s.set_temperature(
+            "PSU 1",
+            Some(Number::Float(80.0)),
+            Some(Threshold::Float(60.0)),
+        );
+        assert!(!s.set_temperature("PSU 1", Some(Number::Float(80.0)), None));
         assert!(s.temperature_good);
+    }
+
+    #[test]
+    fn unavailable_readings_preserve_integer_limits_in_the_warning() {
+        let log = pmon_common::logging::capture();
+        let mut s = PsuStatus {
+            voltage_good: false,
+            temperature_good: false,
+            ..Default::default()
+        };
+        assert!(!s.set_voltage(
+            "PSU 1",
+            None,
+            Some(Threshold::Int(13)),
+            Some(Threshold::Float(11.0))
+        ));
+        assert!(!s.set_temperature("PSU 1", Some(Number::Int(80)), None));
+        assert!(log.contains("voltage=N/A, high_threshold=13, low_threshold=11.0"));
+        assert!(log.contains("temperature=80, high_threshold=N/A"));
     }
 
     #[test]

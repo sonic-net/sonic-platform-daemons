@@ -60,7 +60,7 @@ fn rust_half(
     };
     let mut updater = Updater::new();
     let mut budget = Budget::default();
-    let mut read = Latch::new();
+    let mut read = ReadState::default();
     let mut counts = Counts::default();
     if let Ok(psus) = platform.get_psus() {
         counts.refresh(&psus, &chassis_tbl);

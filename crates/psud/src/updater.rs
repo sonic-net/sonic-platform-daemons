@@ -43,6 +43,8 @@ pub struct Updater {
     first_run: bool,
     /// What has been published, so teardown can take it away again.
     published: BTreeSet<String>,
+    /// A first/presence-change fan read that must be retried with details.
+    pending_fan_details: BTreeSet<DeviceKey>,
 }
 
 /// Hand-written because a derived `Default` would start with `first_run:
@@ -54,6 +56,7 @@ impl Default for Updater {
             status: BTreeMap::new(),
             first_run: true,
             published: BTreeSet::new(),
+            pending_fan_details: BTreeSet::new(),
         }
     }
 }
@@ -61,11 +64,12 @@ impl Default for Updater {
 impl Updater {
     pub fn psu_needs_fan_details(&self, row: &PsuInfo) -> bool {
         row.presence
-            && self
-                .status
-                .get(&row.name)
-                .map(|s| s.presence != row.presence)
-                .unwrap_or(true)
+            && (self.pending_fan_details.contains(&row.key)
+                || self
+                    .status
+                    .get(&row.name)
+                    .map(|s| s.presence != row.presence)
+                    .unwrap_or(true))
     }
     pub fn needs_fan_details(&self, psus: &[PsuInfo]) -> bool {
         psus.iter().any(|row| self.psu_needs_fan_details(row))
@@ -83,6 +87,16 @@ impl Updater {
         psus: &[PsuInfo],
         fans: &[FanInfo],
         tables: &Tables<'_>,
+    ) -> Vec<LedWrite> {
+        self.refresh_with_unavailable_fans(psus, fans, tables, &BTreeSet::new())
+    }
+
+    pub fn refresh_with_unavailable_fans(
+        &mut self,
+        psus: &[PsuInfo],
+        fans: &[FanInfo],
+        tables: &Tables<'_>,
+        unavailable: &BTreeSet<DeviceKey>,
     ) -> Vec<LedWrite> {
         // Rebuilt every pass rather than kept: the keys can be removed by
         // something else -- thermalctld's own teardown does it -- and Python
@@ -114,7 +128,14 @@ impl Updater {
         // `psud:try_get`'s default, which swallows any exception, not only
         // NotImplementedError; nothing is logged, as nothing is in Python.
         for row in psus {
-            if let Some(led) = self.refresh_one(row, psus, fans, tables, &mut threshold_logged) {
+            if let Some(led) = self.refresh_one(
+                row,
+                psus,
+                fans,
+                tables,
+                !unavailable.contains(&row.key),
+                &mut threshold_logged,
+            ) {
                 leds.push(led);
             }
             self.published.insert(row.name.clone());
@@ -129,6 +150,7 @@ impl Updater {
         all: &[PsuInfo],
         fans: &[FanInfo],
         tables: &Tables<'_>,
+        fans_available: bool,
         threshold_logged: &mut bool,
     ) -> Option<LedWrite> {
         // The key PSU_INFO is written under.  For a device that will not name
@@ -185,8 +207,13 @@ impl Updater {
         //
         // Outside this call psud reads no fan of the PSU, so a failed fan
         // costs nothing on any other pass.
-        if presence_changed || first_run {
-            publish_psu_fans(name, present, fans, tables.fan);
+        if presence_changed || first_run || self.pending_fan_details.contains(&row.key) {
+            if fans_available {
+                publish_psu_fans(name, present, fans, tables.fan);
+                self.pending_fan_details.remove(&row.key);
+            } else {
+                self.pending_fan_details.insert(row.key.clone());
+            }
         }
 
         let power_good_changed = status.set_power_good(power_good);
@@ -221,13 +248,14 @@ impl Updater {
                 row.power_warning_suppress_threshold,
                 row.power_critical_threshold,
             ) {
-                (Some(_), Some(suppress), Some(critical)) => {
-                    // Every supplier's draw, not this one's: the thresholds are
-                    // the system's.  Python sums `get_power()` over the others
-                    // and adds this one
-                    // (`psud:_sum_system_power_from_other_psus_and_pdbs`).
-                    let system_power: f64 =
-                        all.iter().filter_map(|p| p.power).map(Number::as_f64).sum();
+                (Some(own), Some(suppress), Some(critical)) => {
+                    // Python starts with this supplier, then adds the others
+                    // in order. The floating-point order affects edge alarms.
+                    let system_power = all
+                        .iter()
+                        .filter(|other| !std::ptr::eq(*other, row))
+                        .filter_map(|other| other.power)
+                        .fold(own.as_f64(), |sum, power| sum + power.as_f64());
                     power_exceeded = if status.power_exceeded_threshold {
                         // Falling edge uses the *suppress* threshold, which sits
                         // below the critical one; one threshold for both would
@@ -294,14 +322,7 @@ impl Updater {
             }
         }
 
-        if present
-            && status.set_voltage(
-                name,
-                voltage.map(Number::as_f64),
-                voltage_high.map(|t| t.as_f64()),
-                voltage_low.map(|t| t.as_f64()),
-            )
-        {
+        if present && status.set_voltage(name, voltage, voltage_high, voltage_low) {
             set_led = true;
             if status.voltage_good {
                 pmon_common::notice!("Voltage warning cleared: {name} voltage is back to normal.");
@@ -316,13 +337,7 @@ impl Updater {
             }
         }
 
-        if present
-            && status.set_temperature(
-                name,
-                temperature.map(Number::as_f64),
-                temperature_high.map(|t| t.as_f64()),
-            )
-        {
+        if present && status.set_temperature(name, temperature, temperature_high) {
             set_led = true;
             if status.temperature_good {
                 pmon_common::notice!(
@@ -424,6 +439,7 @@ impl Updater {
             let _ = tables.entity.del(&name);
         }
         self.status.clear();
+        self.pending_fan_details.clear();
     }
 }
 
@@ -1215,5 +1231,25 @@ pub(crate) mod tests {
         u.clear(&db.tables());
         assert!(db.psu.is_empty());
         assert!(db.entity.is_empty());
+    }
+
+    #[test]
+    fn power_alarm_uses_the_python_sum_order_at_the_exact_threshold() {
+        let db = Db::new();
+        let mut rows: Vec<_> = [("PSU 1", 100.1), ("PSU 2", 200.2), ("PSU 3", 150.7)]
+            .into_iter()
+            .map(|(name, watts)| {
+                let mut row = psu(name);
+                row.power = Some(Number::Float(watts));
+                row
+            })
+            .collect();
+        rows[2].power_critical_threshold = Some(Number::Float(451.0));
+        rows[2].power_warning_suppress_threshold = Some(Number::Float(400.0));
+        Updater::new().refresh(&rows, &[], &db.tables());
+        assert_eq!(
+            db.psu.field("PSU 3", "power_overload").as_deref(),
+            Some("True")
+        );
     }
 }
