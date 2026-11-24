@@ -175,7 +175,22 @@ for name in sys.argv[4:]:
             assert pathlib.Path(sys.modules[function.__module__].__file__).resolve().is_relative_to(site)
 for script in scripts.iterdir():
     if script.name in ['ledd','pcied','psud','syseepromd','thermalctld','sensormond','chassisd','chassis_db_init','stormond','bmcctld']:
-        runpy.run_path(str(script),run_name='installed_'+script.name)
+        daemon = runpy.run_path(str(script), run_name='installed_'+script.name)
+        if script.name == 'chassisd':
+            from types import SimpleNamespace
+            from sonic_platform_base.module_base import ModuleBase
+            assert pathlib.Path(sys.modules[ModuleBase.__module__].__file__).resolve().is_relative_to(site)
+
+            class ProtectedModule(ModuleBase):
+                def is_shutdown_allowed(self):
+                    return False
+
+            for module, expected in [(ModuleBase(), 'True'), (ProtectedModule(), 'False')]:
+                chassis = SimpleNamespace(get_module=lambda index: module)
+                updater = SimpleNamespace(chassis=chassis, info_dict_keys=())
+                for name in ('ModuleUpdater', 'SmartSwitchModuleUpdater'):
+                    info = daemon[name]._get_module_info(updater, 0)
+                    assert info['shutdown_allowed'] == expected, (name, info)
 from proto_out import linkmgr_grpc_driver_pb2 as pb,linkmgr_grpc_driver_pb2_grpc as rpc
 import grpc
 assert pathlib.Path(pb.__file__).resolve().is_relative_to(site)
