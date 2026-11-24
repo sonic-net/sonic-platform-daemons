@@ -6,7 +6,7 @@ bazel_dep(name = "sonic-platform-daemons", version = "1.0.0", repo_name = "sonic
 local_path_override(module_name = "sonic-platform-daemons", path = "../..")
 
 # The isolated test application consumes the published platform API owner.
-bazel_dep(name = "sonic-platform-common", version = "1.0.1-2b84e6a2b24f8e1c937b68140e806a13db302384", repo_name = "sonic_platform_common")
+bazel_dep(name = "sonic-platform-common", version = "1.0.1-74d0685cf303b1a08099b378d2428f4a8e6d85e0", repo_name = "sonic_platform_common")
 
 bazel_dep(name = "sonic-buildimage", version = "0.0.0", repo_name = "sonic_buildimage")
 git_override(
