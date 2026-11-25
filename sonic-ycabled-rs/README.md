@@ -16,7 +16,10 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   (issues 26 to 29 of the HLD) cannot happen. No request is dropped: a port
   that cannot keep up queues them, and a backlog of 256 is logged. Startup
   waits at most 30 s for the ports to initialize before it subscribes, so a
-  driver call that never returns holds up only its own port.
+  driver call that never returns holds up only its own port. A port that
+  becomes a mux port after startup gets its actor at its first cable event
+  or request, whichever comes first, and the request waits behind the
+  port's initialization.
 - **Telemetry** (every 60 s per port) runs in a task beside the actor, so a
   toggle never waits for a whole pass. Calls to an active-standby cable,
   presence checks and loading and unloading its driver included, take the
@@ -109,7 +112,7 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 ## Tests
 
-- **Unit tests** (142): the actors and the CLI against an in-memory
+- **Unit tests** (143): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server`, the gRPC client against an
   in-process SoC, the bridge in the embedded interpreter with fake drivers.

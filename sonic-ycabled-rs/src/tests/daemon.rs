@@ -8,14 +8,19 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::actor::Msg;
+use super::redis::TestRedis;
+use crate::actor::{Msg, Shared};
+use crate::bridge::YCablePlatform;
 use crate::config::CableType;
 use crate::daemon::{
-    first_info_port, message_for, mux_tables, wait_for_inits, PendingInit, INIT_WAIT,
+    first_info_port, message_for, mux_tables, wait_for_inits, Daemon, Namespace, PendingInit,
+    INIT_WAIT,
 };
-use crate::db::DbId;
+use crate::db::{Db, DbId, RedisDb};
+use crate::grpc::SocConnector;
+use crate::ports::PortMap;
 use crate::schema::*;
-use crate::testing::fm;
+use crate::testing::{fm, MockCable, MockConnector, MockPlatform};
 
 fn pending(
     port: &str,
@@ -155,4 +160,83 @@ fn rows_become_actor_messages() {
     for cli in CLI_COMMAND_TABLES {
         assert!(matches!(message_for(cli, "Ethernet0", f.clone()), Msg::Cli(t, _) if t == cli));
     }
+}
+
+/// The answer to the last probe of `port`, waited for up to 5 s.
+async fn probe_response(db: &RedisDb, port: &str) -> Option<String> {
+    for _ in 0..250 {
+        if let Some(r) = db
+            .hget(DbId::Appl, MUX_CABLE_RESPONSE_TABLE, port, "response")
+            .await
+        {
+            return Some(r);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    None
+}
+
+/// Two ports configured after startup arrive while the mux tables are being
+/// subscribed to: Ethernet0's insertion starts the subscription, which
+/// replays a probe of Ethernet4 written before it took effect, and
+/// Ethernet4's insertion comes after that. The replayed probe initializes
+/// Ethernet4 and is answered, rather than dropped as a request for a port
+/// without an actor, and the insertion does not initialize the port again.
+#[tokio::test]
+async fn request_replayed_ahead_of_its_port_insertion_is_answered() {
+    let r = TestRedis::start().await;
+    let db = r.db().await;
+    let platform = MockPlatform::new();
+    platform.add(1, MockCable::default());
+    platform.add(2, MockCable::default());
+    let shared = Shared::new(
+        db.clone() as Arc<dyn Db>,
+        platform.clone() as Arc<dyn YCablePlatform>,
+        MockConnector::new(None) as Arc<dyn SocConnector>,
+        false,
+        1,
+        Arc::new(AtomicBool::new(false)),
+    );
+    let ns = Namespace::new(String::new(), 0, Arc::clone(&db), shared);
+    let mut ports = PortMap::default();
+    ports.insert("Ethernet0", 1, 0);
+    ports.insert("Ethernet4", 2, 0);
+    let daemon = Arc::new(Daemon {
+        namespaces: vec![Arc::clone(&ns)],
+        ports,
+    });
+    // No mux ports at startup: only TRANSCEIVER_INFO is subscribed to.
+    daemon.subscribe(&ns).await.unwrap();
+    for port in ["Ethernet0", "Ethernet4"] {
+        db.set(DbId::Config, MUX_CABLE, port, &[("state", "auto".into())])
+            .await;
+    }
+    let probe = [("command", "probe".to_string())];
+    db.set(DbId::Appl, MUX_CABLE_COMMAND_TABLE, "Ethernet4", &probe)
+        .await;
+    let transceiver = [("type", "QSFP28 or later".to_string())];
+    db.set(DbId::State, TRANSCEIVER_INFO, "Ethernet0", &transceiver)
+        .await;
+    assert_eq!(
+        probe_response(&db, "Ethernet4").await.as_deref(),
+        Some("active")
+    );
+
+    db.set(DbId::State, TRANSCEIVER_INFO, "Ethernet4", &transceiver)
+        .await;
+    // A probe after the insertion is answered after it.
+    db.del(DbId::Appl, MUX_CABLE_RESPONSE_TABLE, "Ethernet4")
+        .await;
+    db.set(DbId::Appl, MUX_CABLE_COMMAND_TABLE, "Ethernet4", &probe)
+        .await;
+    assert_eq!(
+        probe_response(&db, "Ethernet4").await.as_deref(),
+        Some("active")
+    );
+    assert_eq!(
+        platform.loads().iter().filter(|&&p| p == 2).count(),
+        1,
+        "{:?}",
+        platform.loads()
+    );
 }

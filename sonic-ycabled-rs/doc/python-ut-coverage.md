@@ -16,7 +16,7 @@ Run the unit tests with `./build.sh cargo test --release --lib` (see [README.md]
 | Area | Python tests | Rust tests |
 | --- | ---: | ---: |
 | [Driver selection and presence](#driver-selection-and-presence) | 46 | 15 |
-| [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 16 |
+| [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 17 |
 | [Active-standby toggle](#active-standby-toggle) | 16 | 10 |
 | [Active-standby probe](#active-standby-probe) | 11 | 4 |
 | [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 23 |
@@ -49,6 +49,7 @@ Rust:
 - `tests::daemon::first_initialized_port_writes_mux_cable_info`, `startup_waits_for_initialization`, `presence_set_meanwhile_posts_no_info`: Python's `y_cable_presence` at startup.
 - `tests::daemon::startup_does_not_wait_for_a_hung_port`: a port whose initialization never ends does not hold up the others.
 - `tests::daemon::rows_become_actor_messages`, `config::tests::read_side_mapping`, `tests::redis::subscription_replays_rows_then_follows_changes`.
+- `tests::daemon::request_replayed_ahead_of_its_port_insertion_is_answered`: ports configured after startup, whose requests the mux tables' subscription replays ahead of their `TRANSCEIVER_INFO` events. Python has no counterpart: it drops the toggles and probes of ports that were not mux ports at startup (HLD 3.7.5, issues 5 and 16).
 
 Not ported:
 

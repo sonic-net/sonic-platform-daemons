@@ -88,6 +88,19 @@ fn exit_on_lost_subscription(ns: String) -> impl FnOnce() + Send + 'static {
 }
 
 impl Namespace {
+    /// A namespace without ports' actors or subscriptions yet.
+    pub fn new(name: String, asic: usize, db: Arc<RedisDb>, shared: Arc<Shared>) -> Arc<Namespace> {
+        Arc::new(Namespace {
+            name,
+            asic,
+            db,
+            shared,
+            actors: Mutex::new(HashMap::new()),
+            subscriptions: OnceLock::new(),
+            mux_subscribed: AtomicBool::new(false),
+        })
+    }
+
     fn actor(&self, port: &str) -> Option<mpsc::UnboundedSender<Msg>> {
         self.actors.lock().unwrap().get(port).cloned()
     }
@@ -116,7 +129,7 @@ impl Daemon {
     /// Subscribes namespace `ns` to TRANSCEIVER_INFO, and to the mux tables
     /// if it has mux ports, on one connection. One task routes the events,
     /// in the order redis delivered them.
-    async fn subscribe(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
+    pub(crate) async fn subscribe(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
         let mut tables = vec![(DbId::State, TRANSCEIVER_INFO.to_string())];
         if ns.has_actors() {
             ns.mux_subscribed.store(true, Ordering::SeqCst);
@@ -154,7 +167,12 @@ impl Daemon {
         }
     }
 
-    async fn route_event(self: &Arc<Self>, ns: &Arc<Namespace>, table: &str, event: Event) {
+    pub(crate) async fn route_event(
+        self: &Arc<Self>,
+        ns: &Arc<Namespace>,
+        table: &str,
+        event: Event,
+    ) {
         let port = event.key().to_string();
         match (table, event) {
             (TRANSCEIVER_INFO, event) => self.transceiver_event(ns, &port, event).await,
@@ -163,7 +181,7 @@ impl Daemon {
             (_, Event::Del { .. }) => {}
             (t, Event::Set { fields, .. }) => {
                 let msg = message_for(t, &port, fields);
-                match ns.actor(&port) {
+                match self.mux_actor(ns, &port).await {
                     Some(tx) => send(&tx, &port, msg),
                     None => {
                         if let Msg::Cli(cli, fields) = msg {
@@ -190,20 +208,37 @@ impl Daemon {
             send(&tx, port, Msg::Transceiver(event));
             return;
         }
-        if !matches!(event, Event::Set { .. }) {
-            return;
+        // A port that was not a mux port at startup may be one now: its
+        // initialization reads the cable.
+        if matches!(event, Event::Set { .. }) {
+            self.mux_actor(ns, port).await;
         }
-        // A port that was not a mux port at startup may be one now.
-        let Some(info) = self.ports.get(port) else {
-            return;
-        };
+    }
+
+    /// The actor of `port`, created if the port has become a mux port since
+    /// startup: in the port map on this namespace's ASIC, and in MUX_CABLE
+    /// with a cable type, which is how startup picks the mux ports. A new
+    /// actor initializes the port first, and the request that created it
+    /// waits behind that in the mailbox. So it makes no difference whether a
+    /// port's request comes before its TRANSCEIVER_INFO event: when the mux
+    /// tables are subscribed to at run time, their existing rows are
+    /// replayed ahead of TRANSCEIVER_INFO events that are still on their
+    /// way, and a port configured while its cable was already in has no such
+    /// event at all. None: not a mux port.
+    async fn mux_actor(
+        self: &Arc<Self>,
+        ns: &Arc<Namespace>,
+        port: &str,
+    ) -> Option<mpsc::UnboundedSender<Msg>> {
+        if let Some(tx) = ns.actor(port) {
+            return Some(tx);
+        }
+        let info = self.ports.get(port)?;
         if info.asic != ns.asic {
-            return;
+            return None;
         }
         let row = ns.db.get(DbId::Config, MUX_CABLE, port).await;
-        let Some(cable) = config::cable_type(port, row.as_ref()) else {
-            return;
-        };
+        let cable = config::cable_type(port, row.as_ref())?;
         log_notice!(
             "Port {} became a {} mux port, initializing it",
             port,
@@ -212,6 +247,7 @@ impl Daemon {
         let tx = ns.add_actor(port, Some(info.physical), cable);
         send(&tx, port, Msg::Init(None));
         self.subscribe_mux(ns);
+        Some(tx)
     }
 }
 
@@ -372,15 +408,7 @@ pub async fn run(opts: Options) -> Result<()> {
             read_sides[i],
             Arc::clone(&ycable_presence),
         );
-        namespaces.push(Arc::new(Namespace {
-            name,
-            asic,
-            db: d,
-            shared,
-            actors: Mutex::new(HashMap::new()),
-            subscriptions: OnceLock::new(),
-            mux_subscribed: AtomicBool::new(false),
-        }));
+        namespaces.push(Namespace::new(name, asic, d, shared));
     }
     let daemon = Arc::new(Daemon {
         namespaces,
