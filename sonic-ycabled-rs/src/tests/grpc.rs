@@ -2,13 +2,17 @@
 //! deadlines, connectivity states and the failure writes, GracefulRestart.
 
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 use std::pin::Pin;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::oneshot;
-use tokio_stream::wrappers::TcpListenerStream;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::{TcpListenerStream, UnboundedReceiverStream};
+use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 
 use crate::actor::Shared;
@@ -154,7 +158,19 @@ async fn serve(ip: &str, soc: TestSoc) -> oneshot::Sender<()> {
     )
     .parse()
     .unwrap();
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    // A SoC served again after a stop: the stopped one may still be
+    // closing its listener.
+    let mut tries = 0;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => break l,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && tries < 100 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(e) => panic!("{addr}: {e}"),
+        }
+    };
     let (tx, rx) = oneshot::channel::<()>();
     tokio::spawn(async move {
         let _ = tonic::transport::Server::builder()
@@ -181,6 +197,190 @@ async fn eventually<F: Fn() -> bool>(f: F, secs: u64) -> bool {
 
 fn ip(s: &str) -> IpAddr {
     s.parse().unwrap()
+}
+
+/// The connectivity states the watcher of `port` logged, in order.
+fn states(port: &str) -> Vec<String> {
+    let prefix = format!("gRPC port {port} state changed to ");
+    crate::logger::capture::find(&prefix)
+        .into_iter()
+        .filter_map(|(_, m)| {
+            m.strip_prefix(&prefix)
+                .and_then(|s| s.split(' ').next())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// How many times `response=failure` was written for `port`.
+fn failures(db: &MemDb, port: &str) -> usize {
+    db.writes(FORWARDING_STATE_RESPONSE)
+        .iter()
+        .filter(|(k, _)| k == port)
+        .count()
+}
+
+const SOC_NAME: &str = "soc.ut.test";
+
+fn openssl(dir: &Path, args: &[&str]) {
+    let out = Command::new("openssl")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("openssl");
+    assert!(
+        out.status.success(),
+        "openssl {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A CA and a certificate for SOC_NAME it signed, made with openssl for the
+/// test, as the black-box suite makes its own, so that no key is in the tree.
+struct TestPki {
+    dir: tempfile::TempDir,
+}
+
+impl TestPki {
+    fn new() -> TestPki {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let write = |name: &str, text: &str| std::fs::write(d.join(name), text).unwrap();
+        write(
+            "ca.cnf",
+            "[req]\ndistinguished_name = dn\nprompt = no\nx509_extensions = ext\n[dn]\nCN = ycabled-rs-ut-ca\n[ext]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n",
+        );
+        write(
+            "soc.cnf",
+            &format!("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = {SOC_NAME}\n"),
+        );
+        write(
+            "soc.ext",
+            &format!("basicConstraints = critical,CA:FALSE\nsubjectAltName = DNS:{SOC_NAME}\nextendedKeyUsage = serverAuth\nauthorityKeyIdentifier = keyid\n"),
+        );
+        let ec = [
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+            "-nodes",
+        ];
+        openssl(
+            d,
+            &[
+                &["req", "-x509", "-config", "ca.cnf", "-keyout", "ca.key"][..],
+                &ec,
+                &["-out", "ca.crt", "-days", "2"],
+            ]
+            .concat(),
+        );
+        openssl(
+            d,
+            &[
+                &["req", "-new", "-config", "soc.cnf", "-keyout", "soc.key"][..],
+                &ec,
+                &["-out", "soc.csr"],
+            ]
+            .concat(),
+        );
+        openssl(
+            d,
+            &[
+                "x509",
+                "-req",
+                "-in",
+                "soc.csr",
+                "-CA",
+                "ca.crt",
+                "-CAkey",
+                "ca.key",
+                "-set_serial",
+                "2",
+                "-days",
+                "2",
+                "-out",
+                "soc.crt",
+                "-extfile",
+                "soc.ext",
+            ],
+        );
+        TestPki { dir }
+    }
+
+    fn pem(&self, name: &str) -> Vec<u8> {
+        std::fs::read(self.dir.path().join(name)).unwrap()
+    }
+
+    /// The SoC's side; with `client_auth`, it requires a client certificate
+    /// from this CA.
+    fn server(&self, client_auth: bool) -> ServerTlsConfig {
+        let tls = ServerTlsConfig::new()
+            .identity(Identity::from_pem(self.pem("soc.crt"), self.pem("soc.key")));
+        if client_auth {
+            tls.client_ca_root(Certificate::from_pem(self.pem("ca.crt")))
+        } else {
+            tls
+        }
+    }
+
+    /// GRPCCLIENT for TLS with this CA, auth_level server.
+    fn configure(&self, db: &MemDb) {
+        let ca = self.dir.path().join("ca.crt");
+        db.put(
+            DbId::Config,
+            "GRPCCLIENT",
+            "config",
+            &[("type", "secure"), ("auth_level", "server")],
+        );
+        db.put(
+            DbId::Config,
+            "GRPCCLIENT",
+            "certs",
+            &[
+                ("ca_crt", ca.to_str().unwrap()),
+                ("grpc_ssl_credential", SOC_NAME),
+            ],
+        );
+    }
+}
+
+/// A SoC on `ip`:50075 whose listener keeps the connections it accepts
+/// while `stall` is set, sending nothing, and hands the others to a TLS SoC
+/// with `tls`. Without `tls`, it keeps every connection.
+async fn serve_stalling(
+    ip: &str,
+    tls: Option<ServerTlsConfig>,
+    stall: Arc<AtomicBool>,
+) -> oneshot::Sender<()> {
+    let listener = TcpListener::bind(format!("{ip}:{GRPC_PORT}"))
+        .await
+        .unwrap();
+    let (conns, incoming) = mpsc::unbounded_channel::<std::io::Result<TcpStream>>();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let serving = tls.is_some();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            if stall.load(Ordering::SeqCst) || !serving {
+                held.push(s);
+            } else if conns.send(Ok(s)).is_err() {
+                break;
+            }
+        }
+    });
+    if let Some(tls) = tls {
+        tokio::spawn(async move {
+            let _ = Server::builder()
+                .tls_config(tls)
+                .unwrap()
+                .add_service(DualToRActiveServer::new(TestSoc::default()))
+                .serve_with_incoming_shutdown(UnboundedReceiverStream::new(incoming), async {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+    }
+    stop
 }
 
 /// test_setup_grpc_channel_for_port, test_try_grpc, test_create_channel (insecure)
@@ -253,12 +453,13 @@ async fn rpcs_end_at_the_deadline() {
 }
 
 /// test_wait_for_state_change (TRANSIENT_FAILURE): a refused connection
-/// fails the RPC and writes response=failure.
+/// fails the RPC and writes response=failure. Trying again keeps
+/// TRANSIENT_FAILURE, as grpc-core does, and writes no more failures.
 #[tokio::test]
 async fn refused_connection_writes_failure() {
     let db = MemDb::new();
     let client = TonicConnector
-        .connect("Ethernet4", ip("127.0.0.23"), db.clone() as Arc<dyn Db>)
+        .connect("Ethernet72", ip("127.0.0.23"), db.clone() as Arc<dyn Db>)
         .await
         .unwrap();
     let r = client.query_admin_forwarding().await;
@@ -268,9 +469,119 @@ async fn refused_connection_writes_failure() {
     );
     assert!(eventually(|| client.connectivity() == "TRANSIENT_FAILURE", 2).await);
     let row = db
-        .row(DbId::Appl, FORWARDING_STATE_RESPONSE, "Ethernet4")
+        .row(DbId::Appl, FORWARDING_STATE_RESPONSE, "Ethernet72")
         .unwrap();
     assert_eq!(row["response"], "failure");
+    assert!(client.query_admin_forwarding().await.is_err());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(states("Ethernet72"), ["CONNECTING", "TRANSIENT_FAILURE"]);
+    assert_eq!(failures(&db, "Ethernet72"), 1);
+}
+
+/// A SoC that accepts the TCP connection but does not go on with the TLS
+/// handshake: the attempt fails within CONNECT_TIMEOUT, TRANSIENT_FAILURE
+/// and response=failure, and the channel is never READY meanwhile. The next
+/// connection, whose handshake the SoC completes, is READY and serves the
+/// RPCs.
+#[tokio::test]
+async fn stalled_tls_handshake_fails_then_recovers() {
+    let pki = TestPki::new();
+    let stall = Arc::new(AtomicBool::new(true));
+    let _stop = serve_stalling("127.0.0.29", Some(pki.server(false)), Arc::clone(&stall)).await;
+    let db = MemDb::new();
+    pki.configure(&db);
+    let client = TonicConnector
+        .connect("Ethernet76", ip("127.0.0.29"), db.clone() as Arc<dyn Db>)
+        .await
+        .unwrap();
+    let t0 = Instant::now();
+    assert_eq!(
+        client.query_admin_forwarding().await,
+        Err(RpcError::Timeout)
+    );
+    assert!(
+        eventually(|| client.connectivity() == "TRANSIENT_FAILURE", 3).await,
+        "{}",
+        client.connectivity()
+    );
+    assert!(
+        t0.elapsed() < grpc::CONNECT_TIMEOUT + Duration::from_secs(1),
+        "{:?}",
+        t0.elapsed()
+    );
+    assert_eq!(failures(&db, "Ethernet76"), 1);
+    assert_eq!(states("Ethernet76"), ["CONNECTING", "TRANSIENT_FAILURE"]);
+
+    stall.store(false, Ordering::SeqCst);
+    let mut ok = false;
+    for _ in 0..30 {
+        if client.query_admin_forwarding().await.is_ok() {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ok);
+    assert!(eventually(|| client.connectivity() == "READY", 2).await);
+    assert_eq!(
+        states("Ethernet76"),
+        ["CONNECTING", "TRANSIENT_FAILURE", "READY"]
+    );
+}
+
+/// A TLS handshake the SoC fails, here because it requires a client
+/// certificate that auth_level server does not present, is a failed
+/// attempt, TRANSIENT_FAILURE as grpc-core reports it, not a lost
+/// connection (IDLE).
+#[tokio::test]
+async fn failed_tls_handshake_is_transient_failure() {
+    let pki = TestPki::new();
+    let _stop = serve_stalling(
+        "127.0.0.30",
+        Some(pki.server(true)),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
+    let db = MemDb::new();
+    pki.configure(&db);
+    let client = TonicConnector
+        .connect("Ethernet80", ip("127.0.0.30"), db.clone() as Arc<dyn Db>)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert!(client.query_admin_forwarding().await.is_err());
+    }
+    assert!(
+        eventually(|| client.connectivity() == "TRANSIENT_FAILURE", 3).await,
+        "{}",
+        client.connectivity()
+    );
+    assert_eq!(states("Ethernet80"), ["CONNECTING", "TRANSIENT_FAILURE"]);
+    assert_eq!(failures(&db, "Ethernet80"), 1);
+}
+
+/// A SoC that accepts TCP connections and sends nothing has not completed
+/// the HTTP/2 handshake: TRANSIENT_FAILURE within CONNECT_TIMEOUT, as
+/// grpc-core, which waits for the SETTINGS frame, reports it, never READY.
+#[tokio::test]
+async fn connection_without_http2_settings_fails() {
+    let _stop = serve_stalling("127.0.0.31", None, Arc::new(AtomicBool::new(true))).await;
+    let db = MemDb::new();
+    let client = TonicConnector
+        .connect("Ethernet84", ip("127.0.0.31"), db.clone() as Arc<dyn Db>)
+        .await
+        .unwrap();
+    assert_eq!(
+        client.query_admin_forwarding().await,
+        Err(RpcError::Timeout)
+    );
+    assert!(
+        eventually(|| client.connectivity() == "TRANSIENT_FAILURE", 3).await,
+        "{}",
+        client.connectivity()
+    );
+    assert_eq!(states("Ethernet84"), ["CONNECTING", "TRANSIENT_FAILURE"]);
+    assert_eq!(failures(&db, "Ethernet84"), 1);
 }
 
 /// test_wait_for_state_change (IDLE): losing the connection writes

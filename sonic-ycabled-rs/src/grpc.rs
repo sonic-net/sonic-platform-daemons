@@ -3,11 +3,15 @@
 //! One lazily connected tonic channel per port, with HTTP/2 keepalive every
 //! 4 s (8 s timeout, also while idle) and a 0.5 s deadline on every RPC, as
 //! Python ycabled sets up grpcio. tonic does not report gRPC connectivity
-//! states, which linkmgrd depends on (`response=failure`, C2): a connector
-//! wrapper reports connection attempts, connections and closed connections,
-//! and [`watch_connectivity`] derives the states from them.
+//! states, which linkmgrd depends on (`response=failure`, C2): the connector
+//! makes the TCP connection and TLS itself and reports connection attempts,
+//! connections that are up, failed attempts and closed connections, and
+//! [`watch_connectivity`] derives the states from them. As in grpc-core, a
+//! connection is up only once TLS, when configured, is done and the SoC's
+//! first HTTP/2 frame has arrived, within [`CONNECT_TIMEOUT`].
 
 use std::future::Future;
+use std::io;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -19,9 +23,12 @@ use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity, Uri};
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::{self, pki_types::ServerName, ClientConfig, RootCertStore};
+use tokio_rustls::TlsConnector;
+use tonic::transport::{Channel, Endpoint, Uri};
 
-use crate::config::{self, ChannelConfig};
+use crate::config::{self, ChannelConfig, TlsSettings};
 use crate::db::{Db, DbId};
 use crate::proto::dual_to_r_active_client::DualToRActiveClient;
 use crate::proto::graceful_restart_client::GracefulRestartClient;
@@ -117,11 +124,29 @@ pub trait SocConnector: Send + Sync {
 
 // --- Connection monitoring ---------------------------------------------------
 
+/// How long a connection to a SoC may take to come up: TCP, TLS when
+/// configured, and the SoC's first HTTP/2 frame, its SETTINGS. An attempt
+/// that has not come up by then has failed, as grpc-core fails an attempt
+/// without the SETTINGS frame. RPCs end at their own deadline meanwhile.
+#[cfg(not(test))]
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// HTTP/2, by ALPN.
+const ALPN_H2: &[u8] = b"h2";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnEvent {
+    /// A connection attempt started.
     Connecting,
+    /// The connection is up: TLS, when configured, is done and the SoC's
+    /// first HTTP/2 frame has arrived.
     Connected,
+    /// The attempt failed before the connection came up, or did not come up
+    /// within [`CONNECT_TIMEOUT`].
     ConnectFailed,
+    /// A connection that was up is gone.
     Closed,
 }
 
@@ -135,10 +160,22 @@ pub fn state_for(event: ConnEvent) -> &'static str {
     }
 }
 
+/// The state `event` leads to from `current`, None if the state stays. As in
+/// grpc-core's pick_first, a channel in TRANSIENT_FAILURE stays there while
+/// it tries again, until a connection is up.
+pub fn next_state(current: &str, event: ConnEvent) -> Option<&'static str> {
+    let new = state_for(event);
+    if new == current || (current == "TRANSIENT_FAILURE" && event == ConnEvent::Connecting) {
+        return None;
+    }
+    Some(new)
+}
+
 /// Follows a port's connection events: records the state, logs each change
 /// and writes `response=failure` to FORWARDING_STATE_RESPONSE when the
 /// channel fails (TRANSIENT_FAILURE) or loses its connection (IDLE), as
-/// Python's wait_for_state_change does.
+/// Python's wait_for_state_change does. A channel that keeps failing stays
+/// in TRANSIENT_FAILURE, so its retries write no more failures.
 pub async fn watch_connectivity(
     port: String,
     mut events: mpsc::UnboundedReceiver<ConnEvent>,
@@ -146,14 +183,14 @@ pub async fn watch_connectivity(
     db: Arc<dyn Db>,
 ) {
     while let Some(ev) = events.recv().await {
-        let new = state_for(ev);
-        {
+        let new = {
             let mut s = state.lock().unwrap();
-            if *s == new {
+            let Some(new) = next_state(&s, ev) else {
                 continue;
-            }
+            };
             *s = new.to_string();
-        }
+            new
+        };
         log_notice!(
             "gRPC port {} state changed to {} tid {}",
             port,
@@ -172,22 +209,79 @@ pub async fn watch_connectivity(
     }
 }
 
+/// A connection to a SoC: TCP, or TLS over it.
+enum SocIo {
+    Plain(TcpStream),
+    Tls(Box<TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for SocIo {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            SocIo::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            SocIo::Tls(s) => Pin::new(s.as_mut()).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for SocIo {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            SocIo::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            SocIo::Tls(s) => Pin::new(s.as_mut()).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            SocIo::Plain(s) => Pin::new(s).poll_flush(cx),
+            SocIo::Tls(s) => Pin::new(s.as_mut()).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            SocIo::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            SocIo::Tls(s) => Pin::new(s.as_mut()).poll_shutdown(cx),
+        }
+    }
+}
+
+/// A connection, as tonic's HTTP/2 client uses it, that reports to the
+/// port's connectivity watcher: up when the SoC's first HTTP/2 frame
+/// arrives, failed if the connection ends or [`CONNECT_TIMEOUT`] passes
+/// before that, closed if it ends after.
 struct MonitoredIo {
-    inner: TcpStream,
+    inner: SocIo,
     events: Option<mpsc::UnboundedSender<ConnEvent>>,
+    /// Until the connection is up: when the attempt fails.
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
 }
 
 impl MonitoredIo {
-    fn closed(&mut self) {
+    fn ended(&mut self) {
+        let event = if self.deadline.take().is_some() {
+            ConnEvent::ConnectFailed
+        } else {
+            ConnEvent::Closed
+        };
         if let Some(tx) = self.events.take() {
-            let _ = tx.send(ConnEvent::Closed);
+            let _ = tx.send(event);
         }
     }
 }
 
 impl Drop for MonitoredIo {
     fn drop(&mut self) {
-        self.closed();
+        self.ended();
     }
 }
 
@@ -196,14 +290,32 @@ impl AsyncRead for MonitoredIo {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<io::Result<()>> {
         let before = buf.filled().len();
         let res = Pin::new(&mut self.inner).poll_read(cx, buf);
         match &res {
-            Poll::Ready(Ok(())) if buf.filled().len() == before && buf.remaining() > 0 => {
-                self.closed()
+            Poll::Ready(Ok(())) if buf.filled().len() > before => {
+                if self.deadline.take().is_some() {
+                    if let Some(tx) = &self.events {
+                        let _ = tx.send(ConnEvent::Connected);
+                    }
+                }
             }
-            Poll::Ready(Err(_)) => self.closed(),
+            Poll::Ready(Ok(())) if buf.remaining() > 0 => self.ended(),
+            Poll::Ready(Err(_)) => self.ended(),
+            Poll::Pending => {
+                let timed_out = self
+                    .deadline
+                    .as_mut()
+                    .is_some_and(|d| d.as_mut().poll(cx).is_ready());
+                if timed_out {
+                    self.ended();
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the SoC sent no HTTP/2 frame",
+                    )));
+                }
+            }
             _ => {}
         }
         res
@@ -215,27 +327,75 @@ impl AsyncWrite for MonitoredIo {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         let res = Pin::new(&mut self.inner).poll_write(cx, buf);
         if let Poll::Ready(Err(_)) = &res {
-            self.closed();
+            self.ended();
         }
         res
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
-/// TCP connector that reports to the port's connectivity watcher.
+/// The client side of TLS from the GRPCCLIENT settings.
+#[derive(Clone)]
+struct SocTls {
+    config: Arc<ClientConfig>,
+    name: ServerName<'static>,
+}
+
+/// TLS as tonic's ClientTlsConfig sets it up from the same settings: the CA
+/// as the only root, the client certificate for mutual authentication,
+/// HTTP/2 by ALPN, and the name the SoC's certificate is checked against.
+fn soc_tls(t: &TlsSettings) -> Result<SocTls, String> {
+    let mut roots = RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut t.ca_pem.as_slice()) {
+        let cert = cert.map_err(|e| format!("ca_crt: {e}"))?;
+        roots.add(cert).map_err(|e| format!("ca_crt: {e}"))?;
+    }
+    let builder =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| e.to_string())?
+            .with_root_certificates(roots);
+    let mut config = match &t.identity {
+        None => builder.with_no_client_auth(),
+        Some((cert, key)) => {
+            let chain = rustls_pemfile::certs(&mut cert.as_slice())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("client_crt: {e}"))?;
+            let key = rustls_pemfile::private_key(&mut key.as_slice())
+                .map_err(|e| format!("client_key: {e}"))?
+                .ok_or_else(|| "client_key: no private key".to_string())?;
+            builder
+                .with_client_auth_cert(chain, key)
+                .map_err(|e| e.to_string())?
+        }
+    };
+    config.alpn_protocols.push(ALPN_H2.to_vec());
+    let name = ServerName::try_from(t.target_name.clone())
+        .map_err(|e| format!("grpc_ssl_credential {}: {e}", t.target_name))?;
+    Ok(SocTls {
+        config: Arc::new(config),
+        name,
+    })
+}
+
+/// Connects to a SoC, with TLS when configured, and reports to the port's
+/// connectivity watcher. It does TLS itself, rather than tonic, so that one
+/// deadline bounds TCP, TLS and the SoC's first HTTP/2 frame, and the
+/// connection is up only once all three are through.
 #[derive(Clone)]
 struct MonitoredConnector {
     events: Option<mpsc::UnboundedSender<ConnEvent>>,
+    tls: Option<SocTls>,
 }
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -251,13 +411,18 @@ impl tower::Service<Uri> for MonitoredConnector {
 
     fn call(&mut self, uri: Uri) -> Self::Future {
         let events = self.events.clone();
-        Box::pin(async move {
+        let tls = self.tls.clone();
+        // A task of its own, so that the attempt goes on, and fails at its
+        // deadline, while no RPC waits for it: tonic drives an attempt only
+        // while a request waits to be sent on it.
+        let attempt = tokio::spawn(async move {
             let send = |e: ConnEvent| {
                 if let Some(tx) = &events {
                     let _ = tx.send(e);
                 }
             };
             send(ConnEvent::Connecting);
+            let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
             let host = uri
                 .host()
                 .unwrap_or("")
@@ -265,26 +430,47 @@ impl tower::Service<Uri> for MonitoredConnector {
                 .trim_end_matches(']')
                 .to_string();
             let port = uri.port_u16().unwrap_or(GRPC_PORT);
-            let connect = TcpStream::connect((host.as_str(), port));
-            match tokio::time::timeout(Duration::from_secs(5), connect).await {
-                Ok(Ok(stream)) => {
-                    let _ = stream.set_nodelay(true);
-                    send(ConnEvent::Connected);
-                    Ok(TokioIo::new(MonitoredIo {
-                        inner: stream,
-                        events: events.clone(),
-                    }))
+            let connect = async move {
+                let tcp = TcpStream::connect((host.as_str(), port)).await?;
+                let _ = tcp.set_nodelay(true);
+                let Some(tls) = tls else {
+                    return Ok(SocIo::Plain(tcp));
+                };
+                let stream = TlsConnector::from(tls.config)
+                    .connect(tls.name, tcp)
+                    .await?;
+                // As tonic requires.
+                if stream.get_ref().1.alpn_protocol() != Some(ALPN_H2) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "HTTP/2 was not negotiated",
+                    ));
                 }
+                Ok(SocIo::Tls(Box::new(stream)))
+            };
+            match tokio::time::timeout_at(deadline, connect).await {
+                Ok(Ok(io)) => Ok(TokioIo::new(MonitoredIo {
+                    inner: io,
+                    events: events.clone(),
+                    deadline: Some(Box::pin(tokio::time::sleep_until(deadline))),
+                })),
                 Ok(Err(e)) => {
+                    log_debug!("Could not connect to the SoC at {}: {}", uri, e);
                     send(ConnEvent::ConnectFailed);
                     Err(Box::new(e) as BoxError)
                 }
                 Err(_) => {
+                    log_debug!(
+                        "Could not connect to the SoC at {} within {} s",
+                        uri,
+                        CONNECT_TIMEOUT.as_secs_f64()
+                    );
                     send(ConnEvent::ConnectFailed);
                     Err("connection timed out".into())
                 }
             }
-        })
+        });
+        Box::pin(async move { attempt.await.map_err(|e| Box::new(e) as BoxError)? })
     }
 }
 
@@ -304,28 +490,27 @@ pub fn make_channel(
     config: &ChannelConfig,
     events: Option<mpsc::UnboundedSender<ConnEvent>>,
 ) -> Option<Channel> {
-    let tls = matches!(config, ChannelConfig::Secure(_));
-    let mut endpoint = Endpoint::from_shared(target_uri(ip, tls))
+    // TLS is the connector's, so tonic connects as to a plaintext endpoint;
+    // the origin keeps the scheme and authority of the requests.
+    let mut endpoint = Endpoint::from_shared(target_uri(ip, false))
         .ok()?
         .http2_keep_alive_interval(Duration::from_secs(4))
         .keep_alive_timeout(Duration::from_secs(8))
         .keep_alive_while_idle(true);
-    if let ChannelConfig::Secure(t) = config {
-        let mut tls_config = ClientTlsConfig::new()
-            .ca_certificate(Certificate::from_pem(&t.ca_pem))
-            .domain_name(t.target_name.clone());
-        if let Some((cert, key)) = &t.identity {
-            tls_config = tls_config.identity(Identity::from_pem(cert, key));
-        }
-        endpoint = match endpoint.tls_config(tls_config) {
-            Ok(e) => e,
+    let tls = match config {
+        ChannelConfig::Insecure => None,
+        ChannelConfig::Secure(t) => match soc_tls(t) {
+            Ok(tls) => {
+                endpoint = endpoint.origin(target_uri(ip, true).parse().ok()?);
+                Some(tls)
+            }
             Err(e) => {
                 log_warning!("gRPC TLS configuration is not usable: {}", e);
                 return None;
             }
-        };
-    }
-    Some(endpoint.connect_with_connector_lazy(MonitoredConnector { events }))
+        },
+    };
+    Some(endpoint.connect_with_connector_lazy(MonitoredConnector { events, tls }))
 }
 
 /// The tonic client of one port's SoC.

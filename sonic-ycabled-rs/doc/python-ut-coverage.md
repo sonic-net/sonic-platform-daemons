@@ -19,7 +19,7 @@ Run the unit tests with `./build.sh cargo test --release --lib` (see [README.md]
 | [Insertion, removal and startup](#insertion-removal-and-startup) | 20 | 17 |
 | [Active-standby toggle](#active-standby-toggle) | 16 | 10 |
 | [Active-standby probe](#active-standby-probe) | 11 | 4 |
-| [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 23 |
+| [Active-active: channel, initialization, GracefulRestart](#active-active-channel-initialization-gracefulrestart) | 28 | 26 |
 | [Active-active: requests and replies](#active-active-requests-and-replies) | 25 | 9 |
 | [Telemetry](#telemetry) | 22 | 21 |
 | [CLI commands](#cli-commands) | 105 | 27 |
@@ -80,6 +80,7 @@ Rust:
 
 - `actor::tests::active_init_from_soc`, `active_init_failures`, `active_init_absent_cable`, `active_init_without_soc_address`, `active_init_ipv6_soc`, `active_init_sets_presence`, `active_toggle_retries_channel`, `active_on_vs_is_present`.
 - `tests::grpc::rpcs_reach_the_soc`, `rpcs_end_at_the_deadline`, `refused_connection_writes_failure`, `lost_connection_writes_failure_and_reconnects`, `ipv6_soc`, `secure_config_without_certs_gives_no_channel`, `graceful_restart_subscribes_again_after_period`, `graceful_restart_upper_tor`, `graceful_restart_uses_the_current_read_side`.
+- `tests::grpc::stalled_tls_handshake_fails_then_recovers`, `failed_tls_handshake_is_transient_failure`, `connection_without_http2_settings_fails`: a connection is up only once TLS and the SoC's first HTTP/2 frame are through, within the connect timeout, as in grpc-core. Python's tests mock grpcio's channel, so they have no counterpart.
 - `grpc::tests::targets`, `states_from_events`, `tor_sides`; `config::tests::channel_config_variants`, `secrets_fill_missing_fields_only`, `soc_addresses`.
 
 Not ported: `test_connect_channel` and `test_setup_grpc_channels`. Nothing calls those functions; the call to `connect_channel` is commented out.

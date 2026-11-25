@@ -42,11 +42,15 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   pipelined round trip per database, and a toggle writes its metrics and
   its state in one.
 - **Active-active** (`src/grpc.rs`): tonic, one lazily connected channel per
-  SoC, 0.5 s deadlines, keepalive 4 s/8 s, TLS from GRPCCLIENT (rustls). A
-  connector wrapper turns connection events into gRPC connectivity states,
-  so `FORWARDING_STATE_RESPONSE` gets `response=failure` when the channel
-  fails, as linkmgrd expects. GracefulRestart subscriptions as in Python.
-  No Python on this path.
+  SoC, 0.5 s deadlines, keepalive 4 s/8 s, TLS from GRPCCLIENT (rustls). The
+  connector makes the TCP connection and TLS itself and reports connection
+  events, from which ycabled-rs derives gRPC connectivity states as
+  grpc-core does: a connection is `READY` only once TLS is done and the
+  SoC's first HTTP/2 frame has arrived, within 5 s; an attempt that fails or
+  takes longer is `TRANSIENT_FAILURE`, which the channel keeps while it
+  tries again. So `FORWARDING_STATE_RESPONSE` gets `response=failure` once
+  when the channel fails or loses its connection, as linkmgrd expects.
+  GracefulRestart subscriptions as in Python. No Python on this path.
 - **Active-standby** (`src/bridge.rs`, `python/ycabled_bridge.py`): the
   vendor drivers stay Python. An embedded CPython (PyO3), started only if an
   active-standby port needs it, runs a bridge module that owns the platform
@@ -112,10 +116,11 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 ## Tests
 
-- **Unit tests** (143): the actors and the CLI against an in-memory
+- **Unit tests** (146): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server`, the gRPC client against an
-  in-process SoC, the bridge in the embedded interpreter with fake drivers.
+  in-process SoC, over TLS too with certificates that `openssl` makes for
+  the test, the bridge in the embedded interpreter with fake drivers.
   They cover the behaviors the Python unit tests cover;
   [doc/python-ut-coverage.md](doc/python-ut-coverage.md) maps them.
 
@@ -125,8 +130,8 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 - **Black-box tests** (`sonic-ycabled/blackbox`): the suite Python ycabled
   passes, run against ycabled-rs. Known-issue tests are normal tests for it,
-  and the two tests of Python-only mechanisms are skipped. All 334 others
-  pass, in about 10 minutes (Python: about 14).
+  and the two tests of Python-only mechanisms are skipped. All 364 others
+  pass, in about 13 minutes (Python: about 17).
 
   ```bash
   cd sonic-ycabled/blackbox
