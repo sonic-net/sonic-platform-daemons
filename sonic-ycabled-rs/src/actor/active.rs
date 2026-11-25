@@ -271,10 +271,16 @@ impl PortActor {
             new_state.as_str()
         };
         let time_end = timestamp();
-        self.write_metrics(side, new_state, &time_start, &time_end)
-            .await;
-        self.write_mux_state_to(table, new_state, &read_side, active_side)
-            .await;
+        self.write_switch(
+            table,
+            side,
+            new_state,
+            &time_start,
+            &time_end,
+            &read_side,
+            active_side,
+        )
+        .await;
     }
 
     /// linkmgrd's forwarding state probe: both sides' states from the SoC, in

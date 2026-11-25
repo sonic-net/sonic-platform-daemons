@@ -16,12 +16,14 @@ use crate::{log_debug, log_error, log_notice, log_warning};
 pub const VS_PLATFORM: &str = "x86_64-kvm_x86_64-r0";
 pub const SECRETS_PATH: &str = "/etc/sonic/grpc_secrets.json";
 
-/// Loopback3 addresses of the upper ToR (read side 0) and the lower ToR (1).
-const LOOPBACK_UPPER: [&str; 2] = ["10.212.64.2/32", "10.1.0.39/32"];
-const LOOPBACK_LOWER: [&str; 2] = ["10.212.64.1/32", "10.1.0.38/32"];
+/// Loopback3 addresses of the lower ToR (read side 0) and the upper ToR (1):
+/// Python ycabled's LOOPBACK_INTERFACE_LT0 and LOOPBACK_INTERFACE_T0. The
+/// second address of each is what sonic-mgmt gives dual ToR testbeds.
+const LOOPBACK_LOWER: [&str; 2] = ["10.212.64.2/32", "10.1.0.39/32"];
+const LOOPBACK_UPPER: [&str; 2] = ["10.212.64.1/32", "10.1.0.38/32"];
 
 /// Which ToR this is, from the first IPv4 address of Loopback3 in
-/// CONFIG_DB LOOPBACK_INTERFACE: 0 for the upper ToR, 1 for the lower, -1 if
+/// CONFIG_DB LOOPBACK_INTERFACE: 0 for the lower ToR, 1 for the upper, -1 if
 /// unknown. That is the index of this ToR's port in the SoC's port lists.
 pub fn read_side_from_loopback_keys(keys: &[String]) -> i32 {
     for key in keys {
@@ -42,10 +44,10 @@ pub fn read_side_from_loopback_keys(keys: &[String]) -> i32 {
         };
         let network = format!("{ip}/32");
         log_debug!("Y_CABLE_DEBUG:Loopback address parsed = {} ", network);
-        if LOOPBACK_UPPER.contains(&network.as_str()) {
+        if LOOPBACK_LOWER.contains(&network.as_str()) {
             return 0;
         }
-        if LOOPBACK_LOWER.contains(&network.as_str()) {
+        if LOOPBACK_UPPER.contains(&network.as_str()) {
             return 1;
         }
         log_warning!("Could not get any address associated with Loopback3");

@@ -19,7 +19,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::bridge::YCablePlatform;
 use crate::config::{self, CableType};
-use crate::db::{Db, DbId, Event, FieldMap};
+use crate::db::{Db, DbId, Event, FieldMap, Write};
 use crate::grpc::{SocApi, SocConnector};
 use crate::schema::*;
 use crate::{fields, log_debug, log_info, log_notice, log_warning};
@@ -529,17 +529,44 @@ impl PortActor {
         self.db().set(DbId::State, table, &self.port, &f).await
     }
 
-    pub async fn write_metrics(&self, side: &str, state: &str, start: &str, end: &str) {
-        let f = [
-            (
-                format!("xcvrd_switch_{side}{state}_start"),
-                start.to_string(),
-            ),
-            (format!("xcvrd_switch_{side}{state}_end"), end.to_string()),
+    /// The end of a switch: its metrics (`side` "" for active-standby,
+    /// "self_" or "peer_" for active-active), then the state written to
+    /// `table`, in one round trip.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn write_switch(
+        &self,
+        table: &str,
+        side: &str,
+        state: &str,
+        start: &str,
+        end: &str,
+        read_side: &str,
+        active_side: &str,
+    ) {
+        let (start_field, end_field) = (
+            format!("xcvrd_switch_{side}{state}_start"),
+            format!("xcvrd_switch_{side}{state}_end"),
+        );
+        let metrics = [
+            (start_field.as_str(), start.to_string()),
+            (end_field.as_str(), end.to_string()),
         ];
-        let fv: Vec<(&str, String)> = f.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let row = fields!["state" => state, "read_side" => read_side, "active_side" => active_side];
         self.db()
-            .set(DbId::State, MUX_METRICS_TABLE, &self.port, &fv)
+            .set_all(&[
+                Write {
+                    db: DbId::State,
+                    table: MUX_METRICS_TABLE,
+                    key: &self.port,
+                    fields: &metrics,
+                },
+                Write {
+                    db: DbId::State,
+                    table,
+                    key: &self.port,
+                    fields: &row,
+                },
+            ])
             .await
     }
 

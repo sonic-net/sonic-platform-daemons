@@ -48,8 +48,13 @@ pub const GRPC_PORT: u16 = 50075;
 /// `datetime.utcnow().strftime("%Y-%b-%d %H:%M:%S.%f")`, the format of every
 /// timestamp ycabled writes.
 pub fn timestamp() -> String {
+    // Parsed once: parsing the format string took as long as formatting.
+    static ITEMS: std::sync::OnceLock<Vec<chrono::format::Item<'static>>> =
+        std::sync::OnceLock::new();
+    let items =
+        ITEMS.get_or_init(|| chrono::format::StrftimeItems::new("%Y-%b-%d %H:%M:%S%.6f").collect());
     chrono::Utc::now()
-        .format("%Y-%b-%d %H:%M:%S%.6f")
+        .format_with_items(items.iter())
         .to_string()
 }
 

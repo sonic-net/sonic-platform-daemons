@@ -448,7 +448,9 @@ impl SocConnector for TonicConnector {
 
 // --- GracefulRestart -----------------------------------------------------------
 
-/// UPPER_TOR from the upper ToR (read side 0), LOWER_TOR otherwise.
+/// The `tor` of the GracefulRestart request, as Python sends it: UPPER_TOR
+/// from read side 0, which is the lower ToR, and LOWER_TOR otherwise. Which
+/// one the SoC expects is not confirmed (HLD open question 9).
 pub fn tor_side(read_side: i32) -> ToRSide {
     if read_side == 0 {
         ToRSide::UpperTor

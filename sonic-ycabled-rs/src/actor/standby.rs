@@ -17,6 +17,16 @@ pub const TARGET_TOR_B: i64 = 2;
 pub const FIRMWARE_DOWNLOAD_STATUS_INPROGRESS: i64 = 1;
 pub const FIRMWARE_DOWNLOAD_STATUS_FAILED: i64 = 2;
 
+/// The driver method, ToR name and active side of a toggle toward `state`
+/// by a ToR that reads the cable from `read_side`.
+fn toggle_target(read_side: i64, state: &str) -> (&'static str, &'static str, i64) {
+    if (read_side == 1) == (state == "active") {
+        ("toggle_mux_to_tor_a", "A", 1)
+    } else {
+        ("toggle_mux_to_tor_b", "B", 2)
+    }
+}
+
 impl PortActor {
     /// A driver call; an exception is logged with `what` and read as None.
     pub async fn drv(&self, method: &str, args: Vec<PyArg>) -> Result<PyVal, CallError> {
@@ -25,6 +35,18 @@ impl PortActor {
         };
         let _call = self.lock_for_call().await;
         self.shared.platform.call(p, method, args).await
+    }
+
+    /// [`cable_present`](Self::cable_present), then [`drv`](Self::drv) if
+    /// the cable is present, in one trip to the bridge. None: absent.
+    pub async fn drv_if_present(
+        &self,
+        method: &str,
+        args: Vec<PyArg>,
+    ) -> Option<Result<PyVal, CallError>> {
+        let p = self.physical?;
+        let _call = self.lock_for_call().await;
+        self.shared.platform.call_if_present(p, method, args).await
     }
 
     /// Like [`drv`](Self::drv), logging a raised exception as Python does:
@@ -272,29 +294,54 @@ impl PortActor {
             "ycabled-rs"
         );
         let time_end = timestamp();
-        self.write_metrics("", new_status, &time_start, &time_end)
-            .await;
-        self.write_mux_state(new_status, &read_side, &active_side.to_string())
-            .await;
+        self.write_switch(
+            HW_MUX_CABLE_TABLE,
+            "",
+            new_status,
+            &time_start,
+            &time_end,
+            &read_side,
+            &active_side.to_string(),
+        )
+        .await;
     }
 
     /// (active side, read side) after toggling to `state` from the read side
     /// in HW_MUX_CABLE_TABLE, asking the cable for it if that one is not valid.
     async fn update_tor_active_side(&mut self, read_side: &str, state: &str) -> (i64, String) {
+        let stored = read_side.trim().parse::<i64>();
+        if let Ok(rs @ (1 | 2)) = stored {
+            if self.has_driver().await {
+                // The usual toggle: its presence check and its call to the
+                // driver in one trip to the bridge.
+                let (method, tor, side) = toggle_target(rs, state);
+                return match self.drv_if_present(method, vec![]).await {
+                    Some(res) => (self.toggle_result(tor, side, res), read_side.to_string()),
+                    None => {
+                        self.warn_absent_for_toggle();
+                        (-1, "-1".into())
+                    }
+                };
+            }
+        }
         if !self.cable_present().await {
-            log_warning!(
-                "Error: Could not establish presence for  Y cable port {} while trying to toggle the mux",
-                self.port
-            );
+            self.warn_absent_for_toggle();
             return (-1, "-1".into());
         }
-        match read_side.trim().parse::<i64>() {
+        match stored {
             Ok(rs @ (1 | 2)) => (
                 self.toggle_mux_direction(rs, state).await,
                 read_side.to_string(),
             ),
             _ => self.toggle_and_update_read_side(state).await,
         }
+    }
+
+    fn warn_absent_for_toggle(&self) {
+        log_warning!(
+            "Error: Could not establish presence for  Y cable port {} while trying to toggle the mux",
+            self.port
+        );
     }
 
     async fn toggle_and_update_read_side(&mut self, state: &str) -> (i64, String) {
@@ -333,12 +380,8 @@ impl PortActor {
 
     /// Toggles toward `state` for a ToR that reads the cable from `read_side`.
     pub async fn toggle_mux_direction(&mut self, read_side: i64, state: &str) -> i64 {
-        let to_a = (read_side == 1) == (state == "active");
-        if to_a {
-            self.toggle_to("toggle_mux_to_tor_a", "A", 1).await
-        } else {
-            self.toggle_to("toggle_mux_to_tor_b", "B", 2).await
-        }
+        let (method, tor, side) = toggle_target(read_side, state);
+        self.toggle_to(method, tor, side).await
     }
 
     /// Python's y_cable_toggle_mux_torA/B: `side` on success, -1 otherwise.
@@ -351,7 +394,13 @@ impl PortActor {
             );
             return -1;
         }
-        let status = match self.drv(method, vec![]).await {
+        let res = self.drv(method, vec![]).await;
+        self.toggle_result(tor, side, res)
+    }
+
+    /// `side` if the driver's toggle to ToR `tor` succeeded, -1 otherwise.
+    fn toggle_result(&self, tor: &str, side: i64, res: Result<PyVal, CallError>) -> i64 {
+        let status = match res {
             Ok(v) => v,
             Err(e) => {
                 log_warning!(
@@ -418,21 +467,31 @@ impl PortActor {
     }
 
     async fn probe_status(&mut self, read_side: i64) -> &'static str {
-        if !self.cable_present().await {
+        let absent = |this: &Self| {
             log_warning!(
                 "Error: Could not establish presence for Y cable port {} while responding to command probe",
-                self.port
+                this.port
             );
-            return "unknown";
-        }
-        if !self.has_driver().await {
+            "unknown"
+        };
+        // With a driver, the presence check and the read of the mux
+        // direction take one trip to the bridge.
+        let res = if self.has_driver().await {
+            match self.drv_if_present("get_mux_direction", vec![]).await {
+                Some(res) => res,
+                None => return absent(self),
+            }
+        } else {
+            if !self.cable_present().await {
+                return absent(self);
+            }
             log_error!(
                 "Error: Could not get port instance to perform update appdb for read side for Y cable port {}",
                 self.port
             );
             return "unknown";
-        }
-        let active = match self.drv("get_mux_direction", vec![]).await {
+        };
+        let active = match res {
             Ok(v) => Some(v),
             Err(e) => {
                 log_warning!(

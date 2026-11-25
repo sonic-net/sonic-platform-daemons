@@ -4,6 +4,15 @@ use ycabled::daemon::{self, Options};
 use ycabled::log_error;
 
 fn main() {
+    // Before any thread starts: one malloc arena. Otherwise each thread that
+    // allocates, such as the threads of Python calls, can get an arena of its
+    // own, up to eight per core, and keeps its memory. Python calls take turns
+    // and there is one worker thread, so the arena's lock is hardly contended.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: mallopt only sets an allocator parameter.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 1);
+    }
     // A panic is a bug: log it and exit, so that supervisord starts the
     // daemon again (N8). Nothing goes to stdout or stderr.
     std::panic::set_hook(Box::new(|info| {
@@ -21,14 +30,18 @@ fn main() {
         std::process::exit(1);
     }));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        // Python driver calls run on blocking threads, started when needed
-        // and stopped after 10 s idle. A call that never returns keeps its
-        // thread, but a port has at most two calls in flight, one from its
-        // actor and one from its telemetry pass, besides firmware downloads,
-        // so hung calls on some ports cannot use up the threads the others
-        // need.
+        // One worker: the async work (redis, gRPC, the port actors) is
+        // small, and a second worker only adds wake-ups between the two.
+        .worker_threads(1)
+        // Python driver calls run on blocking threads, BRIDGE_SLOTS at a
+        // time, started when needed and kept for 120 s idle, longer than the
+        // 60 s between telemetry passes. A call still running after 10 ms
+        // gives its slot back, and one that never returns keeps only its
+        // thread. A port has at most three calls in flight (a request, a
+        // telemetry call and a firmware download), so hung calls on some
+        // ports cannot use up the threads the others need.
         .max_blocking_threads(512)
+        .thread_keep_alive(std::time::Duration::from_secs(120))
         .thread_name("ycabled-rs")
         .enable_all()
         .build()

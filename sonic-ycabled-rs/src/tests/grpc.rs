@@ -339,7 +339,7 @@ async fn ipv6_soc() {
 }
 
 /// test_ycable_graceful_client: subscribe again after the period of the last
-/// response; UPPER_TOR from the upper ToR.
+/// response; UPPER_TOR from read side 0, the lower ToR, as Python sends it.
 #[tokio::test]
 async fn graceful_restart_subscribes_again_after_period() {
     let soc = TestSoc::default();
@@ -367,7 +367,8 @@ async fn graceful_restart_subscribes_again_after_period() {
 
 /// The subscriptions start once the ports are initialized, with the read
 /// side known then: Loopback3 is looked up again if it was unknown at
-/// startup, as Python does. Here it makes this ToR the upper one.
+/// startup, as Python does. Here it makes this ToR the lower one (read side
+/// 0), which sends UPPER_TOR.
 #[tokio::test]
 async fn graceful_restart_uses_the_current_read_side() {
     let soc = TestSoc::default();
@@ -408,9 +409,9 @@ async fn graceful_restart_uses_the_current_read_side() {
     assert_eq!(shared.read_side.load(Ordering::SeqCst), 0);
 }
 
-/// The lower ToR subscribes as LOWER_TOR.
+/// The upper ToR (read side 1) subscribes as LOWER_TOR, as Python does.
 #[tokio::test]
-async fn graceful_restart_lower_tor() {
+async fn graceful_restart_upper_tor() {
     let soc = TestSoc::default();
     let _stop = serve("127.0.0.26", soc.clone()).await;
     let task = tokio::spawn(grpc::graceful_restart_loop(

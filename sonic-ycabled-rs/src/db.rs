@@ -71,6 +71,17 @@ impl Event {
     }
 }
 
+/// The most keyspace notifications a subscription handles together.
+const SUBSCRIPTION_BATCH: usize = 256;
+
+/// One `set`, for [`Db::set_all`].
+pub struct Write<'a> {
+    pub db: DbId,
+    pub table: &'a str,
+    pub key: &'a str,
+    pub fields: &'a [(&'a str, String)],
+}
+
 /// Table-level access to one namespace's databases. Errors are logged and
 /// read as "no data": a failed read is a missing row, as for Python's
 /// `Table.get` returning `(False, ...)`.
@@ -80,6 +91,13 @@ pub trait Db: Send + Sync {
     async fn hget(&self, db: DbId, table: &str, key: &str, field: &str) -> Option<String>;
     /// One `HSET` of all fields, merged into the row.
     async fn set(&self, db: DbId, table: &str, key: &str, fields: &[(&str, String)]);
+    /// [`set`](Self::set)s, in order; one round trip where they all go to
+    /// the same database.
+    async fn set_all(&self, writes: &[Write<'_>]) {
+        for w in writes {
+            self.set(w.db, w.table, w.key, w.fields).await;
+        }
+    }
     async fn del(&self, db: DbId, table: &str, key: &str);
     async fn keys(&self, db: DbId, table: &str) -> Vec<String>;
     async fn exists(&self, db: DbId, table: &str, key: &str) -> bool {
@@ -316,7 +334,10 @@ impl RedisDb {
         // The pub/sub connection is not tied to a database: the keyspace
         // channels carry the DB id.
         let client = redis::Client::open(redis_url(self.location(DbId::Config)))?;
-        let (mut sink, mut stream) = client.get_async_pubsub().await?.split();
+        let (mut sink, stream) = client.get_async_pubsub().await?.split();
+        // The notifications that have arrived together are handled together:
+        // their rows are read in one round trip per database.
+        let mut stream = stream.ready_chunks(SUBSCRIPTION_BATCH);
         let (tx, rx) = mpsc::unbounded_channel();
         let mut patterns = HashMap::new();
         self.start_tables(&mut sink, &mut patterns, tables, &tx)
@@ -338,9 +359,9 @@ impl RedisDb {
                         }
                         None => adding = false,
                     },
-                    msg = stream.next() => match msg {
-                        Some(msg) => {
-                            if let Some(event) = this.event_of(&msg, &patterns).await {
+                    msgs = stream.next() => match msgs {
+                        Some(msgs) => {
+                            for event in this.events_of(&msgs, &patterns).await {
                                 if tx.send(event).is_err() {
                                     log_debug!("No one listens to the subscriptions of namespace '{}' any more", this.namespace);
                                 }
@@ -380,40 +401,105 @@ impl RedisDb {
         Ok(())
     }
 
-    /// The event of a keyspace notification: `del` deletes the row, anything
-    /// else reads it again. None if the row is gone again, or the
-    /// notification is not for a subscribed table.
-    async fn event_of(
+    /// The events of keyspace notifications, in their order: `del` deletes
+    /// the row, anything else reads it again, with one pipelined `HGETALL`
+    /// per database. No event for a row that is gone again, or for a
+    /// notification that is not for a subscribed table.
+    async fn events_of(
         &self,
-        msg: &redis::Msg,
+        msgs: &[redis::Msg],
         patterns: &HashMap<String, (DbId, String)>,
-    ) -> Option<TableEvent> {
-        let pattern: String = msg.get_pattern().ok()?;
-        let (db, table) = patterns.get(&pattern)?;
-        let (_, table_entry) = msg.get_channel_name().split_once(':')?;
-        let (_, key) = table_entry.split_once(self.location(*db).separator.as_str())?;
-        let op: String = msg.get_payload().unwrap_or_default();
-        let event = if op == "del" {
-            Event::Del {
-                key: key.to_string(),
+    ) -> Vec<TableEvent> {
+        struct Notice<'m> {
+            db: DbId,
+            table: &'m str,
+            entry: &'m str,
+            key: &'m str,
+            del: bool,
+        }
+        let notices: Vec<Option<Notice<'_>>> = msgs
+            .iter()
+            .map(|msg| {
+                let pattern: String = msg.get_pattern().ok()?;
+                let (db, table) = patterns.get(&pattern)?;
+                let (_, entry) = msg.get_channel_name().split_once(':')?;
+                let (_, key) = entry.split_once(self.location(*db).separator.as_str())?;
+                let op: String = msg.get_payload().unwrap_or_default();
+                Some(Notice {
+                    db: *db,
+                    table,
+                    entry,
+                    key,
+                    del: op == "del",
+                })
+            })
+            .collect();
+        let mut rows: Vec<Option<std::result::Result<FieldMap, String>>> =
+            (0..notices.len()).map(|_| None).collect();
+        for db in DbId::ALL {
+            let reads: Vec<usize> = notices
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| matches!(n, Some(n) if n.db == db && !n.del))
+                .map(|(i, _)| i)
+                .collect();
+            let entries: Vec<&str> = reads
+                .iter()
+                .filter_map(|&i| notices[i].as_ref().map(|n| n.entry))
+                .collect();
+            for (i, row) in reads.into_iter().zip(self.hgetall_all(db, &entries).await) {
+                rows[i] = Some(row);
             }
-        } else {
-            match self.hgetall_raw(*db, table_entry).await {
-                Ok(fields) if !fields.is_empty() => Event::Set {
-                    key: key.to_string(),
-                    fields,
-                },
-                Ok(_) => {
-                    log_debug!("Miss table key {}, possibly outdated", table_entry);
-                    return None;
+        }
+        let mut events = Vec::new();
+        for (n, row) in notices.into_iter().zip(rows) {
+            let Some(n) = n else { continue };
+            let event = if n.del {
+                Event::Del {
+                    key: n.key.to_string(),
                 }
-                Err(e) => {
-                    log_warning!("Failed to read {} {}: {}", db.name(), table_entry, e);
-                    return None;
+            } else {
+                match row {
+                    Some(Ok(fields)) if !fields.is_empty() => Event::Set {
+                        key: n.key.to_string(),
+                        fields,
+                    },
+                    Some(Err(e)) => {
+                        log_warning!("Failed to read {} {}: {}", n.db.name(), n.entry, e);
+                        continue;
+                    }
+                    _ => {
+                        log_debug!("Miss table key {}, possibly outdated", n.entry);
+                        continue;
+                    }
+                }
+            };
+            events.push((n.table.to_string(), event));
+        }
+        events
+    }
+
+    /// `HGETALL` of `entries`, in one round trip, in order.
+    async fn hgetall_all(
+        &self,
+        db: DbId,
+        entries: &[&str],
+    ) -> Vec<std::result::Result<FieldMap, String>> {
+        match entries {
+            [] => Vec::new(),
+            [entry] => vec![self.hgetall_raw(db, entry).await.map_err(|e| e.to_string())],
+            _ => {
+                let mut pipe = redis::pipe();
+                for entry in entries {
+                    pipe.cmd("HGETALL").arg(*entry);
+                }
+                let mut mgr = self.conn(db).mgr.clone();
+                match pipe.query_async::<Vec<FieldMap>>(&mut mgr).await {
+                    Ok(rows) => rows.into_iter().map(Ok).collect(),
+                    Err(e) => entries.iter().map(|_| Err(e.to_string())).collect(),
                 }
             }
-        };
-        Some((table.clone(), event))
+        }
     }
 }
 
@@ -477,6 +563,37 @@ impl Db for RedisDb {
         let mut mgr = self.conn(db).mgr.clone();
         if let Err(e) = cmd.query_async::<()>(&mut mgr).await {
             log_error!("Failed to write {} {}: {}", db.name(), full, e);
+        }
+    }
+
+    async fn set_all(&self, writes: &[Write<'_>]) {
+        let Some(db) = writes.first().map(|w| w.db) else {
+            return;
+        };
+        if writes.iter().any(|w| w.db != db) {
+            for w in writes {
+                self.set(w.db, w.table, w.key, w.fields).await;
+            }
+            return;
+        }
+        // A pipeline, not a transaction: redis runs the HSETs in order, as
+        // separate commands, and they take one round trip.
+        let mut pipe = redis::pipe();
+        let mut keys = Vec::new();
+        for w in writes.iter().filter(|w| !w.fields.is_empty()) {
+            let full = table_key(self.location(db), w.table, w.key);
+            pipe.cmd("HSET").arg(&full);
+            for (f, v) in w.fields {
+                pipe.arg(*f).arg(v);
+            }
+            keys.push(full);
+        }
+        if keys.is_empty() {
+            return;
+        }
+        let mut mgr = self.conn(db).mgr.clone();
+        if let Err(e) = pipe.query_async::<()>(&mut mgr).await {
+            log_error!("Failed to write {} {}: {}", db.name(), keys.join(", "), e);
         }
     }
 

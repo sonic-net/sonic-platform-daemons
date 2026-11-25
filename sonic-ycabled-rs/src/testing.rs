@@ -335,7 +335,7 @@ impl MockPlatform {
 }
 
 /// A scripted SoC: forwarding (admin), link and operation states, index 0
-/// the upper ToR's, 1 the lower's.
+/// the lower ToR's, 1 the upper's.
 /// An RPC the SoC got: its name, port ids and states.
 pub type RpcCall = (&'static str, Vec<i32>, Vec<bool>);
 

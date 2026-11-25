@@ -84,7 +84,14 @@ pub fn log(level: Level, msg: &str) {
     #[cfg(test)]
     capture::record(level, msg);
     let l = logger();
-    let ts = chrono::Local::now().format("%b %e %H:%M:%S").to_string();
+    // Parsed once: parsing the format string took as long as formatting.
+    static ITEMS: std::sync::OnceLock<Vec<chrono::format::Item<'static>>> =
+        std::sync::OnceLock::new();
+    let items =
+        ITEMS.get_or_init(|| chrono::format::StrftimeItems::new("%b %e %H:%M:%S").collect());
+    let ts = chrono::Local::now()
+        .format_with_items(items.iter())
+        .to_string();
     let line = format_line(level, &ts, msg);
     let mut guard = match l.sock.lock() {
         Ok(g) => g,

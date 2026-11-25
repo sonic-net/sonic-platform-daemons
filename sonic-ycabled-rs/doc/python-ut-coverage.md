@@ -78,7 +78,7 @@ Python: `test_check_identifier_presence_and_setup_channel*` (4), `test_setup_grp
 Rust:
 
 - `actor::tests::active_init_from_soc`, `active_init_failures`, `active_init_absent_cable`, `active_init_without_soc_address`, `active_init_ipv6_soc`, `active_init_sets_presence`, `active_toggle_retries_channel`, `active_on_vs_is_present`.
-- `tests::grpc::rpcs_reach_the_soc`, `rpcs_end_at_the_deadline`, `refused_connection_writes_failure`, `lost_connection_writes_failure_and_reconnects`, `ipv6_soc`, `secure_config_without_certs_gives_no_channel`, `graceful_restart_subscribes_again_after_period`, `graceful_restart_lower_tor`, `graceful_restart_uses_the_current_read_side`.
+- `tests::grpc::rpcs_reach_the_soc`, `rpcs_end_at_the_deadline`, `refused_connection_writes_failure`, `lost_connection_writes_failure_and_reconnects`, `ipv6_soc`, `secure_config_without_certs_gives_no_channel`, `graceful_restart_subscribes_again_after_period`, `graceful_restart_upper_tor`, `graceful_restart_uses_the_current_read_side`.
 - `grpc::tests::targets`, `states_from_events`, `tor_sides`; `config::tests::channel_config_variants`, `secrets_fill_missing_fields_only`, `soc_addresses`.
 
 Not ported: `test_connect_channel` and `test_setup_grpc_channels`. Nothing calls those functions; the call to `connect_channel` is commented out.

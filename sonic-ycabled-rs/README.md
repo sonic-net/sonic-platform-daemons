@@ -34,7 +34,10 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   routed in the order redis delivered them, so a port's requests keep their
   order across tables. Per namespace, that and one connection per database
   make 4, whatever the number of ports (Python: 125 with 24 active-standby
-  ports, 199 with 32 active-active ports).
+  ports, 199 with 32 active-active ports). Round trips cost the most CPU,
+  so the rows of notifications that arrive together are read in one
+  pipelined round trip per database, and a toggle writes its metrics and
+  its state in one.
 - **Active-active** (`src/grpc.rs`): tonic, one lazily connected channel per
   SoC, 0.5 s deadlines, keepalive 4 s/8 s, TLS from GRPCCLIENT (rustls). A
   connector wrapper turns connection events into gRPC connectivity states,
@@ -45,10 +48,17 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   vendor drivers stay Python. An embedded CPython (PyO3), started only if an
   active-standby port needs it, runs a bridge module that owns the platform
   API and the driver objects; Rust calls it with plain values. Driver
-  selection is Python ycabled's. A driver call still running after 5 s is
-  logged. Calls run on blocking threads started when needed; a port has at
-  most two in flight besides firmware downloads, so calls that never return
-  on some ports leave threads for the others.
+  selection is Python ycabled's. Driver calls run one at a time, as Python
+  ycabled's do, on blocking threads that keep their Python thread state:
+  more at once would only queue for the GIL. A call still running after
+  10 ms is waiting on its cable, so it stops counting and the next call
+  starts: K hung cables delay the other ports by at most K × 10 ms (N1).
+  A toggle or probe checks presence and calls the driver in one trip to
+  Python. A call still running after 5 s is logged. A port has at most two
+  calls in flight besides firmware downloads, so calls that never return on
+  some ports leave threads for the others.
+- **Runtime:** tokio with one worker thread, which is enough for the async
+  work and saves the wake-ups between two, and at most two malloc arenas.
 - **CLI** (`src/cli.rs`): the 13 `XCVRD_*_CMD` tables of `show/config
   muxcable`, answered as Python answers them. A firmware download runs in a
   task of its own, so the port keeps working meanwhile.
@@ -124,8 +134,9 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 `sonic-ycabled/blackbox/bench` measures either implementation on the
 suite's fakes: memory, threads, Redis connections and idle CPU, startup and
-toggle latency with SoCs that do not answer, probe latency, toggle
-throughput, the telemetry pass.
+toggle latency with SoCs or cables that do not answer, probe latency, toggle
+throughput, 1000 toggles with the CPU, memory and threads they take, the
+telemetry pass.
 
 ```bash
 cd sonic-ycabled/blackbox
@@ -139,16 +150,20 @@ explains them). They compare the daemons on the same fakes, not hardware.
 
 | Scenario | Metric | Python | Rust |
 | --- | --- | ---: | ---: |
-| 24 active-standby ports | RSS / PSS | 50.3 / 42.0 MB | 38.3 / 33.8 MB |
+| 24 active-standby ports | RSS / PSS | 50.4 / 41.8 MB | 35.7 / 31.2 MB |
 | | Threads | 5 | 3 |
 | | Redis connections | 125 | 4 |
-| | CPU over 65 s, one telemetry pass | 0.14% | 0.14% |
-| 32 active-active ports | RSS / PSS | 58.8 / 48.6 MB | 12.1 / 10.6 MB |
-| | Threads | 61 | 3 |
+| | CPU over 65 s, one telemetry pass | 0.14% | 0.09% |
+| 32 active-active ports | RSS / PSS | 59.1 / 48.7 MB | 11.1 / 9.6 MB |
+| | Threads | 64 | 2 |
 | | Redis connections | 199 | 4 |
-| | CPU over 65 s, one telemetry pass | 4.31% | 0.14% |
-| Startup, SoCs never answer | 8 / 32 ports | 4.16 / 16.30 s | 0.51 / 0.52 s |
-| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2021 ms | 6.9 ms |
-| Active-standby probe | Median / p99 | 1.65 / 2.12 ms | 1.88 / 2.55 ms |
-| 24 active-standby ports toggled together | Toggles per second | 936 | 1063 |
+| | CPU over 65 s, one telemetry pass | 4.74% | 0.08% |
+| Startup, SoCs never answer | 8 / 32 ports | 4.17 / 16.33 s | 0.51 / 0.52 s |
+| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2020 ms | 6.8 ms |
+| 8 ports toggled, 4 cables hang for 3 s | Healthy ports, slowest answer | 12015 ms | 50 ms |
+| Active-standby probe | Median / p99 | 1.73 / 2.13 ms | 1.64 / 2.06 ms |
+| 24 active-standby ports toggled together | Toggles per second | 553 | 1197 |
+| 1000 active-standby toggles, 100 ports at a time | CPU time / peak RSS | 0.45 s / 50.9 MB | 0.31 s / 36.7 MB |
+| 1000 toggles of one active-standby port | Median / p99 latency | 1.37 / 4.50 ms | 0.93 / 1.49 ms |
+| 1000 active-active toggles, 100 ports at a time | CPU time / peak RSS | 0.91 s / 68.3 MB | 0.15 s / 18.7 MB |
 | Telemetry pass, 32 active-active ports | SoCs hang / blackholed | 62.3 / 0.04 s | 2.0 / 2.0 s |
