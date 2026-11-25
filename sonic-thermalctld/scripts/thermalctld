@@ -462,6 +462,7 @@ class FanUpdater(logger.Logger):
         fan_status = self.fan_status_dict[fan_name]
 
         speed = NOT_AVAILABLE
+        speed_rpm = NOT_AVAILABLE
         speed_target = NOT_AVAILABLE
         is_under_speed = NOT_AVAILABLE
         is_over_speed = NOT_AVAILABLE
@@ -471,6 +472,7 @@ class FanUpdater(logger.Logger):
         presence = try_get(fan.get_presence, False)
         if presence:
             speed = try_get(fan.get_speed)
+            speed_rpm = try_get(fan.get_speed_rpm, NOT_AVAILABLE)
             speed_target = try_get(fan.get_target_speed)
             is_under_speed = try_get(fan.is_under_speed)
             is_over_speed = try_get(fan.is_over_speed)
@@ -525,6 +527,7 @@ class FanUpdater(logger.Logger):
              ('status', str(fan_fault_status)),
              ('direction', str(fan_direction)),
              ('speed', str(speed)),
+             ('speed_rpm', str(speed_rpm)),
              ('speed_target', str(speed_target)),
              ('is_under_speed', str(is_under_speed)),
              ('is_over_speed', str(is_over_speed)),
