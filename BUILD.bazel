@@ -1,0 +1,66 @@
+"""Platform daemon wheels, their installed runtime layers and provenance."""
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@sonic_build_infra//python:source_package.bzl", "python_runtime_packages")
+load(":bazel/daemons.bzl", "DAEMONS", "daemon_distribution")
+
+py_binary(
+    name = "wheel_builder",
+    srcs = ["bazel/build_wheel.py"],
+    main = "bazel/build_wheel.py",
+    python_version = "3.13",
+    deps = [
+        "@platform_daemons_build_pip//pytest_runner",
+        "@platform_daemons_build_pip//setuptools",
+        "@platform_daemons_build_pip//wheel",
+    ],
+)
+
+py_binary(
+    name = "ycable_protoc",
+    main_module = "grpc_tools.protoc",
+    python_version = "3.13",
+    deps = ["@platform_daemons_build_pip//grpcio_tools"],
+)
+
+genrule(
+    name = "ycabled_proto",
+    srcs = ["sonic-ycabled/proto/proto_out/linkmgr_grpc_driver.proto"],
+    outs = ["proto_out/linkmgr_grpc_driver_pb2.py", "proto_out/linkmgr_grpc_driver_pb2_grpc.py"],
+    tools = [":ycable_protoc"],
+    cmd = """
+        source=$(location sonic-ycabled/proto/proto_out/linkmgr_grpc_driver.proto)
+        include=$${source%/proto_out/*}
+        $(execpath :ycable_protoc) -I"$$include" --python_out=$(RULEDIR) --grpc_python_out=$(RULEDIR) "$$source"
+    """,
+    visibility = ["//visibility:public"],
+)
+
+[daemon_distribution(name) for name in DAEMONS]
+
+filegroup(
+    name = "daemons.wheels",
+    srcs = [name + ".wheel" for name in DAEMONS],
+    visibility = ["//visibility:public"],
+)
+
+python_runtime_packages(
+    name = "daemons.runtime",
+    deps = [name + ".runtime" for name in DAEMONS],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "daemons.runtime_metadata",
+    srcs = [":daemons.runtime"],
+    output_group = "metadata",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "test_sources",
+    srcs = glob(["sonic-*/**/*.py", "sonic-*/scripts/*", "sonic-*/tests/**", "sonic-*/pytest.ini", "sonic-*/setup.cfg"], exclude = ["**/*.pyc", "**/__pycache__/**"]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(glob(["sonic-*/setup.py"]) + ["bazel/requirements-codegen-lock.txt"])

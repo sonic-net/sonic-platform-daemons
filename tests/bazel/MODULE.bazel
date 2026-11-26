@@ -1,0 +1,68 @@
+# Test-only application root. Production images consume the platform-common
+# module directly; they do not acquire a dependency back on sonic-buildimage.
+module(name = "sonic_platform_daemons_tests")
+
+bazel_dep(name = "sonic-platform-daemons", version = "1.0.1-49e2a1b497edc8e5678bbd0e46976384d10aed5b", repo_name = "sonic_platform_daemons")
+local_path_override(module_name = "sonic-platform-daemons", path = "../..")
+
+# The isolated test application consumes the published platform API owner.
+bazel_dep(name = "sonic-platform-common", version = "1.0.1-74d0685cf303b1a08099b378d2428f4a8e6d85e0", repo_name = "sonic_platform_common")
+
+bazel_dep(name = "sonic-buildimage", version = "0.0.0", repo_name = "sonic_buildimage")
+# Exercise the installed image wheels without resolving the installer's P4,
+# kernel and container dependencies. Both helpers and wheel rules come from
+# the same immutable archive as the original daemon test application.
+archive_override(
+    module_name = "sonic-buildimage",
+    urls = ["https://github.com/securely1g/sonic-buildimage/archive/c743d7521e80fc1733e5cc0ffc24889b08f78444.tar.gz"],
+    integrity = "sha256-oOKTQ3eYGtQ147/NWxok3CX5NzeUkGp2KsIbQJbVhFs=",
+    strip_prefix = "sonic-buildimage-c743d7521e80fc1733e5cc0ffc24889b08f78444",
+    files = {
+        "MODULE.bazel": "//:buildimage.MODULE.bazel",
+        "tools/bazel/tests/BUILD.bazel": "//:wheel_helpers.BUILD.bazel",
+    },
+)
+
+bazel_dep(name = "rules_python", version = "1.9.0.sonic.2")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "patchelf", version = "0.18.0.bcr.1")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "sonic-build-infra", version = "0.0.45-77ef625a4ddafc8cdc15f3cc6aee31eabac8a5de", repo_name = "sonic_build_infra")
+bazel_dep(name = "sonic-swss-common", version = "0.0.8-2a4ddd070edb719f2e969a880a5cfff711e64e72", repo_name = "sonic_swss_common")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.13",
+)
+python.toolchain(python_version = "3.11")
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    hub_name = "daemon_tests_pip",
+    python_version = "3.13",
+    requirements_lock = "//:requirements_lock.txt",
+)
+use_repo(pip, "daemon_tests_pip")
+
+# The image's Rust extension requires a root tag even for Python-only tests.
+# No Rust target participates in this test application.
+bazel_dep(name = "rules_rs", version = "0.1.0")
+
+rust = use_extension("@rules_rs//rs:rules_rust_reexported_extensions.bzl", "rust")
+rust.toolchain(versions = [])
+
+# All test application owners use the selected producer's reviewed APT graph.
+bazel_dep(name = "rules_distroless", version = "0.9.4.sonic.26")
+apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
+apt.import_lock(
+    lock = "@sonic_build_infra//apt:apt.lock.json",
+    requests = "@sonic_build_infra//apt:requests.json",
+    sources = "@sonic_build_infra//apt:sources.json",
+)
+
+pip.parse(hub_name = "daemon_codegen_pip", python_version = "3.13", requirements_lock = "@sonic_platform_daemons//:bazel/requirements-codegen-lock.txt")
+use_repo(pip, "daemon_codegen_pip")
+
+# The original Azure suites explicitly install the legacy SWSS SDK wheel.
+bazel_dep(name = "sonic-py-swsssdk", version = "2.0.1-5878f93779df1bfdfe58ea00c8d34fe8261d362e", repo_name = "sonic_py_swsssdk")

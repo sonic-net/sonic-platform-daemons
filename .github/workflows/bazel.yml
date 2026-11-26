@@ -1,0 +1,86 @@
+name: Bazel platform-daemons
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Platform-daemons source and installation (AMD64)
+    runs-on: ubuntu-24.04
+    container: debian:trixie-20260918@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
+    env:
+      BAZEL_TEST_OUTPUT_BASE: /tmp/platform-daemons-tests
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install execution tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends binutils binutils-gold build-essential ca-certificates curl git patch pkg-config python3 tar unzip zstd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-version: 1.29.0
+          bazelisk-cache: true
+          repository-cache: true
+          disk-cache: platform-daemons-amd64
+          cache-version: "8.5.1"
+      - name: Prepare verified gzip inputs for the installation tests
+        env:
+          REGISTRY_SOURCE: https://raw.githubusercontent.com/sonic-net/sonic-bazel-registry/2d5a28673ab6af079d28524c22de93f29ea517e5
+        run: |
+          archive_tools="$RUNNER_TEMP/cosmos-4.0.2"
+          mkdir -p "$archive_tools"
+          curl --fail --silent --show-error --retry 3 "$REGISTRY_SOURCE/ci/github_sources.py" -o "$archive_tools/github_sources.py"
+          curl --fail --silent --show-error --retry 3 "$REGISTRY_SOURCE/ci/github_sources/cosmos-4.0.2.json" -o "$archive_tools/manifest.json"
+          python3 "$archive_tools/github_sources.py" --manifest "$archive_tools/manifest.json" \
+            --distdir "$archive_tools/distdir" --cache-dir "$archive_tools/cache" \
+            --receipt "$archive_tools/verified.json"
+          printf 'common --distdir=%s/distdir\n' "$archive_tools" >> tests/bazel/.bazelrc.user
+      - name: Build public installations and run original source suites
+        env:
+          BAZELISK_GITHUB_TOKEN: ""
+        run: |
+          test "$(bazel --version)" = "bazel 8.5.1"
+          test "$(uname -m)" = x86_64
+          test "$(. /etc/os-release; echo "$VERSION_CODENAME")" = trixie
+          bazel build //:daemons.wheels //:daemons.runtime //:daemons.runtime_metadata
+          (
+            cd tests/bazel
+            test "$(bazel --version)" = "bazel 8.5.1"
+            # The collector hashes the public outputs from this workspace after the tests.
+            bazel --output_base="$BAZEL_TEST_OUTPUT_BASE" test \
+              @sonic_platform_daemons//:daemons.wheels \
+              @sonic_platform_daemons//:daemons.runtime \
+              @sonic_platform_daemons//:daemons.runtime_metadata \
+              //:chassisd_test //:ledd_test //:pcied_test //:psud_test \
+              //:syseepromd_test //:thermalctld_test //:xcvrd_test //:ycabled_test \
+              //:sensormond_test //:stormond_test //:bmcctld_test //:installed_runtime_test \
+              --local_test_jobs=1
+          )
+          git -c safe.directory="$GITHUB_WORKSPACE" diff --exit-code
+      - name: Collect installation and test evidence
+        if: always()
+        env:
+          BAZELISK_GITHUB_TOKEN: ""
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tests/bazel/collect_evidence.py
+      - name: Upload installation and test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sonic-platform-daemons-amd64
+          path: bazel-evidence
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
