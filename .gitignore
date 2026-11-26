@@ -36,3 +36,9 @@ debian/*.substvars
 debian/*.debhelper.log
 debian/Cargo.lock.pinned
 debian/sonic-*-rs/
+# Bazel outputs and validation artifacts
+/bazel-*
+/MODULE.bazel.lock
+/bazel-evidence/
+/tests/bazel/bazel-*
+/tests/bazel/MODULE.bazel.lock

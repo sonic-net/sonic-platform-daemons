@@ -6863,8 +6863,12 @@ class TestYCableScript(object):
             patched_util.get_asic_id_for_logical_port.return_value = 0
             (channel, stub) = setup_grpc_channel_for_port("Ethernet0", "192.168.0.1", asic_index, grpc_client, False)
 
-        assert(stub == True)
-        assert(channel != None)
+        try:
+            assert(stub == True)
+            assert(channel != None)
+        finally:
+            if channel is not None:
+                channel.close()
 
     @patch('proto_out.linkmgr_grpc_driver_pb2_grpc.DualToRActiveStub', MagicMock(return_value=True))
     def test_setup_grpc_channel_for_port_get_false(self):
@@ -6888,8 +6892,12 @@ class TestYCableScript(object):
             patched_util.get_asic_id_for_logical_port.return_value = 0
             (channel, stub) = setup_grpc_channel_for_port("Ethernet0", "192.168.0.1", asic_index, grpc_client, False)
 
-        assert(stub == True)
-        assert(channel != None)
+        try:
+            assert(stub == True)
+            assert(channel != None)
+        finally:
+            if channel is not None:
+                channel.close()
 
 
 

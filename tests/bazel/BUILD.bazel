@@ -1,0 +1,169 @@
+load("@daemon_tests_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+_OWNER_WHEELS = ["@sonic_platform_daemons//:sonic-" + name + ".wheel" for name in [
+    "bmcctld", "chassisd", "ledd", "pcied", "psud", "sensormond",
+    "stormond", "syseepromd", "thermalctld", "xcvrd", "ycabled",
+]]
+
+_TEST_RUNTIME_FILES = [
+    "@patchelf//:patchelf",
+    "@sonic_swss_common//tools/bazel/runtime:test_runtime",
+]
+_TEST_RUNTIME_ARGS = [
+    "$(rootpath @patchelf//:patchelf)",
+    "$(rootpath @sonic_swss_common//tools/bazel/runtime:test_runtime)",
+    "-",
+    "enabled",
+]
+
+_RUNTIME_DEPS = [
+    "@sonic_py_swsssdk//:swsssdk",
+    "@sonic_platform_common//:sonic_platform_common",
+    "@sonic_buildimage//src/sonic-config-engine:sonic_config_engine",
+    "@sonic_buildimage//src/sonic-py-common:sonic_py_common",
+    "@daemon_codegen_pip//grpcio",
+    "@daemon_codegen_pip//protobuf",
+]
+
+py_binary(
+    name = "unit_runner",
+    testonly = True,
+    srcs = ["unit_runner.py"],
+    data = ["@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    legacy_create_init = False,
+    python_version = "3.13",
+    deps = _RUNTIME_DEPS + [requirement("mock"), requirement("pytest"), requirement("pytest-cov")],
+)
+
+sh_test(
+    name = "chassisd_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-chassisd/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-chassisd/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "ledd_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-ledd/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-ledd/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "pcied_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-pcied/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-pcied/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "psud_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-psud/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-psud/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "syseepromd_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-syseepromd/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-syseepromd/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "thermalctld_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-thermalctld/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-thermalctld/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "xcvrd_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-xcvrd/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-xcvrd/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "ycabled_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-ycabled/setup.py)', '$(rootpath @sonic_platform_daemons//:proto_out/linkmgr_grpc_driver_pb2.py)', '$(rootpath @sonic_platform_daemons//:proto_out/linkmgr_grpc_driver_pb2_grpc.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-ycabled/setup.py', '@sonic_platform_daemons//:proto_out/linkmgr_grpc_driver_pb2.py', '@sonic_platform_daemons//:proto_out/linkmgr_grpc_driver_pb2_grpc.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "sensormond_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-sensormond/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-sensormond/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "stormond_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-stormond/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-stormond/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+sh_test(
+    name = "bmcctld_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :unit_runner)', '$(rootpath @sonic_platform_daemons//:sonic-bmcctld/setup.py)'],
+    data = _TEST_RUNTIME_FILES + ['@sonic_platform_daemons//:sonic-bmcctld/setup.py', ":unit_runner", "@sonic_platform_daemons//:test_sources", "@sonic_platform_daemons//:ycabled_proto"],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+py_binary(
+    name = "installed_runtime_runner",
+    testonly = True,
+    srcs = ["installed_runtime_test.py"],
+    main = "installed_runtime_test.py",
+    legacy_create_init = False,
+    python_version = "3.13",
+    deps = _RUNTIME_DEPS + [requirement("blkinfo"), "@sonic_buildimage//tools/bazel/tests:wheel_test_helpers"],
+    data = ['@sonic_buildimage//src/sonic-py-common:sonic_py_common_wheel', '@sonic_buildimage//src/sonic-config-engine:sonic_config_engine_wheel', '@sonic_buildimage//src/sonic-yang-mgmt:sonic_yang_mgmt_wheel', '@sonic_platform_common//:sonic_platform_common_wheel', '@sonic_platform_daemons//:sonic-chassisd.runtime', '@sonic_platform_daemons//:sonic-chassisd.runtime_metadata', '@sonic_platform_daemons//:sonic-ledd.runtime', '@sonic_platform_daemons//:sonic-ledd.runtime_metadata', '@sonic_platform_daemons//:sonic-pcied.runtime', '@sonic_platform_daemons//:sonic-pcied.runtime_metadata', '@sonic_platform_daemons//:sonic-psud.runtime', '@sonic_platform_daemons//:sonic-psud.runtime_metadata', '@sonic_platform_daemons//:sonic-syseepromd.runtime', '@sonic_platform_daemons//:sonic-syseepromd.runtime_metadata', '@sonic_platform_daemons//:sonic-thermalctld.runtime', '@sonic_platform_daemons//:sonic-thermalctld.runtime_metadata', '@sonic_platform_daemons//:sonic-xcvrd.runtime', '@sonic_platform_daemons//:sonic-xcvrd.runtime_metadata', '@sonic_platform_daemons//:sonic-ycabled.runtime', '@sonic_platform_daemons//:sonic-ycabled.runtime_metadata', '@sonic_platform_daemons//:sonic-sensormond.runtime', '@sonic_platform_daemons//:sonic-sensormond.runtime_metadata', '@sonic_platform_daemons//:sonic-stormond.runtime', '@sonic_platform_daemons//:sonic-stormond.runtime_metadata', '@sonic_platform_daemons//:sonic-bmcctld.runtime', '@sonic_platform_daemons//:sonic-bmcctld.runtime_metadata', '@sonic_platform_daemons//:test_sources'],
+)
+
+sh_test(
+    name = "installed_runtime_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["@sonic_swss_common//tools/bazel/runtime:run_with_runtime.py"],
+    args = _TEST_RUNTIME_ARGS + ['$(rootpath :installed_runtime_runner)', '--source=$(rootpath @sonic_platform_daemons//:sonic-ledd/setup.py)', '--dependency-wheel=$(rootpath @sonic_buildimage//src/sonic-py-common:sonic_py_common_wheel)', '--dependency-wheel=$(rootpath @sonic_buildimage//src/sonic-config-engine:sonic_config_engine_wheel)', '--dependency-wheel=$(rootpath @sonic_buildimage//src/sonic-yang-mgmt:sonic_yang_mgmt_wheel)', '--dependency-wheel=$(rootpath @sonic_platform_common//:sonic_platform_common_wheel)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-chassisd.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-chassisd.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-ledd.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-ledd.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-pcied.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-pcied.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-psud.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-psud.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-syseepromd.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-syseepromd.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-thermalctld.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-thermalctld.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-xcvrd.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-xcvrd.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-ycabled.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-ycabled.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-sensormond.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-sensormond.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-stormond.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-stormond.runtime_metadata)', '--runtime=$(rootpath @sonic_platform_daemons//:sonic-bmcctld.runtime)', '--metadata=$(rootpath @sonic_platform_daemons//:sonic-bmcctld.runtime_metadata)'] + ["--owner-wheel=$(rootpath " + wheel + ")" for wheel in _OWNER_WHEELS],
+    data = _TEST_RUNTIME_FILES + _OWNER_WHEELS + ["@sonic_platform_daemons//:sonic-ledd/setup.py", '@sonic_buildimage//src/sonic-py-common:sonic_py_common_wheel', '@sonic_buildimage//src/sonic-config-engine:sonic_config_engine_wheel', '@sonic_buildimage//src/sonic-yang-mgmt:sonic_yang_mgmt_wheel', '@sonic_platform_common//:sonic_platform_common_wheel', '@sonic_platform_daemons//:sonic-chassisd.runtime', '@sonic_platform_daemons//:sonic-chassisd.runtime_metadata', '@sonic_platform_daemons//:sonic-ledd.runtime', '@sonic_platform_daemons//:sonic-ledd.runtime_metadata', '@sonic_platform_daemons//:sonic-pcied.runtime', '@sonic_platform_daemons//:sonic-pcied.runtime_metadata', '@sonic_platform_daemons//:sonic-psud.runtime', '@sonic_platform_daemons//:sonic-psud.runtime_metadata', '@sonic_platform_daemons//:sonic-syseepromd.runtime', '@sonic_platform_daemons//:sonic-syseepromd.runtime_metadata', '@sonic_platform_daemons//:sonic-thermalctld.runtime', '@sonic_platform_daemons//:sonic-thermalctld.runtime_metadata', '@sonic_platform_daemons//:sonic-xcvrd.runtime', '@sonic_platform_daemons//:sonic-xcvrd.runtime_metadata', '@sonic_platform_daemons//:sonic-ycabled.runtime', '@sonic_platform_daemons//:sonic-ycabled.runtime_metadata', '@sonic_platform_daemons//:sonic-sensormond.runtime', '@sonic_platform_daemons//:sonic-sensormond.runtime_metadata', '@sonic_platform_daemons//:sonic-stormond.runtime', '@sonic_platform_daemons//:sonic-stormond.runtime_metadata', '@sonic_platform_daemons//:sonic-bmcctld.runtime', '@sonic_platform_daemons//:sonic-bmcctld.runtime_metadata', ':installed_runtime_runner', '@sonic_platform_daemons//:test_sources'],
+    target_compatible_with = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
