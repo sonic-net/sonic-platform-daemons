@@ -316,6 +316,55 @@ class TestYcableScript(object):
         rc = handle_state_update_task(op, port, fvp_dict, y_cable_presence, port_tbl, port_tbl_keys, loopback_tbl, loopback_keys, hw_mux_cable_tbl, hw_mux_cable_tbl_peer, y_cable_tbl, static_tbl, mux_tbl, grpc_client, fwd_state_response_tbl, state_db, stopping_event)
         assert(rc == None)
 
+    def test_handle_state_update_task_ignores_update_for_initialized_y_cable(self):
+        fvp_dict = {
+            'type': 'QSFP-DD',
+            'manufacturer': 'microsoft',
+            'active_apsel_hostlane1': '1',
+            'host_lane_count': '8',
+            'media_lane_count': '4',
+        }
+
+        with patch(
+                'ycable.ycable_utilities.y_cable_helper.is_initialized_y_cable',
+                return_value=True), patch(
+                'ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event') as change_status:
+            handle_state_update_task(
+                swsscommon.SET_COMMAND, "Ethernet0", fvp_dict, False,
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, None)
+
+        change_status.assert_not_called()
+
+    def test_handle_state_update_task_processes_update_for_uninitialized_y_cable(self):
+        fvp_dict = {
+            'type': 'QSFP-DD',
+            'manufacturer': 'microsoft',
+            'active_apsel_hostlane1': '1',
+        }
+
+        with patch(
+                'ycable.ycable_utilities.y_cable_helper.is_initialized_y_cable',
+                return_value=False), patch(
+                'ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event') as change_status:
+            handle_state_update_task(
+                swsscommon.SET_COMMAND, "Ethernet0", fvp_dict, False,
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, None)
+
+        change_status.assert_called_once()
+
+    def test_handle_state_update_task_retries_cmis_update_after_failed_y_cable_init(self):
+        fvp_dict = {'active_apsel_hostlane1': '1'}
+
+        with patch(
+                'ycable.ycable_utilities.y_cable_helper.is_initialized_y_cable',
+                return_value=False), patch(
+                'ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event') as change_status:
+            handle_state_update_task(
+                swsscommon.SET_COMMAND, "Ethernet0", fvp_dict, False,
+                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, None)
+
+        change_status.assert_called_once()
+
 
     @patch('ycable.ycable_utilities.y_cable_helper.change_ports_status_for_y_cable_change_event', MagicMock(return_value=0))
     def test_handle_state_update_task_with_delete(self):
@@ -440,6 +489,29 @@ class TestYcableAsyncScript(object):
 
 class TestYcableActiveActiveHelper(object):
 
+    def test_get_soc_ip_for_grpc_prefers_ipv4(self):
+        soc_ip, soc_ip_field = get_soc_ip_for_grpc({
+            'soc_ipv4': '192.168.0.1/32',
+            'soc_ipv6': 'fc02:1000::1/128'
+        })
+
+        assert(soc_ip == '192.168.0.1')
+        assert(soc_ip_field == 'soc_ipv4')
+
+    def test_get_soc_ip_for_grpc_falls_back_to_ipv6(self):
+        soc_ip, soc_ip_field = get_soc_ip_for_grpc({
+            'soc_ipv6': 'fc02:1000::1/128'
+        })
+
+        assert(soc_ip == 'fc02:1000::1')
+        assert(soc_ip_field == 'soc_ipv6')
+
+    def test_format_grpc_target_for_ipv6(self):
+        assert(format_grpc_target('fc02:1000::1', GRPC_PORT) == '[fc02:1000::1]:50075')
+
+    def test_format_grpc_target_for_ipv4(self):
+        assert(format_grpc_target('192.168.0.1', GRPC_PORT) == '192.168.0.1:50075')
+
     @patch("ycable.ycable.platform_sfputil")
     def test_check_presence_for_active_active_cable_type(self, sfputil):
 
@@ -482,4 +554,3 @@ class TestYcableActiveActiveHelper(object):
         rc = check_presence_for_active_active_cable_type(y_cable_tbl)
 
         assert(rc == True)
-

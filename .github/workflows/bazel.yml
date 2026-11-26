@@ -35,6 +35,18 @@ jobs:
           repository-cache: true
           disk-cache: platform-daemons-amd64
           cache-version: "8.5.1"
+      - name: Prepare verified gzip inputs for the installation tests
+        env:
+          REGISTRY_SOURCE: https://raw.githubusercontent.com/sonic-net/sonic-bazel-registry/2d5a28673ab6af079d28524c22de93f29ea517e5
+        run: |
+          archive_tools="$RUNNER_TEMP/cosmos-4.0.2"
+          mkdir -p "$archive_tools"
+          curl --fail --silent --show-error --retry 3 "$REGISTRY_SOURCE/ci/github_sources.py" -o "$archive_tools/github_sources.py"
+          curl --fail --silent --show-error --retry 3 "$REGISTRY_SOURCE/ci/github_sources/cosmos-4.0.2.json" -o "$archive_tools/manifest.json"
+          python3 "$archive_tools/github_sources.py" --manifest "$archive_tools/manifest.json" \
+            --distdir "$archive_tools/distdir" --cache-dir "$archive_tools/cache" \
+            --receipt "$archive_tools/verified.json"
+          printf 'common --distdir=%s/distdir\n' "$archive_tools" >> tests/bazel/.bazelrc.user
       - name: Build public installations and run original source suites
         env:
           BAZELISK_GITHUB_TOKEN: ""

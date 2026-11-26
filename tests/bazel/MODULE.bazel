@@ -2,66 +2,33 @@
 # module directly; they do not acquire a dependency back on sonic-buildimage.
 module(name = "sonic_platform_daemons_tests")
 
-bazel_dep(name = "sonic-platform-daemons", version = "1.0.0", repo_name = "sonic_platform_daemons")
+bazel_dep(name = "sonic-platform-daemons", version = "1.0.1-49e2a1b497edc8e5678bbd0e46976384d10aed5b", repo_name = "sonic_platform_daemons")
 local_path_override(module_name = "sonic-platform-daemons", path = "../..")
 
 # The isolated test application consumes the published platform API owner.
-bazel_dep(name = "sonic-platform-common", version = "1.0.1-ccb4645c60863d9949549bb233134150764e98a0", repo_name = "sonic_platform_common")
+bazel_dep(name = "sonic-platform-common", version = "1.0.1-74d0685cf303b1a08099b378d2428f4a8e6d85e0", repo_name = "sonic_platform_common")
 
 bazel_dep(name = "sonic-buildimage", version = "0.0.0", repo_name = "sonic_buildimage")
-git_override(
+# Exercise the installed image wheels without resolving the installer's P4,
+# kernel and container dependencies. Both helpers and wheel rules come from
+# the same immutable archive as the original daemon test application.
+archive_override(
     module_name = "sonic-buildimage",
-    commit = "c743d7521e80fc1733e5cc0ffc24889b08f78444",
-    remote = "https://github.com/securely1g/sonic-buildimage.git",
-)
-
-# Preserve the tested image root's explicit overrides, which are not inherited.
-single_version_override(
-    module_name = "sonic-swss",
-    version = "0.0.3-9c3797990d4b5a79100a40fe7689927c18212361",
-)
-
-single_version_override(
-    module_name = "rules_go",
-    version = "0.65.0.sonic.2",
-)
-
-single_version_override(
-    module_name = "rules_cc",
-    version = "0.2.20",
-)
-
-single_version_override(
-    module_name = "tar.bzl",
-    version = "0.10.5.sonic.2",
-)
-
-single_version_override(
-    module_name = "libnl3",
-    version = "3.7.0.sonic.10",
-)
-
-single_version_override(
-    module_name = "re2",
-    version = "2024-07-02.bcr.1",
-)
-
-single_version_override(
-    module_name = "sonic-build-infra",
-    version = "0.0.44-35726399908a3beb947174e9359f902077928289",
-)
-
-single_version_override(
-    module_name = "sonic-rust-deps",
-    version = "0.0.5-5bf69bc0a7d9ea9f4a5606264be592867cd29d1e",
+    urls = ["https://github.com/securely1g/sonic-buildimage/archive/c743d7521e80fc1733e5cc0ffc24889b08f78444.tar.gz"],
+    integrity = "sha256-oOKTQ3eYGtQ147/NWxok3CX5NzeUkGp2KsIbQJbVhFs=",
+    strip_prefix = "sonic-buildimage-c743d7521e80fc1733e5cc0ffc24889b08f78444",
+    files = {
+        "MODULE.bazel": "//:buildimage.MODULE.bazel",
+        "tools/bazel/tests/BUILD.bazel": "//:wheel_helpers.BUILD.bazel",
+    },
 )
 
 bazel_dep(name = "rules_python", version = "1.9.0.sonic.2")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "patchelf", version = "0.18.0.bcr.1")
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "sonic-build-infra", version = "0.0.44-35726399908a3beb947174e9359f902077928289", repo_name = "sonic_build_infra")
-bazel_dep(name = "sonic-swss-common", version = "0.0.9-334389eae54afd1f4f5ee69f89c3a7ad2062ee61", repo_name = "sonic_swss_common")
+bazel_dep(name = "sonic-build-infra", version = "0.0.45-77ef625a4ddafc8cdc15f3cc6aee31eabac8a5de", repo_name = "sonic_build_infra")
+bazel_dep(name = "sonic-swss-common", version = "0.0.8-2a4ddd070edb719f2e969a880a5cfff711e64e72", repo_name = "sonic_swss_common")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(

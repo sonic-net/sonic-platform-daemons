@@ -1,9 +1,14 @@
+from collections import namedtuple
+
 try:
     from sonic_py_common import daemon_base, logger
     from sonic_py_common import multi_asic
     from swsscommon import swsscommon
 except ImportError as e:
     raise ImportError(str(e) + " - required module not found")
+
+# The latched flag table of a data family together with its metadata tables
+FlagTables = namedtuple('FlagTables', ['flag_tbl', 'change_count_tbl', 'set_time_tbl', 'clear_time_tbl'])
 
 SYSLOG_IDENTIFIER = "xcvrd"
 helper_logger = logger.Logger(SYSLOG_IDENTIFIER)
@@ -76,6 +81,7 @@ class XcvrTableHelper:
         self.vdm_flag_change_count_tbl = {f'vdm_{t}_flag_change_count_tbl': {} for t in VDM_THRESHOLD_TYPES}
         self.vdm_flag_set_time_tbl = {f'vdm_{t}_flag_set_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
         self.vdm_flag_clear_time_tbl = {f'vdm_{t}_flag_clear_time_tbl': {} for t in VDM_THRESHOLD_TYPES}
+        self._gearbox_line_lanes_dict = None
         for namespace in namespaces:
             asic_id = multi_asic.get_asic_index_from_namespace(namespace)
             self.state_db[asic_id] = daemon_base.db_connect("STATE_DB", namespace)
@@ -174,6 +180,94 @@ class XcvrTableHelper:
     def get_firmware_info_tbl(self, asic_id):
         return self.firmware_info_tbl[asic_id]
 
+    def get_dom_flag_tables(self, asic_id):
+        """Returns the DOM flag table and its metadata tables as a FlagTables group."""
+        return FlagTables(self.get_dom_flag_tbl(asic_id),
+                          self.get_dom_flag_change_count_tbl(asic_id),
+                          self.get_dom_flag_set_time_tbl(asic_id),
+                          self.get_dom_flag_clear_time_tbl(asic_id))
+
+    def get_status_flag_tables(self, asic_id):
+        """Returns the transceiver status flag table and its metadata tables as a FlagTables group."""
+        return FlagTables(self.get_status_flag_tbl(asic_id),
+                          self.get_status_flag_change_count_tbl(asic_id),
+                          self.get_status_flag_set_time_tbl(asic_id),
+                          self.get_status_flag_clear_time_tbl(asic_id))
+
+    def get_vdm_flag_tables(self, asic_id, threshold_type):
+        """Returns the VDM flag table of the given threshold type and its metadata tables as a FlagTables group."""
+        return FlagTables(self.get_vdm_flag_tbl(asic_id, threshold_type),
+                          self.get_vdm_flag_change_count_tbl(asic_id, threshold_type),
+                          self.get_vdm_flag_set_time_tbl(asic_id, threshold_type),
+                          self.get_vdm_flag_clear_time_tbl(asic_id, threshold_type))
+
+    def get_dom_tables(self, asic_id, include_thresholds):
+        """Returns the tables holding DOM data, including PM and firmware info.
+
+        Args:
+            asic_id (int): the asic index to get the tables for
+            include_thresholds (bool): also include TRANSCEIVER_DOM_THRESHOLD, which
+                is owned by SfpStateUpdateTask.
+        """
+        tables = [
+            self.get_dom_tbl(asic_id),
+            self.get_dom_temperature_tbl(asic_id),
+            self.get_dom_flag_tbl(asic_id),
+            self.get_dom_flag_change_count_tbl(asic_id),
+            self.get_dom_flag_set_time_tbl(asic_id),
+            self.get_dom_flag_clear_time_tbl(asic_id),
+            self.get_pm_tbl(asic_id),
+            self.get_firmware_info_tbl(asic_id),
+        ]
+        if include_thresholds:
+            tables.append(self.get_dom_threshold_tbl(asic_id))
+        return tables
+
+    def get_vdm_tables(self, asic_id, include_thresholds):
+        """Returns the tables holding VDM data.
+
+        Args:
+            asic_id (int): the asic index to get the tables for
+            include_thresholds (bool): also include the TRANSCEIVER_VDM_XXX_THRESHOLD
+                tables, which are owned by SfpStateUpdateTask.
+        """
+        tables = [
+            self.get_vdm_real_value_tbl(asic_id),
+            *[self.get_vdm_flag_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_change_count_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_set_time_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+            *[self.get_vdm_flag_clear_time_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES],
+        ]
+        if include_thresholds:
+            tables.extend(self.get_vdm_threshold_tbl(asic_id, key) for key in VDM_THRESHOLD_TYPES)
+        return tables
+
+    def get_status_tables(self, asic_id, include_sw, include_status_tbl=True, include_flags=True):
+        """Returns the tables holding transceiver status data.
+
+        Args:
+            asic_id (int): the asic index to get the tables for
+            include_sw (bool): also include TRANSCEIVER_STATUS_SW, which holds the
+                SW-driven status/error fields.
+            include_status_tbl (bool): also include TRANSCEIVER_STATUS.
+            include_flags (bool): also include TRANSCEIVER_STATUS_FLAG and its metadata tables.
+        """
+        assert include_sw or include_status_tbl or include_flags
+        tables = []
+        if include_status_tbl:
+            tables.append(self.get_status_tbl(asic_id))
+        if include_flags:
+            tables.extend(self.get_status_flag_tables(asic_id))
+        if include_sw:
+            tables.append(self.get_status_sw_tbl(asic_id))
+        return tables
+
+    def get_info_tables(self, asic_id):
+        """Returns the tables holding static transceiver data (TRANSCEIVER_INFO)."""
+        return [
+            self.get_intf_tbl(asic_id),
+        ]
+
     def get_app_port_tbl(self, asic_id):
         return self.app_port_tbl[asic_id]
 
@@ -248,12 +342,15 @@ class XcvrTableHelper:
 
     def get_gearbox_line_lanes_dict(self):
         """
-        Retrieves the gearbox line lanes dictionary from APPL_DB
+        Retrieves the gearbox line lanes dictionary
 
-        This method scans all ASICs for gearbox interface configurations and extracts
-        the line_lanes count for each logical port. The line_lanes represent the
-        number of lanes on the line side (towards the optical module) which is the
-        correct count to use for CMIS host lane configuration.
+        The line_lanes represent the number of lanes on the line side (towards the
+        optical module) which is the correct count to use for CMIS host lane
+        configuration.
+
+        Gearbox line lanes are static configuration published once by gearsyncd, so
+        the result is cached after gearsyncd has finished (GearboxConfigDone). Until
+        then, APPL_DB is read on every call and the result is not cached.
 
         Returns:
             dict: A dictionary where:
@@ -262,6 +359,28 @@ class XcvrTableHelper:
 
         Example:
             {"Ethernet0": 2, "Ethernet200": 4}
+
+        Note:
+            - Returns empty dict if no gearbox configuration is found
+            - Returns None if the read fails, so callers can retry
+        """
+        if self._gearbox_line_lanes_dict is None:
+            config_done = self.is_gearbox_config_done()
+            lanes = self._read_gearbox_line_lanes_dict()
+            if not config_done or lanes is None:
+                return lanes
+            self._gearbox_line_lanes_dict = lanes
+        return self._gearbox_line_lanes_dict
+
+    def _read_gearbox_line_lanes_dict(self):
+        """
+        Reads the gearbox line lanes dictionary from APPL_DB
+
+        This method scans all ASICs for gearbox interface configurations and extracts
+        the line_lanes count for each logical port.
+
+        Returns:
+            dict: logical port name -> number of line-side lanes, or None if the read fails
 
         Note:
             - Returns empty dict if no gearbox configuration is found
@@ -291,6 +410,31 @@ class XcvrTableHelper:
                                     helper_logger.log_debug("get_gearbox_line_lanes_dict: ASIC {}: Interface {} has empty 'line_lanes' field".format(asic_id, interface_name))
         except Exception as e:
             helper_logger.log_error("Error in get_gearbox_line_lanes_dict: {}".format(str(e)))
-            return gearbox_line_lanes_dict
+            return None
 
         return gearbox_line_lanes_dict
+
+    def is_gearbox_config_done(self):
+        """
+        Checks whether gearsyncd has finished publishing gearbox configuration.
+
+        gearsyncd writes _GEARBOX_TABLE:GearboxConfigDone last (after all phy and
+        interface entries), so its presence indicates the gearbox line lanes data
+        in APPL_DB is complete. GearboxConfigDone is set on every platform
+        (including non-gearbox ones), so this returns True once init completes.
+
+        Returns:
+            bool: True if GearboxConfigDone is present for all ASICs, else False
+        """
+        try:
+            for asic_id in self.appl_db:
+                appl_db = self.appl_db[asic_id]
+                gearbox_table = swsscommon.Table(appl_db, "_GEARBOX_TABLE")
+                (found, _) = gearbox_table.get("GearboxConfigDone")
+                if not found:
+                    return False
+        except Exception as e:
+            helper_logger.log_error("Error in is_gearbox_config_done: {}".format(str(e)))
+            return False
+
+        return True
