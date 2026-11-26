@@ -2,6 +2,8 @@ load("@daemon_tests_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
+exports_files(["buildimage.MODULE.bazel", "wheel_helpers.BUILD.bazel"])
+
 _OWNER_WHEELS = ["@sonic_platform_daemons//:sonic-" + name + ".wheel" for name in [
     "bmcctld", "chassisd", "ledd", "pcied", "psud", "sensormond",
     "stormond", "syseepromd", "thermalctld", "xcvrd", "ycabled",

@@ -1,0 +1,17 @@
+load("@config_engine_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:py_library.bzl", "py_library")
+
+py_library(
+    name = "wheel_test_helpers",
+    testonly = True,
+    srcs = [
+        "integration/installed_wheel_fixture.py",
+        "integration/wheel_contract.py",
+    ],
+    deps = [
+        requirement("installer"),
+        requirement("packaging"),
+        requirement("setuptools"),
+    ],
+    visibility = ["//visibility:public"],
+)
