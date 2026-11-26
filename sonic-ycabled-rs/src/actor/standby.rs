@@ -234,7 +234,7 @@ impl PortActor {
 
     // --- Toggle -------------------------------------------------------------------
 
-    pub(super) async fn toggle_standby(&mut self, f: &FieldMap) {
+    pub(super) async fn toggle_active_standby(&mut self, f: &FieldMap) {
         let time_start = timestamp();
         let Some(new_state) = f.get("state") else {
             log_info!(

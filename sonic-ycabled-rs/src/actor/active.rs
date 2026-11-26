@@ -158,7 +158,7 @@ impl PortActor {
 
     /// orchagent (self) or linkmgrd (peer) asks for a forwarding state: set it
     /// on the SoC and write the result to HW_MUX_CABLE_TABLE(_PEER).
-    pub(super) async fn toggle_active(&mut self, f: &FieldMap, peer: bool) {
+    pub(super) async fn toggle_active_active(&mut self, f: &FieldMap, peer: bool) {
         let time_start = timestamp();
         let (table, side) = if peer {
             (HW_MUX_CABLE_TABLE_PEER, "peer_")

@@ -366,13 +366,13 @@ impl PortActor {
                 self.removal().await
             }
             Msg::Toggle(f) => match self.cable {
-                Some(CableType::ActiveStandby) => self.toggle_standby(&f).await,
-                Some(CableType::ActiveActive) => self.toggle_active(&f, false).await,
+                Some(CableType::ActiveStandby) => self.toggle_active_standby(&f).await,
+                Some(CableType::ActiveActive) => self.toggle_active_active(&f, false).await,
                 None => {}
             },
             Msg::PeerToggle(f) => {
                 if self.cable == Some(CableType::ActiveActive) {
-                    self.toggle_active(&f, true).await
+                    self.toggle_active_active(&f, true).await
                 }
             }
             Msg::MuxProbe(f) => {
