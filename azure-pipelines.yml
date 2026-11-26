@@ -28,7 +28,7 @@ pr:
     include:
       - '*'
 
-pool: sonictest
+pool: sonic-ubuntu-1c
 
 resources:
   containers:
