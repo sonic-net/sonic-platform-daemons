@@ -185,6 +185,7 @@ async fn subscription_replays_rows_then_follows_changes() {
                 (DbId::Appl, "HW_MUX_CABLE_TABLE".into()),
                 (DbId::State, "TRANSCEIVER_INFO".into()),
             ],
+            &[],
             || {},
         )
         .await
@@ -280,6 +281,7 @@ async fn events_keep_their_order_across_tables() {
                 (DbId::Appl, tables[1].into()),
                 (DbId::Appl, tables[2].into()),
             ],
+            &[],
             || {},
         )
         .await
@@ -316,7 +318,7 @@ async fn added_tables_replay_rows_then_follow_changes() {
     )
     .await;
     let (subscriptions, mut rx) = db
-        .subscribe(&[(DbId::State, "TRANSCEIVER_INFO".into())], || {})
+        .subscribe(&[(DbId::State, "TRANSCEIVER_INFO".into())], &[], || {})
         .await
         .unwrap();
     assert!(timeout(Duration::from_millis(300), rx.recv())
@@ -346,6 +348,70 @@ async fn added_tables_replay_rows_then_follow_changes() {
     assert!(subscribers[0].contains(" psub=2 "), "{clients}");
 }
 
+/// A changes-only table gets no rows, when it is subscribed to at first or
+/// added later, only its changes; the other tables still get theirs.
+#[tokio::test]
+async fn changes_only_tables_get_no_rows() {
+    let r = TestRedis::start().await;
+    let db = r.db().await;
+    for table in [
+        "HW_FORWARDING_STATE_PEER",
+        "HW_MUX_CABLE_TABLE",
+        "FORWARDING_STATE_COMMAND",
+        "MUX_CABLE_COMMAND_TABLE",
+    ] {
+        db.set(
+            DbId::Appl,
+            table,
+            "Ethernet0",
+            &[("state", "standby".into())],
+        )
+        .await;
+    }
+    let (subscriptions, mut rx) = db
+        .subscribe(
+            &[
+                (DbId::Appl, "HW_FORWARDING_STATE_PEER".into()),
+                (DbId::Appl, "HW_MUX_CABLE_TABLE".into()),
+            ],
+            &["HW_FORWARDING_STATE_PEER", "FORWARDING_STATE_COMMAND"],
+            || {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(next(&mut rx).await.0, "HW_MUX_CABLE_TABLE");
+    // The other table's row comes once both added tables are subscribed to.
+    subscriptions.add(vec![
+        (DbId::Appl, "FORWARDING_STATE_COMMAND".into()),
+        (DbId::Appl, "MUX_CABLE_COMMAND_TABLE".into()),
+    ]);
+    assert_eq!(next(&mut rx).await.0, "MUX_CABLE_COMMAND_TABLE");
+    let mut c0 = r.client(0);
+    hset(
+        &mut c0,
+        "HW_FORWARDING_STATE_PEER:Ethernet0",
+        "state",
+        "active",
+    );
+    hset(
+        &mut c0,
+        "FORWARDING_STATE_COMMAND:Ethernet0",
+        "command",
+        "probe",
+    );
+    match next(&mut rx).await {
+        (t, Event::Set { key, fields }) => assert_eq!(
+            (t.as_str(), key.as_str(), fields["state"].as_str()),
+            ("HW_FORWARDING_STATE_PEER", "Ethernet0", "active")
+        ),
+        e => panic!("{e:?}"),
+    }
+    assert_eq!(next(&mut rx).await.0, "FORWARDING_STATE_COMMAND");
+    assert!(timeout(Duration::from_millis(300), rx.recv())
+        .await
+        .is_err());
+}
+
 /// Losing the subscription connection runs `on_lost`, which makes ycabled-rs
 /// exit for supervisord to start it again.
 #[tokio::test]
@@ -354,9 +420,13 @@ async fn losing_the_connection_runs_on_lost() {
     let db = r.db().await;
     let (lost_tx, lost_rx) = tokio::sync::oneshot::channel();
     let (_subscriptions, _rx) = db
-        .subscribe(&[(DbId::State, "TRANSCEIVER_INFO".into())], move || {
-            let _ = lost_tx.send(());
-        })
+        .subscribe(
+            &[(DbId::State, "TRANSCEIVER_INFO".into())],
+            &[],
+            move || {
+                let _ = lost_tx.send(());
+            },
+        )
         .await
         .unwrap();
     drop(r);

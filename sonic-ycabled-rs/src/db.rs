@@ -11,14 +11,15 @@
 //! - a subscription is swsscommon's `SubscriberStateTable`: `PSUBSCRIBE` to the
 //!   table's keyspace notifications, then `KEYS` and `HGETALL` of the rows that
 //!   exist; on a notification, `del` deletes the row, anything else reads it
-//!   again and is skipped if it is gone.
+//!   again and is skipped if it is gone. A table can also be subscribed to for
+//!   its changes only: its rows that exist are logged, not delivered.
 //!
 //! Per namespace that is one connection per database and one for all its
 //! subscriptions, whatever the number of ports. The events of all the
 //! subscribed tables come out of one receiver, in the order redis delivered
 //! them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,7 +31,7 @@ use redis::aio::ConnectionManager;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::{log_debug, log_error, log_warning};
+use crate::{log_debug, log_error, log_notice, log_warning};
 
 pub const DATABASE_CONFIG: &str = "/var/run/redis/sonic-db/database_config.json";
 pub const DATABASE_GLOBAL: &str = "/var/run/redis/sonic-db/database_global.json";
@@ -324,13 +325,17 @@ impl RedisDb {
     /// Starts swsscommon-style subscriptions to `tables`, on one connection.
     /// Every table's rows that exist come first, in this order; then the
     /// changes of all tables, in the order redis delivered them, so a port's
-    /// requests keep their order across tables. `on_lost` runs if the
+    /// requests keep their order across tables. The tables named in
+    /// `changes_only`, here or added later, get only their changes: their
+    /// rows that exist are logged, not delivered. `on_lost` runs if the
     /// connection is lost, or if redis refuses a table added later.
     pub async fn subscribe(
         self: &Arc<Self>,
         tables: &[(DbId, String)],
+        changes_only: &[&str],
         on_lost: impl FnOnce() + Send + 'static,
     ) -> Result<(Subscriptions, mpsc::UnboundedReceiver<TableEvent>)> {
+        let changes_only: HashSet<String> = changes_only.iter().map(|t| t.to_string()).collect();
         // The pub/sub connection is not tied to a database: the keyspace
         // channels carry the DB id.
         let client = redis::Client::open(redis_url(self.location(DbId::Config)))?;
@@ -340,7 +345,7 @@ impl RedisDb {
         let mut stream = stream.ready_chunks(SUBSCRIPTION_BATCH);
         let (tx, rx) = mpsc::unbounded_channel();
         let mut patterns = HashMap::new();
-        self.start_tables(&mut sink, &mut patterns, tables, &tx)
+        self.start_tables(&mut sink, &mut patterns, tables, &changes_only, &tx)
             .await?;
         let (add_tx, mut add_rx) = mpsc::unbounded_channel::<Vec<(DbId, String)>>();
         let this = Arc::clone(self);
@@ -352,7 +357,7 @@ impl RedisDb {
                 tokio::select! {
                     tables = add_rx.recv(), if adding => match tables {
                         Some(tables) => {
-                            if let Err(e) = this.start_tables(&mut sink, &mut patterns, &tables, &tx).await {
+                            if let Err(e) = this.start_tables(&mut sink, &mut patterns, &tables, &changes_only, &tx).await {
                                 log_error!("Failed to subscribe to more tables: {:#}", e);
                                 break;
                             }
@@ -376,12 +381,14 @@ impl RedisDb {
         Ok((Subscriptions { add: add_tx }, rx))
     }
 
-    /// Subscribes to `tables`, then sends the rows they have.
+    /// Subscribes to `tables`, then sends the rows they have, but those of
+    /// the tables in `changes_only`.
     async fn start_tables(
         &self,
         sink: &mut redis::aio::PubSubSink,
         patterns: &mut HashMap<String, (DbId, String)>,
         tables: &[(DbId, String)],
+        changes_only: &HashSet<String>,
         tx: &mpsc::UnboundedSender<TableEvent>,
     ) -> Result<()> {
         for (db, table) in tables {
@@ -392,9 +399,21 @@ impl RedisDb {
         }
         // The rows that exist, once every subscription is in place.
         for (db, table) in tables {
+            let replay = !changes_only.contains(table);
             for key in self.keys(*db, table).await {
                 if let Some(fields) = self.get(*db, table, &key).await {
-                    let _ = tx.send((table.clone(), Event::Set { key, fields }));
+                    if replay {
+                        let _ = tx.send((table.clone(), Event::Set { key, fields }));
+                    } else {
+                        let sorted: BTreeMap<_, _> = fields.iter().collect();
+                        log_notice!(
+                            "Not replaying {} {} {:?}: only the changes of {} are subscribed to",
+                            db.name(),
+                            table_key(self.location(*db), table, &key),
+                            sorted,
+                            table
+                        );
+                    }
                 }
             }
         }
@@ -512,8 +531,9 @@ pub struct Subscriptions {
 }
 
 impl Subscriptions {
-    /// Subscribes to more tables: their rows, then their changes, in order
-    /// with the other tables' events.
+    /// Subscribes to more tables: their rows, but for the subscription's
+    /// changes-only tables, then their changes, in order with the other
+    /// tables' events.
     pub fn add(&self, tables: Vec<(DbId, String)>) {
         let _ = self.add.send(tables);
     }

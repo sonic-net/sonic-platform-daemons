@@ -20,7 +20,7 @@ use crate::db::{Db, DbId, RedisDb};
 use crate::grpc::SocConnector;
 use crate::ports::PortMap;
 use crate::schema::*;
-use crate::testing::{fm, MockCable, MockConnector, MockPlatform};
+use crate::testing::{fm, MockCable, MockConnector, MockPlatform, MockSoc};
 
 fn pending(
     port: &str,
@@ -239,4 +239,79 @@ async fn request_replayed_ahead_of_its_port_insertion_is_answered() {
         "{:?}",
         platform.loads()
     );
+}
+
+/// A peer toggle that is in HW_FORWARDING_STATE_PEER when the mux tables are
+/// subscribed to is not acted on: linkmgrd never clears the row, so it may be
+/// stale. A peer toggle written afterwards is. Ethernet0 becomes an
+/// active-active port of the lower ToR after startup, which subscribes to the
+/// mux tables; a replayed forwarding state probe shows when they are.
+#[tokio::test]
+async fn peer_toggle_from_before_the_subscription_is_not_acted_on() {
+    let r = TestRedis::start().await;
+    let db = r.db().await;
+    let soc = MockSoc::new();
+    let shared = Shared::new(
+        db.clone() as Arc<dyn Db>,
+        MockPlatform::new() as Arc<dyn YCablePlatform>,
+        MockConnector::new(Some(Arc::clone(&soc))) as Arc<dyn SocConnector>,
+        false,
+        0,
+        Arc::new(AtomicBool::new(false)),
+    );
+    let ns = Namespace::new(String::new(), 0, Arc::clone(&db), shared);
+    let mut ports = PortMap::default();
+    ports.insert("Ethernet0", 1, 0);
+    let daemon = Arc::new(Daemon {
+        namespaces: vec![Arc::clone(&ns)],
+        ports,
+    });
+    daemon.subscribe(&ns).await.unwrap();
+    let mux_cable = [
+        ("state", "auto".to_string()),
+        ("cable_type", "active-active".to_string()),
+        ("soc_ipv4", "192.168.0.3/32".to_string()),
+    ];
+    db.set(DbId::Config, MUX_CABLE, "Ethernet0", &mux_cable)
+        .await;
+    let standby = [("state", "standby".to_string())];
+    db.set(DbId::Appl, HW_FORWARDING_STATE_PEER, "Ethernet0", &standby)
+        .await;
+    let probe = [("command", "probe".to_string())];
+    db.set(DbId::Appl, FORWARDING_STATE_COMMAND, "Ethernet0", &probe)
+        .await;
+    let transceiver = [("type", "QSFP28 or later".to_string())];
+    db.set(DbId::State, TRANSCEIVER_INFO, "Ethernet0", &transceiver)
+        .await;
+    let mut answered = false;
+    for _ in 0..250 {
+        answered = db
+            .hget(
+                DbId::Appl,
+                FORWARDING_STATE_RESPONSE,
+                "Ethernet0",
+                "response",
+            )
+            .await
+            .is_some();
+        if answered {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(answered, "the replayed probe was not answered");
+
+    // The port's requests are handled in order: a replayed peer toggle would
+    // have reached the SoC before this one.
+    let active = [("state", "active".to_string())];
+    db.set(DbId::Appl, HW_FORWARDING_STATE_PEER, "Ethernet0", &active)
+        .await;
+    let sets = || soc.requests("SetAdminForwardingPortState");
+    for _ in 0..250 {
+        if !sets().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(sets(), vec![(vec![1], vec![true])]);
 }

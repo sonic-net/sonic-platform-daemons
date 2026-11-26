@@ -32,7 +32,8 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   the other ports' telemetry. Active-active passes run 16 at a time.
 - **Databases** (`src/db.rs`): redis directly, with swsscommon's conventions:
   a row is one `HSET` of all its fields, subscriptions are swsscommon's
-  `SubscriberStateTable` (keyspace notifications, then the existing rows).
+  `SubscriberStateTable` (keyspace notifications, then the existing rows),
+  but for `HW_FORWARDING_STATE_PEER` (see Active-active).
   A namespace's subscriptions share one connection, and their events are
   routed in the order redis delivered them, so a port's requests keep their
   order across tables. Per namespace, that and one connection per database
@@ -51,6 +52,14 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   tries again. So `FORWARDING_STATE_RESPONSE` gets `response=failure` once
   when the channel fails or loses its connection, as linkmgrd expects.
   GracefulRestart subscriptions as in Python. No Python on this path.
+  Unlike Python, ycabled-rs does not act on the peer toggles it finds in
+  `HW_FORWARDING_STATE_PEER` at startup, only on those written afterwards:
+  linkmgrd sets a port's row to standby when it loses the peer's
+  heartbeats and never clears it, so after a peer outage the row is stale,
+  and replaying it would take the healthy peer out of service until the
+  peer's linkmgrd probes again, up to 10 s later. The SoC keeps what an
+  earlier ycabled set; a peer toggle written while ycabled-rs is down is
+  lost.
 - **Active-standby** (`src/bridge.rs`, `python/ycabled_bridge.py`): the
   vendor drivers stay Python. An embedded CPython (PyO3), started only if an
   active-standby port needs it, runs a bridge module that owns the platform
@@ -116,7 +125,7 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 ## Tests
 
-- **Unit tests** (146): the actors and the CLI against an in-memory
+- **Unit tests** (148): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server`, the gRPC client against an
   in-process SoC, over TLS too with certificates that `openssl` makes for

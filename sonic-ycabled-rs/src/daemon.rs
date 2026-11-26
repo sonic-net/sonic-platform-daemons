@@ -77,6 +77,16 @@ pub fn mux_tables() -> Vec<(DbId, String)> {
     t
 }
 
+/// The mux tables whose rows ycabled-rs acts on only when they change, not
+/// when it finds them at startup. linkmgrd sets a port's
+/// HW_FORWARDING_STATE_PEER to standby when it loses the peer's heartbeats,
+/// and never clears it, so once the peer is back the row is stale. Replaying
+/// it, as Python ycabled does, takes the healthy peer out of service until
+/// the peer's linkmgrd probes its forwarding state again, up to 10 s later.
+/// The SoC keeps the state an earlier ycabled set; a peer toggle written
+/// while ycabled-rs is down is not acted on.
+pub const CHANGES_ONLY_TABLES: [&str; 1] = [HW_FORWARDING_STATE_PEER];
+
 fn exit_on_lost_subscription(ns: String) -> impl FnOnce() + Send + 'static {
     move || {
         log_error!(
@@ -127,8 +137,9 @@ impl Namespace {
 
 impl Daemon {
     /// Subscribes namespace `ns` to TRANSCEIVER_INFO, and to the mux tables
-    /// if it has mux ports, on one connection. One task routes the events,
-    /// in the order redis delivered them.
+    /// if it has mux ports, on one connection, the rows of
+    /// [`CHANGES_ONLY_TABLES`] excepted. One task routes the events, in the
+    /// order redis delivered them.
     pub(crate) async fn subscribe(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
         let mut tables = vec![(DbId::State, TRANSCEIVER_INFO.to_string())];
         if ns.has_actors() {
@@ -137,7 +148,11 @@ impl Daemon {
         }
         let (subscriptions, rx) = ns
             .db
-            .subscribe(&tables, exit_on_lost_subscription(ns.name.clone()))
+            .subscribe(
+                &tables,
+                &CHANGES_ONLY_TABLES,
+                exit_on_lost_subscription(ns.name.clone()),
+            )
             .await?;
         let _ = ns.subscriptions.set(subscriptions);
         tokio::spawn(Arc::clone(self).route(Arc::clone(ns), rx));
