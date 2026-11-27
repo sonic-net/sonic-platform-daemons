@@ -1386,6 +1386,75 @@ async fn telemetry_overlapping_removal_is_discarded() {
     assert_eq!(f.db.writes(MUX_CABLE_INFO).len(), infos_before);
 }
 
+/// The manual switch counts of the MUX_CABLE_INFO writes, in order.
+fn switch_counts(f: &Fixture) -> Vec<String> {
+    f.db.writes(MUX_CABLE_INFO)
+        .into_iter()
+        .filter_map(|(_, fields)| {
+            fields
+                .into_iter()
+                .find(|(k, _)| k == "manual_switch_count")
+                .map(|(_, v)| v)
+        })
+        .collect()
+}
+
+/// A pass checks the epoch and writes under the call lock, which the actor
+/// holds to change the epoch (HLD 4.3.3). So the write of a pass that waits
+/// for redis, as after a lost connection, lands before the rows of a
+/// removal and insertion that come meanwhile, never after them. Here the
+/// insertion finds no cable and writes the placeholder, which the old
+/// cable's values would otherwise overwrite until the next pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telemetry_write_waiting_for_redis_lands_before_a_reinit() {
+    let _g = globals();
+    let f = Fixture::new();
+    f.cable(|c| {
+        c.script("get_switch_count_total", value(PyVal::Int(5)));
+    });
+    f.db.put(DbId::Config, MUX_CABLE, TEST_PORT, &[("state", "auto")]);
+    let a = PortActor::new(
+        TEST_PORT,
+        Some(PHYSICAL),
+        Some(CableType::ActiveStandby),
+        fast_telemetry(&f, 200),
+    );
+    let tx = a.spawn();
+    let (done, wait) = tokio::sync::oneshot::channel();
+    tx.send(Msg::Init(Some(done))).unwrap();
+    wait.await.unwrap();
+    let old_rows = |f: &Fixture| switch_counts(f).iter().filter(|c| *c == "5").count();
+    let before = old_rows(&f);
+    f.db.hold_next_write(MUX_CABLE_INFO);
+    assert!(wait_for(|| f.db.write_held(MUX_CABLE_INFO), 3000).await);
+    f.cable(|c| c.present = false);
+    tx.send(Msg::Transceiver(Event::Del {
+        key: TEST_PORT.into(),
+    }))
+    .unwrap();
+    tx.send(Msg::Transceiver(Event::Set {
+        key: TEST_PORT.into(),
+        fields: fm(&[("type", "QSFP28 or later")]),
+    }))
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    f.db.release(MUX_CABLE_INFO);
+    // The held write has landed, and the placeholder is written.
+    assert!(
+        wait_for(
+            || old_rows(&f) > before && switch_counts(&f).iter().any(|c| c == "N/A"),
+            3000
+        )
+        .await
+    );
+    let counts = switch_counts(&f);
+    let placeholder = counts.iter().position(|c| c == "N/A").unwrap();
+    assert!(
+        !counts[placeholder..].iter().any(|c| c == "5"),
+        "{counts:?}"
+    );
+}
+
 /// A cable removed and inserted again while a telemetry pass is calling it:
 /// the old driver is unloaded and the new one loaded between the pass's
 /// calls, so no two calls to the cable overlap.

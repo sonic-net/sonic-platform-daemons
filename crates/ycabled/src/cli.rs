@@ -205,6 +205,7 @@ impl PortActor {
             self.port
         );
         let input = fields.get(cmd.input).map(String::as_str);
+        self.cli_request = Some(fields.clone());
         match cmd.kind {
             Kind::ShowMuxDirection => self.cli_show_mux_direction(cmd, input).await,
             Kind::ConfigMuxState => self.cli_config_mux_state(cmd, input).await,
@@ -220,6 +221,7 @@ impl PortActor {
             Kind::Fec => self.cli_show_fec(cmd, input).await,
             Kind::Ber => self.cli_show_ber(cmd, input).await,
         }
+        self.cli_request = None;
     }
 
     // --- show/config muxcable hwmode muxdirection/state ------------------------
@@ -658,6 +660,7 @@ impl PortActor {
         };
         let shared = Arc::clone(&self.shared);
         let port = self.port.clone();
+        let request = self.cli_request.clone();
         tokio::spawn(async move {
             let _downloading = downloading;
             log_debug!(
@@ -684,7 +687,7 @@ impl PortActor {
                     "-1".to_string()
                 }
             };
-            respond(shared.db.as_ref(), cmd, &port, &status).await;
+            respond(shared.db.as_ref(), cmd, &port, request.as_ref(), &status).await;
             log_debug!(
                 "Y_CABLE_DEBUG:downloading complete {} {} {}",
                 physical,
@@ -1189,15 +1192,19 @@ impl PortActor {
 
     // --- Shared by the commands ---------------------------------------------------
 
-    /// Python's set_result_and_delete_port.
+    /// Python's set_result_and_delete_port, for the command being handled.
     async fn respond(&self, cmd: &Cmd, value: &str) {
-        respond(self.db(), cmd, &self.port, value).await
+        respond(self.db(), cmd, &self.port, self.cli_request.as_ref(), value).await
     }
 
-    /// The result row, in one write, before the response.
+    /// The result row, in one write, before the response; not written if
+    /// the command was replaced or withdrawn meanwhile, as its response.
     async fn write_result(&self, cmd: &Cmd, fields: &[(String, String)]) {
         let Some(res) = cmd.res else { return };
         if fields.is_empty() {
+            return;
+        }
+        if !request_current(self.db(), cmd, &self.port, self.cli_request.as_ref()).await {
             return;
         }
         let fv: Vec<(&str, String)> = fields
@@ -1299,9 +1306,37 @@ impl PortActor {
     }
 }
 
+/// Whether the command row still holds `request`, the command being
+/// answered. None: no request to check.
+async fn request_current(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&FieldMap>) -> bool {
+    match request {
+        Some(r) => db.get(DbId::Appl, cmd.table, port).await.as_ref() == Some(r),
+        None => true,
+    }
+}
+
 /// Python's set_result_and_delete_port: the response field, then the command
 /// key deleted, which tells the CLI the command is done.
-async fn respond(db: &dyn Db, cmd: &Cmd, port: &str, value: &str) {
+///
+/// The CLI may replace or withdraw `request` while its driver calls run. A
+/// replaced command is then not answered: the CLI waiting is the
+/// replacement's, and the answer would be taken for the replacement's. Its
+/// row, which now holds the replacement, is kept for the replacement to run
+/// and be answered (HLD 6.5); and it is deleted only if it still holds
+/// `request`, in one step with the check, so a replacement written as the
+/// command is answered is kept too.
+async fn respond(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&FieldMap>, value: &str) {
+    if !request_current(db, cmd, port, request).await {
+        log_notice!(
+            "Not answering cli command {} {:?} of port {} with {}={}: it was replaced or withdrawn while it ran",
+            cmd.table,
+            request,
+            port,
+            cmd.output,
+            value
+        );
+        return;
+    }
     log_debug!(
         "Y_CABLE_DEBUG: answering cli command {} for port {} with {}={}",
         cmd.table,
@@ -1316,7 +1351,18 @@ async fn respond(db: &dyn Db, cmd: &Cmd, port: &str, value: &str) {
         &[(cmd.output, value.to_string())],
     )
     .await;
-    db.del(DbId::Appl, cmd.table, port).await;
+    match request {
+        Some(r) => {
+            if !db.del_if(DbId::Appl, cmd.table, port, r).await {
+                log_notice!(
+                    "cli command {} of port {} was replaced as it was answered: the replacement is kept",
+                    cmd.table,
+                    port
+                );
+            }
+        }
+        None => db.del(DbId::Appl, cmd.table, port).await,
+    }
 }
 
 /// A driver's return value as a response: Python's `str()` of it, whatever

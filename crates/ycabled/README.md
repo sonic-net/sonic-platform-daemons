@@ -79,7 +79,9 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   work and saves the wake-ups between two, and at most two malloc arenas.
 - **CLI** (`src/cli.rs`): the 13 `XCVRD_*_CMD` tables of `show/config
   muxcable`, answered as Python answers them. A firmware download runs in a
-  task of its own, so the port keeps working meanwhile.
+  task of its own, so the port keeps working meanwhile. A command the CLI
+  replaces before it runs is not run, and one it replaces while it runs is
+  not answered; either way the replacement runs and is answered (HLD 6.5).
 - **Logging** (`src/logger.rs`): syslog through `/dev/log`, identity
   `ycable` whatever the drivers do with `openlog`. A thread of its own sends
   the messages, so a syslog that does not take them in holds up no port;
@@ -147,7 +149,7 @@ and supervisord keeps restarting it rather than giving up (`FATAL`).
 
 ## Tests
 
-- **Unit tests** (157): the actors and the CLI against an in-memory
+- **Unit tests** (160): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server` (skipped where there is none, as in
   the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the

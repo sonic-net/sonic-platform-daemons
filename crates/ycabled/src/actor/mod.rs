@@ -174,6 +174,9 @@ pub struct PortActor {
     /// -1 until it returns, across cable changes too (HLD 4.3.3): a call
     /// that never returns would hold one more blocking thread each time.
     pub downloading: Arc<AtomicBool>,
+    /// The CLI command being handled, its row as the router read it: it is
+    /// answered only while its row still holds it (HLD 6.5).
+    pub(crate) cli_request: Option<FieldMap>,
     /// A request is running and holds the call lock.
     in_request: bool,
     /// A telemetry pass is running: each of its calls also takes the bus.
@@ -208,6 +211,7 @@ impl PortActor {
             epoch: Arc::new(AtomicU64::new(0)),
             telemetry_busy: Arc::new(AtomicBool::new(false)),
             downloading: Arc::new(AtomicBool::new(false)),
+            cli_request: None,
             in_request: false,
             in_telemetry: false,
         }
@@ -231,6 +235,7 @@ impl PortActor {
             epoch: Arc::clone(&self.epoch),
             telemetry_busy: Arc::clone(&self.telemetry_busy),
             downloading: Arc::clone(&self.downloading),
+            cli_request: None,
             in_request: false,
             in_telemetry: false,
         }
@@ -270,6 +275,18 @@ impl PortActor {
                 });
             }
         }
+    }
+
+    /// The port's call lock, for a telemetry pass to check the epoch and
+    /// write under: every request holds it, so every change of the epoch
+    /// does, and no change can fall between the check and the write, even
+    /// one that waits for redis (HLD 4.3.3). None within a request, which
+    /// holds it already.
+    pub(super) async fn lock_for_write(&self) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        if self.in_request {
+            return None;
+        }
+        Some(Arc::clone(&self.call_lock).lock_owned().await)
     }
 
     pub fn bump_epoch(&self) {

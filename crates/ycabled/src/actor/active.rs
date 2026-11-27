@@ -369,6 +369,7 @@ impl PortActor {
     /// forwarding states, the server version and the channel state.
     pub(super) async fn telemetry_active(&mut self, epoch: u64) {
         if !self.transceiver_present().await {
+            let _write = self.lock_for_write().await;
             if self.current_epoch() == epoch {
                 self.write_placeholder_info().await;
             }
@@ -460,6 +461,7 @@ impl PortActor {
             ("peer_operation_state_probe_count", counts[5].clone()),
             ("grpc_connection_status", status),
         ];
+        let _write = self.lock_for_write().await;
         if self.current_epoch() != epoch {
             return;
         }

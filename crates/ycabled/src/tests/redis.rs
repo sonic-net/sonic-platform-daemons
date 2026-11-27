@@ -530,6 +530,49 @@ async fn unreadable_row_fails_the_replay() {
     assert!(res.is_err());
 }
 
+/// del_if deletes a row only while it holds exactly the given fields, in
+/// one script: a changed row, one with a field more or less, and a missing
+/// row are kept or left alone.
+#[tokio::test]
+async fn del_if_deletes_only_the_given_row() {
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
+    let db = r.db().await;
+    let t = "XCVRD_CONFIG_PRBS_CMD";
+    let row = |pairs: &[(&str, &str)]| -> crate::db::FieldMap {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    db.set(
+        DbId::Appl,
+        t,
+        "Ethernet0",
+        &[("config_prbs", "anlt".into())],
+    )
+    .await;
+    for other in [
+        row(&[("config_prbs", "fec")]),
+        row(&[]),
+        row(&[("config_prbs", "anlt"), ("extra", "1")]),
+    ] {
+        assert!(!db.del_if(DbId::Appl, t, "Ethernet0", &other).await);
+    }
+    assert!(db.get(DbId::Appl, t, "Ethernet0").await.is_some());
+    db.set(DbId::Appl, t, "Ethernet0", &[("extra", "1".into())])
+        .await;
+    assert!(
+        !db.del_if(DbId::Appl, t, "Ethernet0", &row(&[("config_prbs", "anlt")]))
+            .await
+    );
+    let both = row(&[("config_prbs", "anlt"), ("extra", "1")]);
+    assert!(db.del_if(DbId::Appl, t, "Ethernet0", &both).await);
+    assert!(db.get(DbId::Appl, t, "Ethernet0").await.is_none());
+    assert!(!db.del_if(DbId::Appl, t, "Ethernet0", &both).await);
+}
+
 /// redis may still be coming up at startup: the connection is tried again
 /// every second until it answers (HLD 4.3.1).
 #[tokio::test]

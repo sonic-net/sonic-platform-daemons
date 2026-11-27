@@ -24,8 +24,10 @@ Op = namedtuple("Op", "seq ts db client cmd args")
 Access = namedtuple("Access", "seq ts kind db table key field value")
 
 READ_CMDS = {"HGETALL", "HGET", "HMGET", "HEXISTS", "EXISTS", "HKEYS", "HVALS", "HLEN", "TYPE", "GET", "KEYS", "SCAN"}
+# EVAL and EVALSHA: MONITOR shows the commands a script runs too, with the
+# client "lua", and those are checked.
 IGNORED_CMDS = {"SELECT", "PING", "CLIENT", "HELLO", "INFO", "AUTH", "COMMAND", "MULTI", "EXEC", "DISCARD",
-                "PUNSUBSCRIBE", "UNSUBSCRIBE", "SCRIPT", "QUIT"}
+                "PUNSUBSCRIBE", "UNSUBSCRIBE", "SCRIPT", "QUIT", "EVAL", "EVALSHA"}
 
 
 def _unescape(s):

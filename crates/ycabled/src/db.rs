@@ -101,6 +101,9 @@ pub trait Db: Send + Sync {
         }
     }
     async fn del(&self, db: DbId, table: &str, key: &str);
+    /// Deletes the row only if it holds exactly `fields`, in one step, so a
+    /// row rewritten meanwhile is kept. Whether it was deleted.
+    async fn del_if(&self, db: DbId, table: &str, key: &str, fields: &FieldMap) -> bool;
     async fn keys(&self, db: DbId, table: &str) -> Vec<String>;
     async fn exists(&self, db: DbId, table: &str, key: &str) -> bool {
         self.get(db, table, key).await.is_some()
@@ -621,6 +624,20 @@ impl Subscriptions {
     }
 }
 
+/// [`Db::del_if`]: KEYS[1] is the row, ARGV its expected fields and values.
+/// The row is read and deleted in one step, which the CLI cannot come
+/// between: redis runs a script whole.
+const DEL_IF_SCRIPT: &str = r#"
+local row = redis.call('HGETALL', KEYS[1])
+if #row ~= #ARGV then return 0 end
+local want = {}
+for i = 1, #ARGV, 2 do want[ARGV[i]] = ARGV[i + 1] end
+for i = 1, #row, 2 do
+  if want[row[i]] ~= row[i + 1] then return 0 end
+end
+return redis.call('DEL', KEYS[1])
+"#;
+
 #[async_trait]
 impl Db for RedisDb {
     async fn get(&self, db: DbId, table: &str, key: &str) -> Option<FieldMap> {
@@ -711,6 +728,23 @@ impl Db for RedisDb {
         }
     }
 
+    async fn del_if(&self, db: DbId, table: &str, key: &str, fields: &FieldMap) -> bool {
+        let full = table_key(self.location(db), table, key);
+        let mut eval = redis::cmd("EVAL");
+        eval.arg(DEL_IF_SCRIPT).arg(1).arg(&full);
+        for (f, v) in fields {
+            eval.arg(f).arg(v);
+        }
+        let mut mgr = self.conn(db).mgr.clone();
+        match eval.query_async::<i64>(&mut mgr).await {
+            Ok(n) => n > 0,
+            Err(e) => {
+                log_error!("Failed to delete {} {}: {}", db.name(), full, e);
+                false
+            }
+        }
+    }
+
     async fn keys(&self, db: DbId, table: &str) -> Vec<String> {
         match self.keys_raw(db, table).await {
             Ok(keys) => keys,
@@ -744,6 +778,14 @@ pub enum MemOp {
 pub struct MemDb {
     rows: Mutex<HashMap<(DbId, String, String), FieldMap>>,
     ops: Mutex<Vec<MemOp>>,
+    held: Mutex<HashMap<String, Hold>>,
+}
+
+/// The next write to a table, held until released ([`MemDb::hold_next_write`]).
+struct Hold {
+    gate: Arc<tokio::sync::Semaphore>,
+    /// A write is waiting.
+    taken: bool,
 }
 
 impl MemDb {
@@ -785,6 +827,32 @@ impl MemDb {
         self.ops.lock().unwrap().clear();
     }
 
+    /// Makes the next write to `table` wait for [`MemDb::release`], as a
+    /// write waiting for a redis reconnection does. Later writes go on.
+    pub fn hold_next_write(&self, table: &str) {
+        let hold = Hold {
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            taken: false,
+        };
+        self.held.lock().unwrap().insert(table.to_string(), hold);
+    }
+
+    /// Whether the held write to `table` is waiting.
+    pub fn write_held(&self, table: &str) -> bool {
+        self.held
+            .lock()
+            .unwrap()
+            .get(table)
+            .is_some_and(|h| h.taken)
+    }
+
+    /// Lets the held write to `table` go on.
+    pub fn release(&self, table: &str) {
+        if let Some(h) = self.held.lock().unwrap().remove(table) {
+            h.gate.close();
+        }
+    }
+
     /// The writes to `table`, in order.
     pub fn writes(&self, table: &str) -> Vec<(String, Vec<(String, String)>)> {
         self.ops()
@@ -816,6 +884,17 @@ impl Db for MemDb {
         if fields.is_empty() {
             return;
         }
+        let gate = match self.held.lock().unwrap().get_mut(table) {
+            Some(h) if !h.taken => {
+                h.taken = true;
+                Some(Arc::clone(&h.gate))
+            }
+            _ => None,
+        };
+        if let Some(g) = gate {
+            // Closed by release().
+            let _ = g.acquire().await;
+        }
         {
             let mut rows = self.rows.lock().unwrap();
             let row = rows
@@ -846,6 +925,23 @@ impl Db for MemDb {
             table: table.to_string(),
             key: key.to_string(),
         });
+    }
+
+    async fn del_if(&self, db: DbId, table: &str, key: &str, fields: &FieldMap) -> bool {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            let k = (db, table.to_string(), key.to_string());
+            if rows.get(&k) != Some(fields) {
+                return false;
+            }
+            rows.remove(&k);
+        }
+        self.ops.lock().unwrap().push(MemOp::Del {
+            db,
+            table: table.to_string(),
+            key: key.to_string(),
+        });
+        true
     }
 
     async fn keys(&self, db: DbId, table: &str) -> Vec<String> {

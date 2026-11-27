@@ -536,6 +536,7 @@ impl PortActor {
         let row = self.info_row_standby().await;
         // The cable was removed, initialized again or changed type since the
         // pass started: what it read may be stale.
+        let _write = self.lock_for_write().await;
         if self.current_epoch() != epoch {
             return;
         }

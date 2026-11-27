@@ -613,7 +613,9 @@ async fn download_firmware() {
 
 /// One download per port (HLD 4.3.3): another request while the first one's
 /// call has not returned is answered -1 and calls nothing; once it has
-/// returned, the next one runs.
+/// returned, the next one runs. The -1 answers the command row, so the
+/// first download is not answered when it returns: the CLI, waiting on the
+/// one response row, has taken the -1.
 #[tokio::test(start_paused = true)]
 async fn download_firmware_one_at_a_time() {
     let f = Fixture::new();
@@ -635,7 +637,8 @@ async fn download_firmware_one_at_a_time() {
     let r = cli(&f, &mut a, XCVRD_DOWN_FW_CMD, Some("down-one.bin"), &[]).await;
     assert_eq!(r.rsp(), "-1");
     f.db.remove(DbId::State, command(XCVRD_DOWN_FW_CMD).rsp, TEST_PORT);
-    assert_eq!(wait_answer(&f, XCVRD_DOWN_FW_CMD).await.rsp(), "0");
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(answer(&f, command(XCVRD_DOWN_FW_CMD)).rsp, None);
     assert_eq!(downloads(), 1);
 
     let r = cli(&f, &mut a, XCVRD_DOWN_FW_CMD, Some("down-one.bin"), &[]).await;
@@ -682,6 +685,67 @@ async fn replaced_command_is_not_run() {
         sets,
         vec![("set_anlt".to_string(), vec![PyArg::Int(0), PyArg::Int(2)])]
     );
+}
+
+/// A command replaced while its driver call runs (HLD 6.5): the CLI wrote
+/// set FEC, then set AN/LT with arguments of its own. The FEC command is not
+/// answered, since the CLI waiting is the AN/LT command's, and its row, now
+/// the AN/LT command's, is kept. The AN/LT command then runs and is
+/// answered.
+#[tokio::test(start_paused = true)]
+async fn command_replaced_while_it_runs_is_not_answered() {
+    let f = Fixture::new();
+    let mut a = ready(&f).await;
+    f.cable(|c| {
+        c.delays
+            .insert("set_fec_mode".into(), Duration::from_secs(1));
+    });
+    let table = "XCVRD_CONFIG_PRBS_CMD";
+    let cmd = command(table);
+    let arg = cmd.arg.unwrap();
+    let fec = [(cmd.input, "fec")];
+    let anlt = [(cmd.input, "anlt")];
+    f.db.put(
+        DbId::Appl,
+        arg,
+        TEST_PORT,
+        &[("target", "1"), ("mode", "1")],
+    );
+    f.db.put(DbId::Appl, table, TEST_PORT, &fec);
+    let db = Arc::clone(&f.db);
+    let replace = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        db.put(
+            DbId::Appl,
+            arg,
+            TEST_PORT,
+            &[("target", "2"), ("mode", "0")],
+        );
+        db.put(DbId::Appl, table, TEST_PORT, &anlt);
+    });
+    a.handle(Msg::Cli(table.to_string(), fm(&fec))).await;
+    replace.await.unwrap();
+    assert_eq!(answer(&f, cmd).rsp, None);
+    assert_eq!(f.db.row(DbId::Appl, table, TEST_PORT), Some(fm(&anlt)));
+
+    a.handle(Msg::Cli(table.to_string(), fm(&anlt))).await;
+    let sets: Vec<_> = calls(&f)
+        .into_iter()
+        .filter(|(m, _)| m.starts_with("set_"))
+        .collect();
+    assert_eq!(
+        sets,
+        vec![
+            (
+                "set_fec_mode".to_string(),
+                vec![PyArg::Int(1), PyArg::Int(1)]
+            ),
+            ("set_anlt".to_string(), vec![PyArg::Int(0), PyArg::Int(2)]),
+        ]
+    );
+    let r = answer(&f, cmd);
+    assert!(r.rsp.is_some());
+    assert!(r.deleted);
 }
 
 /// _no_port, _no_instance, _else_condition, and an image that does not
