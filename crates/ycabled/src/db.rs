@@ -316,6 +316,20 @@ impl RedisDb {
             .await?)
     }
 
+    /// The keys of `table`'s rows.
+    async fn keys_raw(&self, db: DbId, table: &str) -> Result<Vec<String>> {
+        let prefix = format!("{}{}", table, self.location(db).separator);
+        let mut mgr = self.conn(db).mgr.clone();
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(format!("{prefix}*"))
+            .query_async(&mut mgr)
+            .await?;
+        Ok(keys
+            .into_iter()
+            .filter_map(|k| k.strip_prefix(&prefix).map(str::to_string))
+            .collect())
+    }
+
     /// A plain string key, such as CONFIG_DB_INITIALIZED.
     pub async fn get_string(&self, db: DbId, key: &str) -> Option<String> {
         let mut mgr = self.conn(db).mgr.clone();
@@ -453,23 +467,35 @@ impl RedisDb {
             sink.psubscribe(&pattern).await?;
             patterns.insert(pattern, (*db, table.clone()));
         }
-        // The rows that exist, once every subscription is in place.
+        // The rows that exist, once every subscription is in place. One that
+        // cannot be read fails the subscription, as a change does in
+        // events_of: its request would not be notified again.
         for (db, table) in tables {
             let replay = !changes_only.contains(table);
-            for key in self.keys(*db, table).await {
-                if let Some(fields) = self.get(*db, table, &key).await {
-                    if replay {
-                        let _ = tx.send((table.clone(), Event::Set { key, fields }));
-                    } else {
-                        let sorted: BTreeMap<_, _> = fields.iter().collect();
-                        log_notice!(
-                            "Not replaying {} {} {:?}: only the changes of {} are subscribed to",
-                            db.name(),
-                            table_key(self.location(*db), table, &key),
-                            sorted,
-                            table
-                        );
-                    }
+            let keys = self
+                .keys_raw(*db, table)
+                .await
+                .with_context(|| format!("Failed to list {} {}", db.name(), table))?;
+            for key in keys {
+                let full = table_key(self.location(*db), table, &key);
+                let fields = self
+                    .hgetall_raw(*db, &full)
+                    .await
+                    .with_context(|| format!("Failed to read {} {}", db.name(), full))?;
+                if fields.is_empty() {
+                    continue;
+                }
+                if replay {
+                    let _ = tx.send((table.clone(), Event::Set { key, fields }));
+                } else {
+                    let sorted: BTreeMap<_, _> = fields.iter().collect();
+                    log_notice!(
+                        "Not replaying {} {} {:?}: only the changes of {} are subscribed to",
+                        db.name(),
+                        full,
+                        sorted,
+                        table
+                    );
                 }
             }
         }
@@ -686,18 +712,8 @@ impl Db for RedisDb {
     }
 
     async fn keys(&self, db: DbId, table: &str) -> Vec<String> {
-        let loc = self.location(db);
-        let prefix = format!("{}{}", table, loc.separator);
-        let mut mgr = self.conn(db).mgr.clone();
-        match redis::cmd("KEYS")
-            .arg(format!("{prefix}*"))
-            .query_async::<Vec<String>>(&mut mgr)
-            .await
-        {
-            Ok(keys) => keys
-                .into_iter()
-                .filter_map(|k| k.strip_prefix(&prefix).map(str::to_string))
-                .collect(),
+        match self.keys_raw(db, table).await {
+            Ok(keys) => keys,
             Err(e) => {
                 log_warning!("Failed to list {} {}: {}", db.name(), table, e);
                 vec![]

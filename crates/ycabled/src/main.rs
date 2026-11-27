@@ -56,7 +56,10 @@ fn main() {
         }
     };
     match runtime.block_on(daemon::run(Options::default())) {
-        Ok(()) => std::process::exit(0),
+        Ok(()) => {
+            ycabled::logger::flush(exit::LOG_FLUSH);
+            std::process::exit(0)
+        }
         Err(e) => {
             log_error!("ycabled-rs failed: {:#}", e);
             exit::after_failure(1);

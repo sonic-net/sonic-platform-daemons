@@ -128,7 +128,7 @@ Rust:
 
 - `tests::daemon::subscribes_to_what_python_subscribes_to`; `tests::redis::waits_for_config_db_initialized`, `subscription_replays_rows_then_follows_changes`, `events_keep_their_order_across_tables`, `added_tables_replay_rows_then_follow_changes`, `losing_the_connection_runs_on_lost`, `rows_use_sonic_keys_and_separators`.
 - `db::tests::locations_from_config`, `global_config_includes_namespaces`, `ipv6_redis_host`, `memdb_merges_rows_and_records_writes`; `ports::tests::asic_conf`, `port_config_paths`.
-- `logger::tests::line_has_glibc_layout`, `levels_order_by_severity`, `sends_to_the_socket`; `tests::bridge::slow_calls_are_logged`.
+- `logger::tests::line_has_glibc_layout`, `levels_order_by_severity`, `writer_sends_the_lines_in_order`, `logging_does_not_wait_for_a_stuck_syslog`; `tests::bridge::slow_calls_are_logged`.
 - `cli::tests::int_arguments_as_python_reads_them`: the CLI's arguments, as `gather_arg_from_db_and_check_for_type` and `int()` read them.
 
 Not ported:

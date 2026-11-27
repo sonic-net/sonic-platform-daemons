@@ -16,6 +16,7 @@
 //! task of its own, as in Python's thread per download: the port keeps
 //! serving telemetry and other commands while the cable takes the image.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +27,22 @@ use crate::grpc::{self, log_rpc_error};
 use crate::pyval::{PyArg, PyVal};
 use crate::schema::HW_MUX_CABLE_TABLE;
 use crate::{log_debug, log_error, log_notice, log_warning};
+
+/// A port's firmware download, from its start until its call returns.
+struct Downloading(Arc<AtomicBool>);
+
+impl Downloading {
+    /// None: the port's previous download has not returned yet.
+    fn start(flag: &Arc<AtomicBool>) -> Option<Downloading> {
+        (!flag.swap(true, Ordering::SeqCst)).then(|| Downloading(Arc::clone(flag)))
+    }
+}
+
+impl Drop for Downloading {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Where the firmware images of `config muxcable firmware` are.
 pub const FIRMWARE_DIR: &str = "/usr/share/sonic/firmware";
@@ -165,6 +182,22 @@ impl PortActor {
             );
             return;
         };
+        // The router read the command row when its notification came. If the
+        // CLI has replaced or withdrawn the command since, while the port was
+        // busy, it is not run: the arguments a command reads now may be the
+        // replacement's. The replacement's own notification follows. Python,
+        // which reads the row when it handles a notification, runs only the
+        // replacement too.
+        let current = self.db().get(DbId::Appl, cmd.table, &self.port).await;
+        if current.as_ref() != Some(fields) {
+            log_notice!(
+                "Not running cli command {} {:?} of port {}: it was replaced or withdrawn before it ran",
+                table,
+                fields,
+                self.port
+            );
+            return;
+        }
         log_debug!(
             "Y_CABLE_DEBUG: received a cli command {} {:?} for port {}",
             table,
@@ -615,9 +648,18 @@ impl PortActor {
                 return self.respond(cmd, "-1").await;
             }
         };
+        let Some(downloading) = Downloading::start(&self.downloading) else {
+            log_error!(
+                "Error: cli cmd download firmware is already running for port {}, file {} not downloaded",
+                self.port,
+                name
+            );
+            return self.respond(cmd, "-1").await;
+        };
         let shared = Arc::clone(&self.shared);
         let port = self.port.clone();
         tokio::spawn(async move {
+            let _downloading = downloading;
             log_debug!(
                 "Y_CABLE_DEBUG:worker thread launched for downloading physical port {} path {}",
                 physical,

@@ -81,7 +81,9 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   muxcable`, answered as Python answers them. A firmware download runs in a
   task of its own, so the port keeps working meanwhile.
 - **Logging** (`src/logger.rs`): syslog through `/dev/log`, identity
-  `ycable` whatever the drivers do with `openlog`.
+  `ycable` whatever the drivers do with `openlog`. A thread of its own sends
+  the messages, so a syslog that does not take them in holds up no port;
+  when its queue is full, messages are dropped and the count is logged.
 
 The known issues of Python ycabled (HLD section 3.8) that a black-box test
 reproduces are fixed; see the HLD for the list, and section 4.5 for the
@@ -144,7 +146,7 @@ and supervisord keeps restarting it rather than giving up (`FATAL`).
 
 ## Tests
 
-- **Unit tests** (152): the actors and the CLI against an in-memory
+- **Unit tests** (156): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server` (skipped where there is none, as in
   the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the
@@ -189,11 +191,11 @@ explains them). They compare the daemons on the same fakes, not hardware.
 | Scenario | Metric | Python | Rust |
 | --- | --- | ---: | ---: |
 | 24 active-standby ports | RSS / PSS | 50.4 / 41.8 MB | 35.7 / 31.2 MB |
-| | Threads | 5 | 3 |
+| | Threads | 5 | 4 |
 | | Redis connections | 125 | 4 |
 | | CPU over 65 s, one telemetry pass | 0.14% | 0.09% |
 | 32 active-active ports | RSS / PSS | 59.1 / 48.7 MB | 11.1 / 9.6 MB |
-| | Threads | 64 | 2 |
+| | Threads | 64 | 3 |
 | | Redis connections | 199 | 4 |
 | | CPU over 65 s, one telemetry pass | 4.74% | 0.08% |
 | Startup, SoCs never answer | 8 / 32 ports | 4.17 / 16.33 s | 0.51 / 0.52 s |

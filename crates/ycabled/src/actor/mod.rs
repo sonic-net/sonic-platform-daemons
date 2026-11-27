@@ -170,6 +170,10 @@ pub struct PortActor {
     /// that overlapped either is not written.
     pub epoch: Arc<AtomicU64>,
     telemetry_busy: Arc<AtomicBool>,
+    /// A firmware download's call is running. Another download is answered
+    /// -1 until it returns, across cable changes too (HLD 4.3.3): a call
+    /// that never returns would hold one more blocking thread each time.
+    pub downloading: Arc<AtomicBool>,
     /// A request is running and holds the call lock.
     in_request: bool,
     /// A telemetry pass is running: each of its calls also takes the bus.
@@ -203,6 +207,7 @@ impl PortActor {
             call_lock: Arc::new(tokio::sync::Mutex::new(())),
             epoch: Arc::new(AtomicU64::new(0)),
             telemetry_busy: Arc::new(AtomicBool::new(false)),
+            downloading: Arc::new(AtomicBool::new(false)),
             in_request: false,
             in_telemetry: false,
         }
@@ -225,6 +230,7 @@ impl PortActor {
             call_lock: Arc::clone(&self.call_lock),
             epoch: Arc::clone(&self.epoch),
             telemetry_busy: Arc::clone(&self.telemetry_busy),
+            downloading: Arc::clone(&self.downloading),
             in_request: false,
             in_telemetry: false,
         }

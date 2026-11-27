@@ -116,7 +116,9 @@ impl PortMap {
         }
     }
 
-    /// Ports of a port_config.ini: `# name lanes alias index ...` columns.
+    /// Ports of a port_config.ini: `# name lanes alias index ...` columns. A
+    /// row without a valid index is not a port of the map, as in
+    /// [`PortMap::add_config_db`]: Python maps no physical port for it.
     pub fn add_port_config(&mut self, path: &Path, asic: usize) -> bool {
         let Ok(text) = std::fs::read_to_string(path) else {
             return false;
@@ -128,7 +130,7 @@ impl PortMap {
             "index".into(),
         ];
         let mut found = false;
-        for (n, line) in text.lines().enumerate() {
+        for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -142,14 +144,20 @@ impl PortMap {
             }
             let values: Vec<&str> = line.split_whitespace().collect();
             let Some(name) = values.first() else { continue };
-            let index = columns
+            let Some(index) = columns
                 .iter()
                 .position(|c| c == "index")
                 .and_then(|i| values.get(i))
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(n as u32);
-            self.insert(name, index, asic);
-            found = true;
+            else {
+                continue;
+            };
+            match index.parse::<u32>() {
+                Ok(i) => {
+                    self.insert(name, i, asic);
+                    found = true;
+                }
+                Err(_) => log_warning!("Invalid index {} of port {}", index, name),
+            }
         }
         found
     }
@@ -206,10 +214,12 @@ mod tests {
     fn port_config_file() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("port_config.ini");
-        std::fs::write(&p, "# name lanes alias index speed\nEthernet0 0,1,2,3 etp1 1 100000\nEthernet4 4,5,6,7 etp2 2 100000\n").unwrap();
+        std::fs::write(&p, "# name lanes alias index speed\nEthernet0 0,1,2,3 etp1 1 100000\nEthernet4 4,5,6,7 etp2 2 100000\nEthernet8 8,9 etp3 x 100000\nEthernet12 12,13 etp4\n").unwrap();
         let mut m = PortMap::default();
         assert!(m.add_port_config(&p, 0));
         assert_eq!(m.get("Ethernet4").unwrap().physical, 2);
+        // No valid index, no port: the line number is no physical port.
+        assert_eq!(m.names(), vec!["Ethernet0", "Ethernet4"]);
         assert!(!m.add_port_config(&dir.path().join("missing.ini"), 0));
     }
 

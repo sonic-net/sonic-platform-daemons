@@ -509,6 +509,27 @@ async fn unreadable_row_ends_the_subscription() {
     assert!(rx.recv().await.is_none());
 }
 
+/// A row that cannot be read when a subscription replays the rows fails
+/// the subscription: its request would not be notified again. Here the key
+/// is not a hash.
+#[tokio::test]
+async fn unreadable_row_fails_the_replay() {
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
+    let db = r.db().await;
+    let mut c0 = r.client(0);
+    let _: () = redis::cmd("SET")
+        .arg("HW_MUX_CABLE_TABLE:Ethernet0")
+        .arg("active")
+        .query(&mut c0)
+        .unwrap();
+    let res = db
+        .subscribe(&[(DbId::Appl, "HW_MUX_CABLE_TABLE".into())], &[], || {})
+        .await;
+    assert!(res.is_err());
+}
+
 /// redis may still be coming up at startup: the connection is tried again
 /// every second until it answers (HLD 4.3.1).
 #[tokio::test]

@@ -611,6 +611,79 @@ async fn download_firmware() {
     assert_eq!(wait_answer(&f, XCVRD_DOWN_FW_CMD).await.rsp(), "-1");
 }
 
+/// One download per port (HLD 4.3.3): another request while the first one's
+/// call has not returned is answered -1 and calls nothing; once it has
+/// returned, the next one runs.
+#[tokio::test(start_paused = true)]
+async fn download_firmware_one_at_a_time() {
+    let f = Fixture::new();
+    let mut a = ready(&f).await;
+    firmware_file("down-one.bin");
+    f.cable(|c| {
+        c.script("download_firmware", value(PyVal::Int(0)));
+        c.delays
+            .insert("download_firmware".into(), Duration::from_secs(60));
+    });
+    let downloads = || {
+        calls(&f)
+            .iter()
+            .filter(|(m, _)| m == "download_firmware")
+            .count()
+    };
+    let r = cli(&f, &mut a, XCVRD_DOWN_FW_CMD, Some("down-one.bin"), &[]).await;
+    assert_eq!(r.rsp, None);
+    let r = cli(&f, &mut a, XCVRD_DOWN_FW_CMD, Some("down-one.bin"), &[]).await;
+    assert_eq!(r.rsp(), "-1");
+    f.db.remove(DbId::State, command(XCVRD_DOWN_FW_CMD).rsp, TEST_PORT);
+    assert_eq!(wait_answer(&f, XCVRD_DOWN_FW_CMD).await.rsp(), "0");
+    assert_eq!(downloads(), 1);
+
+    let r = cli(&f, &mut a, XCVRD_DOWN_FW_CMD, Some("down-one.bin"), &[]).await;
+    assert_eq!(r.rsp, None);
+    assert_eq!(wait_answer(&f, XCVRD_DOWN_FW_CMD).await.rsp(), "0");
+    assert_eq!(downloads(), 2);
+}
+
+/// A command replaced before it ran is not run: the CLI wrote set FEC, then
+/// set AN/LT with arguments of its own, while the port was busy. Run with
+/// the AN/LT arguments, the FEC command would set the wrong FEC mode. Like
+/// Python, which reads the row when it handles a notification, ycabled-rs
+/// runs only the AN/LT command.
+#[tokio::test]
+async fn replaced_command_is_not_run() {
+    let f = Fixture::new();
+    let mut a = ready(&f).await;
+    let table = "XCVRD_CONFIG_PRBS_CMD";
+    let cmd = command(table);
+    let arg = cmd.arg.unwrap();
+    let fec = [(cmd.input, "fec")];
+    f.db.put(
+        DbId::Appl,
+        arg,
+        TEST_PORT,
+        &[("target", "1"), ("mode", "1")],
+    );
+    f.db.put(DbId::Appl, table, TEST_PORT, &fec);
+    let anlt = [(cmd.input, "anlt")];
+    f.db.put(
+        DbId::Appl,
+        arg,
+        TEST_PORT,
+        &[("target", "2"), ("mode", "0")],
+    );
+    f.db.put(DbId::Appl, table, TEST_PORT, &anlt);
+    a.handle(Msg::Cli(table.to_string(), fm(&fec))).await;
+    a.handle(Msg::Cli(table.to_string(), fm(&anlt))).await;
+    let sets: Vec<_> = calls(&f)
+        .into_iter()
+        .filter(|(m, _)| m.starts_with("set_"))
+        .collect();
+    assert_eq!(
+        sets,
+        vec![("set_anlt".to_string(), vec![PyArg::Int(0), PyArg::Int(2)])]
+    );
+}
+
 /// _no_port, _no_instance, _else_condition, and an image that does not
 /// exist: -1 at once, nothing downloaded.
 #[tokio::test]

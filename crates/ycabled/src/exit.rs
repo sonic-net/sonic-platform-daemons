@@ -14,6 +14,9 @@ use std::time::{Duration, Instant};
 /// `startsecs`, and a second more as a margin.
 pub const MIN_RUN: Duration = Duration::from_secs(11);
 
+/// How long an exit waits for the queued syslog messages to go out.
+pub const LOG_FLUSH: Duration = Duration::from_secs(1);
+
 static START: OnceLock<Instant> = OnceLock::new();
 
 /// Takes the start of the process: call it first thing in `main`.
@@ -22,7 +25,8 @@ pub fn mark_start() {
 }
 
 /// Exits with `code`, but not before [`MIN_RUN`] has passed since
-/// [`mark_start`]. SIGTERM and SIGINT end the wait: their default action is
+/// [`mark_start`], and once the syslog messages are out, the failure's
+/// included. SIGTERM and SIGINT end the wait: their default action is
 /// restored for it.
 pub fn after_failure(code: i32) -> ! {
     let left = START.get().map_or(Duration::ZERO, |start| {
@@ -40,7 +44,9 @@ pub fn after_failure(code: i32) -> ! {
             libc::signal(libc::SIGTERM, libc::SIG_DFL);
             libc::signal(libc::SIGINT, libc::SIG_DFL);
         }
+        crate::logger::flush(LOG_FLUSH);
         std::thread::sleep(left);
     }
+    crate::logger::flush(LOG_FLUSH);
     std::process::exit(code)
 }

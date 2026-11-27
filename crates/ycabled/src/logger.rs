@@ -4,11 +4,17 @@
 //! no PID, the way `sonic_py_common`'s Logger sends them for Python ycabled.
 //! The identity is fixed: nothing the vendor drivers do with `openlog` can
 //! change it.
+//!
+//! A thread of its own sends them, in order: a syslog that does not take
+//! them in would otherwise hold up the caller, which may be the runtime's
+//! worker and with it every port. Logging only queues the message; when the
+//! queue is full, messages are dropped, counted, and the count logged.
 
 use std::os::unix::net::UnixDatagram;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 pub const IDENTITY: &str = "ycable";
 const FACILITY_USER: u8 = 1;
@@ -36,19 +42,63 @@ impl Level {
     }
 }
 
+/// How many messages may wait for the writer: a burst of debug messages
+/// fits, and a syslog that keeps up takes them at once.
+const QUEUE: usize = 4096;
+
+#[derive(Default)]
+struct Counts {
+    /// Messages queued and not sent yet.
+    pending: AtomicUsize,
+    /// Messages dropped because the queue was full, not logged yet.
+    dropped: AtomicU64,
+}
+
 struct Logger {
     min: AtomicU8,
-    sock: Mutex<Option<UnixDatagram>>,
-    path: String,
+    lines: SyncSender<String>,
+    counts: Arc<Counts>,
+}
+
+impl Logger {
+    /// A logger to the syslog socket at `path`, with its writer thread.
+    fn new(path: String) -> Logger {
+        let (lines, rx) = sync_channel(QUEUE);
+        let counts = Arc::new(Counts::default());
+        let c = Arc::clone(&counts);
+        // Without the thread, messages are dropped and counted.
+        let _ = std::thread::Builder::new()
+            .name("ycabled-log".into())
+            .spawn(move || write_lines(rx, &path, &c));
+        Logger {
+            min: AtomicU8::new(Level::Notice as u8),
+            lines,
+            counts,
+        }
+    }
+
+    /// Queues `line` for the writer. Never waits.
+    fn queue(&self, line: String) {
+        self.counts.pending.fetch_add(1, Ordering::SeqCst);
+        if self.lines.try_send(line).is_err() {
+            self.counts.pending.fetch_sub(1, Ordering::SeqCst);
+            self.counts.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn flush(&self, limit: Duration) {
+        let end = Instant::now() + limit;
+        while self.counts.pending.load(Ordering::SeqCst) > 0 && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
 fn logger() -> &'static Logger {
-    LOGGER.get_or_init(|| Logger {
-        min: AtomicU8::new(Level::Notice as u8),
-        sock: Mutex::new(None),
-        path: std::env::var("YCABLED_RS_SYSLOG").unwrap_or_else(|_| DEV_LOG.to_string()),
+    LOGGER.get_or_init(|| {
+        Logger::new(std::env::var("YCABLED_RS_SYSLOG").unwrap_or_else(|_| DEV_LOG.to_string()))
     })
 }
 
@@ -77,42 +127,70 @@ pub fn format_line(level: Level, timestamp: &str, msg: &str) -> String {
     )
 }
 
+fn timestamp() -> String {
+    // Parsed once: parsing the format string took as long as formatting.
+    static ITEMS: OnceLock<Vec<chrono::format::Item<'static>>> = OnceLock::new();
+    let items =
+        ITEMS.get_or_init(|| chrono::format::StrftimeItems::new("%b %e %H:%M:%S").collect());
+    chrono::Local::now()
+        .format_with_items(items.iter())
+        .to_string()
+}
+
+/// Queues `msg` for syslog, if `level` is enabled. Never waits for syslog.
 pub fn log(level: Level, msg: &str) {
     if !enabled(level) {
         return;
     }
     #[cfg(test)]
     capture::record(level, msg);
-    let l = logger();
-    // Parsed once: parsing the format string took as long as formatting.
-    static ITEMS: std::sync::OnceLock<Vec<chrono::format::Item<'static>>> =
-        std::sync::OnceLock::new();
-    let items =
-        ITEMS.get_or_init(|| chrono::format::StrftimeItems::new("%b %e %H:%M:%S").collect());
-    let ts = chrono::Local::now()
-        .format_with_items(items.iter())
-        .to_string();
-    let line = format_line(level, &ts, msg);
-    let mut guard = match l.sock.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
+    logger().queue(format_line(level, &timestamp(), msg));
+}
+
+/// Waits up to `limit` for the messages queued so far to be sent: before
+/// the process exits.
+pub fn flush(limit: Duration) {
+    if let Some(l) = LOGGER.get() {
+        l.flush(limit);
+    }
+}
+
+/// The writer thread: sends the queued lines in order, and after one, the
+/// count of the messages dropped meanwhile.
+fn write_lines(rx: Receiver<String>, path: &str, counts: &Counts) {
+    let mut sock = None;
+    while let Ok(line) = rx.recv() {
+        send_line(&mut sock, path, &line);
+        let dropped = counts.dropped.swap(0, Ordering::Relaxed);
+        if dropped > 0 {
+            let note = format!("{dropped} messages were dropped: syslog did not take them in time");
+            send_line(
+                &mut sock,
+                path,
+                &format_line(Level::Warning, &timestamp(), &note),
+            );
+        }
+        counts.pending.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn send_line(sock: &mut Option<UnixDatagram>, path: &str, line: &str) {
     for _ in 0..2 {
-        if guard.is_none() {
+        if sock.is_none() {
             if let Ok(s) = UnixDatagram::unbound() {
                 let _ = s.set_write_timeout(Some(Duration::from_millis(500)));
-                if s.connect(&l.path).is_ok() {
-                    *guard = Some(s);
+                if s.connect(path).is_ok() {
+                    *sock = Some(s);
                 }
             }
         }
-        match guard.as_ref() {
+        match sock.as_ref() {
             Some(s) => {
                 if s.send(line.as_bytes()).is_ok() {
                     return;
                 }
                 // The syslog socket was replaced (rsyslog restart): connect again once.
-                *guard = None;
+                *sock = None;
             }
             None => return,
         }
@@ -204,25 +282,47 @@ mod tests {
     }
 
     #[test]
-    fn sends_to_the_socket() {
+    fn writer_sends_the_lines_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("log.sock");
         let server = UnixDatagram::bind(&path).unwrap();
-        let l = Logger {
-            min: AtomicU8::new(Level::Notice as u8),
-            sock: Mutex::new(None),
-            path: path.to_str().unwrap().into(),
-        };
-        // Through the same code path as log(), with a private logger.
-        let line = format_line(Level::Warning, "Nov  7 08:31:08", "hello");
-        let s = UnixDatagram::unbound().unwrap();
-        s.connect(&l.path).unwrap();
-        s.send(line.as_bytes()).unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let l = Logger::new(path.to_str().unwrap().into());
+        for m in ["hello", "world"] {
+            l.queue(format_line(Level::Warning, "Nov  7 08:31:08", m));
+        }
+        l.flush(Duration::from_secs(5));
         let mut buf = [0u8; 256];
-        let n = server.recv(&mut buf).unwrap();
-        assert_eq!(
-            std::str::from_utf8(&buf[..n]).unwrap(),
-            "<12>Nov  7 08:31:08 ycable: hello"
-        );
+        for m in ["hello", "world"] {
+            let n = server.recv(&mut buf).unwrap();
+            assert_eq!(
+                std::str::from_utf8(&buf[..n]).unwrap(),
+                format!("<12>Nov  7 08:31:08 ycable: {m}")
+            );
+        }
+    }
+
+    /// Logging never waits for syslog: with a syslog socket that takes
+    /// nothing in, the messages are queued at once, and dropped once the
+    /// queue is full, rather than holding up the caller (and with it the
+    /// runtime's worker) for the send timeout.
+    #[test]
+    fn logging_does_not_wait_for_a_stuck_syslog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.sock");
+        let _server = UnixDatagram::bind(&path).unwrap();
+        let l = Logger::new(path.to_str().unwrap().into());
+        let start = Instant::now();
+        for i in 0..QUEUE + 1000 {
+            l.queue(format!("message {i} {}", "x".repeat(200)));
+            assert!(
+                start.elapsed() < Duration::from_secs(1),
+                "message {i} was queued after {:?}",
+                start.elapsed()
+            );
+        }
+        assert!(l.counts.dropped.load(Ordering::Relaxed) > 0);
     }
 }
