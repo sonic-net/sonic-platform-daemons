@@ -1178,6 +1178,140 @@ class TestBmcctldDaemonActionLoop:
         daemon._execute_action_item(item)
         daemon.controller.power_off.assert_called_once()
 
+    @pytest.mark.parametrize("action", [
+        bmcctld.ACTION_POWER_OFF,
+        bmcctld.ACTION_GRACEFUL_SHUTDOWN,
+    ])
+    @pytest.mark.parametrize("oper_status,power_state", [
+        (MockModule.MODULE_STATUS_OFFLINE, bmcctld.POWER_STATE_ON),
+        (MockModule.MODULE_STATUS_OFFLINE, None),
+        (MockModule.MODULE_STATUS_ONLINE, bmcctld.POWER_STATE_OFF),
+    ], ids=["offline-powered-on", "offline-state-missing", "online-powered-off"])
+    @pytest.mark.parametrize("success", [True, False])
+    def test_execute_power_down_without_consistent_off_state(
+            self, chassis, action, oper_status, power_state, success):
+        """An inconsistent or missing off state must dispatch and propagate the result."""
+        daemon = self._make_daemon(chassis)
+        chassis.switch_host.set_oper_status(oper_status)
+        if power_state is not None:
+            daemon.controller._update_host_state(power_state)
+        operation = MagicMock(return_value=success)
+        if action == bmcctld.ACTION_POWER_OFF:
+            daemon.controller.power_off = operation
+        else:
+            daemon.graceful_shutdown.execute = operation
+        callback = MagicMock()
+
+        daemon._execute_action_item(bmcctld.ActionItem(action, "test", callback))
+
+        operation.assert_called_once_with()
+        callback.assert_called_once_with(success)
+
+    @pytest.mark.parametrize("command,shutdown_timeout", [
+        (bmcctld.CMD_POWER_OFF, 0),
+        (bmcctld.CMD_GRACEFUL_SHUT, 0),
+        (bmcctld.CMD_GRACEFUL_SHUT, 10),
+    ])
+    def test_rack_mgr_power_down_offline_but_powered_on(
+            self, chassis, command, shutdown_timeout):
+        """An OFFLINE sample must not bypass off control, state publication, or completion."""
+        daemon = self._make_daemon(chassis)
+        assert daemon.controller.power_on() is True
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        assert chassis.switch_host.get_admin_state() is True
+        assert daemon.controller.get_db_power_state() == bmcctld.POWER_STATE_ON
+        daemon.policy_reader.get_graceful_shutdown_timeout = MagicMock(return_value=shutdown_timeout)
+        daemon.graceful_shutdown._issue_gnoi_shutdown = MagicMock(return_value=True)
+        cmd_table = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        original_set_admin_state = chassis.switch_host.set_admin_state
+
+        def apply_admin_state(up):
+            assert daemon.controller.get_db_power_state() == bmcctld.SWITCH_HOST_POWERING_OFF
+            cmd_state = dict(cmd_table.get("CMD_1")[1])
+            assert cmd_state[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_IN_PROGRESS
+            original_set_admin_state(up)
+
+        with patch('bmcctld.swsscommon.Table', return_value=cmd_table):
+            daemon.event_handler._handle_rack_mgr_command("CMD_1", {
+                bmcctld.FIELD_COMMAND: command,
+                bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_PENDING,
+            })
+            item = daemon.action_queue.get_nowait()
+            item.on_complete = MagicMock(wraps=item.on_complete)
+            with patch.object(chassis.switch_host, 'set_admin_state',
+                              side_effect=apply_admin_state) as set_admin_state, \
+                    patch.object(daemon.controller.host_state_table, 'set',
+                                 wraps=daemon.controller.host_state_table.set) as publish_state:
+                daemon._execute_action_item(item)
+
+        set_admin_state.assert_called_once_with(False)
+        assert chassis.switch_host.get_admin_state() is False
+        published_states = [dict(args[0][1]) for args in publish_state.call_args_list]
+        expected_power_states = [bmcctld.SWITCH_HOST_POWERING_OFF, bmcctld.POWER_STATE_OFF]
+        if command == bmcctld.CMD_GRACEFUL_SHUT:
+            expected_power_states.insert(0, bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
+        assert [state[bmcctld.FIELD_DEVICE_POWER_STATE] for state in published_states] == expected_power_states
+        assert all(state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_OFFLINE
+                   for state in published_states)
+        assert all(state[bmcctld.FIELD_LAST_CHANGE_TIMESTAMP] for state in published_states)
+        assert daemon.controller.get_db_power_state() == bmcctld.POWER_STATE_OFF
+        module_state = dict(daemon.controller.chassis_module_info_table.get(
+            bmcctld.SWITCH_HOST_MODULE_KEY)[1])
+        assert module_state[bmcctld.CHASSIS_MODULE_INFO_OPERSTATUS_FIELD] == bmcctld.SWITCH_HOST_OFFLINE
+        item.on_complete.assert_called_once_with(True)
+        cmd_state = dict(cmd_table.get("CMD_1")[1])
+        assert cmd_state[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_DONE
+        assert cmd_state[bmcctld.FIELD_RESULT] == "SUCCESS"
+        if command == bmcctld.CMD_GRACEFUL_SHUT and shutdown_timeout:
+            daemon.graceful_shutdown._issue_gnoi_shutdown.assert_called_once_with()
+        else:
+            daemon.graceful_shutdown._issue_gnoi_shutdown.assert_not_called()
+
+    @pytest.mark.parametrize("failure", ["platform_exception", "verification_timeout"])
+    def test_rack_mgr_power_off_offline_but_powered_on_failure(self, chassis, failure):
+        """Off-control exceptions and verification timeouts must fail the rack-manager command."""
+        daemon = self._make_daemon(chassis)
+        assert daemon.controller.power_on() is True
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_OFFLINE)
+        cmd_table = Table(daemon.event_handler.state_db, bmcctld.RACK_MANAGER_COMMAND_TABLE)
+        original_set_admin_state = chassis.switch_host.set_admin_state
+
+        def apply_admin_state(up):
+            if failure == "platform_exception":
+                raise RuntimeError("off-control failed")
+            original_set_admin_state(up)
+            chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+
+        with patch('bmcctld.swsscommon.Table', return_value=cmd_table):
+            daemon.event_handler._handle_rack_mgr_command("CMD_1", {
+                bmcctld.FIELD_COMMAND: bmcctld.CMD_POWER_OFF,
+                bmcctld.FIELD_STATUS: bmcctld.CMD_STATUS_PENDING,
+            })
+            item = daemon.action_queue.get_nowait()
+            item.on_complete = MagicMock(wraps=item.on_complete)
+            with patch.object(chassis.switch_host, 'set_admin_state',
+                              side_effect=apply_admin_state) as set_admin_state, \
+                    patch('time.monotonic', side_effect=[
+                        0, 0, bmcctld.POWER_VERIFY_TIMEOUT_SECS + 1]), \
+                    patch('time.sleep') as sleep:
+                daemon._execute_action_item(item)
+
+        set_admin_state.assert_called_once_with(False)
+        item.on_complete.assert_called_once_with(False)
+        cmd_state = dict(cmd_table.get("CMD_1")[1])
+        assert cmd_state[bmcctld.FIELD_STATUS] == bmcctld.CMD_STATUS_FAILED
+        assert cmd_state[bmcctld.FIELD_RESULT] == "ERROR"
+        state = dict(daemon.controller.host_state_table.get(bmcctld.HOST_STATE_KEY)[1])
+        assert state[bmcctld.FIELD_DEVICE_STATUS] == bmcctld.SWITCH_HOST_ONLINE
+        if failure == "platform_exception":
+            assert chassis.switch_host.get_admin_state() is True
+            assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_ON
+            sleep.assert_not_called()
+        else:
+            assert chassis.switch_host.get_admin_state() is False
+            assert state[bmcctld.FIELD_DEVICE_POWER_STATE] == bmcctld.POWER_STATE_OFF
+            sleep.assert_called_once_with(bmcctld.POWER_VERIFY_POLL_INTERVAL_SECS)
+
     def test_execute_power_on(self, chassis):
         daemon = self._make_daemon(chassis)
         daemon.controller.power_on = MagicMock(return_value=True)
@@ -1236,10 +1370,11 @@ class TestBmcctldDaemonActionLoop:
 
     # -- Idempotency skip tests --
 
-    def test_execute_power_off_skipped_when_already_offline(self, chassis):
-        """power_off is not issued when host is already OFFLINE; on_complete(True) fired."""
+    def test_execute_power_off_skipped_when_already_powered_off(self, chassis):
+        """power_off is not issued when host is both OFFLINE and POWERED_OFF."""
         # chassis.switch_host starts OFFLINE by default
         daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.POWER_STATE_OFF)
         daemon.controller.power_off = MagicMock(return_value=True)
         callback = MagicMock()
         item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "dup-event", on_complete=callback)
@@ -1247,9 +1382,10 @@ class TestBmcctldDaemonActionLoop:
         daemon.controller.power_off.assert_not_called()
         callback.assert_called_once_with(True)
 
-    def test_execute_graceful_shutdown_skipped_when_already_offline(self, chassis):
-        """graceful_shutdown is not issued when host is already OFFLINE."""
+    def test_execute_graceful_shutdown_skipped_when_already_powered_off(self, chassis):
+        """graceful_shutdown is not issued when host is both OFFLINE and POWERED_OFF."""
         daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.POWER_STATE_OFF)
         daemon.graceful_shutdown.execute = MagicMock(return_value=True)
         callback = MagicMock()
         item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-event", on_complete=callback)
@@ -1312,6 +1448,18 @@ class TestBmcctldDaemonActionLoop:
         item = bmcctld.ActionItem(bmcctld.ACTION_GRACEFUL_SHUTDOWN, "dup-grace-event", on_complete=callback)
         daemon._execute_action_item(item)
         daemon.graceful_shutdown.execute.assert_not_called()
+        callback.assert_called_once_with(True)
+
+    def test_execute_power_off_skipped_when_graceful_shutting_down_in_progress(self, chassis):
+        """power_off retains the existing no-op while graceful shutdown is in progress."""
+        chassis.switch_host.set_oper_status(MockModule.MODULE_STATUS_ONLINE)
+        daemon = self._make_daemon(chassis)
+        daemon.controller._update_host_state(bmcctld.SWITCH_HOST_GRACEFUL_SHUTTING_DOWN)
+        daemon.controller.power_off = MagicMock(return_value=True)
+        callback = MagicMock()
+        item = bmcctld.ActionItem(bmcctld.ACTION_POWER_OFF, "dup-event", on_complete=callback)
+        daemon._execute_action_item(item)
+        daemon.controller.power_off.assert_not_called()
         callback.assert_called_once_with(True)
 
     def test_execute_power_on_skipped_when_powering_on_in_progress(self, chassis):

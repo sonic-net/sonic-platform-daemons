@@ -1393,6 +1393,7 @@ class BmcctldDaemon(daemon_base.DaemonBase):
     def _execute_action_item(self, item):
         """
         Execute a single ActionItem on the main thread.
+        Skip settled-off power-down requests only when both live and DB state agree.
         Calls item.on_complete(success) when finished if a callback was provided.
         """
         self._event_log.log_notice("Executing action '{}' (event: '{}')".format(item.action, item.event_desc))
@@ -1400,11 +1401,14 @@ class BmcctldDaemon(daemon_base.DaemonBase):
         current_status = self.controller.get_oper_status()
         db_power_state = self.controller.get_db_power_state()
         if item.action in (ACTION_GRACEFUL_SHUTDOWN, ACTION_POWER_OFF):
-            if current_status == SWITCH_HOST_OFFLINE or db_power_state in (
+            # OFFLINE can reflect partial power, not completed off control.
+            already_powered_off = (
+                current_status == SWITCH_HOST_OFFLINE and db_power_state == POWER_STATE_OFF)
+            if already_powered_off or db_power_state in (
                     SWITCH_HOST_POWERING_OFF, SWITCH_HOST_GRACEFUL_SHUTTING_DOWN):
                 self._event_log.log_notice(
                     "ACTION SKIPPED: '{}' trigger='{}' — "
-                    "host already OFFLINE or shutting down (db_power_state={})".format(
+                    "host already POWERED_OFF and OFFLINE, or shutting down (db_power_state={})".format(
                         item.action, item.event_desc, db_power_state))
                 if item.on_complete:
                     item.on_complete(True)
