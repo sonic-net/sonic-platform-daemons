@@ -5,6 +5,7 @@
 members  = [
     "crates/pmon-common",
     "crates/psud",
+    "crates/syseepromd",
     "crates/thermalctld",
 ]
 resolver = "2"

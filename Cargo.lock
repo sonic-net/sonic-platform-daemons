@@ -772,6 +772,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sonic-syseepromd-rs"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "log",
+ "platform-api",
+ "platform-provider",
+ "pmon-common",
+ "tokio",
+]
+
+[[package]]
 name = "sonic-thermalctld-rs"
 version = "1.0.0"
 dependencies = [
