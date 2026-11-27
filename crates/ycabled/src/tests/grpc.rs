@@ -147,7 +147,8 @@ impl GracefulRestart for TestSoc {
     }
 }
 
-/// Serves `soc` on `ip`:50075 until the returned sender is dropped or fired.
+/// Serves `soc` on port 50075 of `ip` until the returned sender is dropped or
+/// fired.
 async fn serve(ip: &str, soc: TestSoc) -> oneshot::Sender<()> {
     let addr: SocketAddr = format!(
         "{}:{GRPC_PORT}",
@@ -345,7 +346,7 @@ impl TestPki {
     }
 }
 
-/// A SoC on `ip`:50075 whose listener keeps the connections it accepts
+/// A SoC on port 50075 of `ip`, whose listener keeps the connections it accepts
 /// while `stall` is set, sending nothing, and hands the others to a TLS SoC
 /// with `tls`. Without `tls`, it keeps every connection.
 async fn serve_stalling(
