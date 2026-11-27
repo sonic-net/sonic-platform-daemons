@@ -232,6 +232,9 @@ jobs:
         api = next(p for p in json.load(sys.stdin)["packages"] if p["name"] == "platform-api")
         print(os.path.dirname(os.path.dirname(os.path.dirname(api["manifest_path"]))))')
         export CARGO_TARGET_DIR=$(Agent.TempDirectory)/rust-target CARGO_PROFILE_DEV_DEBUG=0
+        # ycabled's redis-layer tests skip when redis-server is missing, as in
+        # the deb build's environment; installed above, it must not be missing.
+        export YCABLED_REQUIRE_REDIS=1
         # `parity` adds the tests that run each Python daemon against its Rust
         # port (crates/pmon-common/src/parity.rs).  They need sonic_py_common,
         # installed above, and the PYTHONPATH set here, which the deb build's

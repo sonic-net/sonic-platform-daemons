@@ -3,7 +3,7 @@
 By default that is Python ycabled from this source tree. BB_YCABLED_CMD runs
 something else instead, for example the Rust implementation:
 
-    BB_YCABLED_CMD=/usr/bin/ycabled-rs
+    BB_YCABLED_CMD=/usr/bin/ycabled
 
 Either way the process gets the same environment: the fake platform and
 vendor driver on PYTHONPATH, PLATFORM from the test's topology, and the fake

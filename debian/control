@@ -5,6 +5,7 @@ Priority: optional
 Build-Depends: debhelper-compat (= 13),
                 libswsscommon-dev,
                 libyang-dev,
+                protobuf-compiler,
                 python3-dev,
                 python3-jinja2
 Standards-Version: 1.0.0
@@ -90,3 +91,18 @@ Description: SONiC PCIe device monitoring daemon, in Rust
  The binary embeds a CPython interpreter to make those calls.  A later
  phase replaces the bridge with a native Rust implementation of the same
  trait, which removes the interpreter without touching the daemon.
+
+Package: sonic-ycabled-rs
+Architecture: any
+# sonic_y_cable, which holds the vendors' Y-cable drivers, comes with the
+# sonic-platform-common wheel, which dpkg cannot depend on: see above.
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3
+Description: SONiC Y-cable daemon, in Rust
+ Rust port of ycabled, the dual ToR daemon between linkmgrd and the Y
+ cables.  It writes the same APPL_DB and STATE_DB entries as the Python
+ implementation: toggles and probes of active-standby cables through the
+ vendor's Python driver, and of active-active cables through the cable's
+ SoC over gRPC, with their telemetry and CLI commands.
+ .
+ The binary embeds a CPython interpreter to call the drivers in
+ sonic_y_cable, as Python ycabled does.

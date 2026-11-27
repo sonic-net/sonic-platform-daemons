@@ -1,0 +1,45 @@
+[package]
+name = "sonic-ycabled-rs"
+version = "1.0.0"
+edition = "2021"
+authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
+description = "Y-cable daemon of SONiC dual ToR, in Rust"
+license = "Apache-2.0"
+
+[lib]
+name = "ycabled"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ycabled"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+futures = "0.3"
+hyper-util = { version = "0.1", features = ["tokio"] }
+libc = "0.2"
+prost = "0.13"
+pyo3 = "0.30"
+rand = "0.8"
+redis = { version = "0.27", default-features = false, features = ["aio", "tokio-comp", "connection-manager"] }
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util", "fs"] }
+# The SoC connector does TLS itself (src/grpc.rs), with the features tonic's
+# own TLS uses.
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { version = "0.12", features = ["tls"] }
+tower = { version = "0.4", features = ["util"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+

@@ -1,0 +1,220 @@
+# ycabled-rs
+
+The Y-cable daemon of SONiC dual ToR, in Rust: a drop-in replacement for
+Python ycabled (`sonic-ycabled`), as designed in
+[ycabled_to_rust_hld.md](https://github.com/sonic-net/SONiC/blob/master/doc/dualtor/ycabled_to_rust_hld.md).
+It serves the same tables with the same fields and values, so orchagent,
+linkmgrd, xcvrd and `show/config muxcable` work with either.
+
+## Design in short
+
+- **One actor per mux port** (`src/actor/`): a tokio task that handles the
+  port's requests one at a time and in order: initialization, cable
+  insertion and removal, toggles, probes, CLI commands. Ports run at the
+  same time, so a slow SoC or cable delays only its own port (N1), ports
+  initialize in parallel (N3), and the cross-thread races of Python ycabled
+  (issues 26 to 29 of the HLD) cannot happen. No request is dropped: a port
+  that cannot keep up queues them, and a backlog of 256 is logged. Startup
+  subscribes to TRANSCEIVER_INFO, and to the request tables where there are
+  mux ports, before the ports initialize, and a port's events wait behind
+  its initialization, so a cable inserted or removed meanwhile is handled
+  and a driver call that never returns holds up only its own port. A port
+  that becomes a mux port after startup gets its actor at its first cable
+  event or request, whichever comes first, and the request waits behind the
+  port's initialization.
+- **Telemetry** (every 60 s per port) runs in a task beside the actor, so a
+  toggle never waits for a whole pass. Calls to an active-standby cable,
+  presence checks and loading and unloading its driver included, take the
+  port's call lock: a request holds it while it runs, a telemetry pass for
+  one call at a time, so a toggle waits for at most one telemetry call.
+  Active-standby telemetry calls also run one at a time across the ports
+  of every namespace (shared I2C buses). A pass never waits for the bus
+  while it holds its port's lock, or for the lock while it holds the bus,
+  so a port stuck in a request holds up only its own pass, and a call that
+  hangs on the bus only the other ports' telemetry. Active-active passes
+  run 16 at a time.
+- **Databases** (`src/db.rs`): redis directly, with swsscommon's conventions:
+  a row is one `HSET` of all its fields, subscriptions are swsscommon's
+  `SubscriberStateTable` (keyspace notifications, then the existing rows),
+  but for `HW_FORWARDING_STATE_PEER` (see Active-active).
+  A namespace's subscriptions share one connection, and their events are
+  routed in the order redis delivered them, so a port's requests keep their
+  order across tables. Per namespace, that and one connection per database
+  make 4, whatever the number of ports (Python: 125 with 24 active-standby
+  ports, 199 with 32 active-active ports). Round trips cost the most CPU,
+  so the rows of notifications that arrive together are read in one
+  pipelined round trip per database, and a toggle writes its metrics and
+  its state in one.
+- **Active-active** (`src/grpc.rs`): tonic, one lazily connected channel per
+  SoC, 0.5 s deadlines, keepalive 4 s/8 s, TLS from GRPCCLIENT (rustls). The
+  connector makes the TCP connection and TLS itself and reports connection
+  events, from which ycabled-rs derives gRPC connectivity states as
+  grpc-core does: a connection is `READY` only once TLS is done and the
+  SoC's first HTTP/2 frame has arrived, within 5 s; an attempt that fails or
+  takes longer is `TRANSIENT_FAILURE`, which the channel keeps while it
+  tries again. So `FORWARDING_STATE_RESPONSE` gets `response=failure` once
+  when the channel fails or loses its connection, as linkmgrd expects.
+  GracefulRestart subscriptions as in Python. No Python on this path.
+  Unlike Python, ycabled-rs does not act on the peer toggles it finds in
+  `HW_FORWARDING_STATE_PEER` at startup, only on those written afterwards:
+  linkmgrd sets a port's row to standby when it loses the peer's
+  heartbeats and never clears it, so after a peer outage the row is stale,
+  and replaying it would take the healthy peer out of service until the
+  peer's linkmgrd probes again, up to 10 s later. The SoC keeps what an
+  earlier ycabled set; a peer toggle written while ycabled-rs is down is
+  lost.
+- **Active-standby** (`src/bridge.rs`, `python/ycabled_bridge.py`): the
+  vendor drivers stay Python. An embedded CPython (PyO3), started only if an
+  active-standby port needs it, runs a bridge module that owns the platform
+  API and the driver objects; Rust calls it with plain values. Driver
+  selection is Python ycabled's. Driver calls run one at a time, as Python
+  ycabled's do, on blocking threads that keep their Python thread state:
+  more at once would only queue for the GIL. A call still running after
+  10 ms is waiting on its cable, so it stops counting and the next call
+  starts: K hung cables delay the other ports by at most K × 10 ms (N1).
+  A toggle or probe checks presence and calls the driver in one trip to
+  Python. A call still running after 5 s is logged. A port has at most two
+  calls in flight besides firmware downloads, so calls that never return on
+  some ports leave threads for the others.
+- **Runtime:** tokio with one worker thread, which is enough for the async
+  work and saves the wake-ups between two, and at most two malloc arenas.
+- **CLI** (`src/cli.rs`): the 13 `XCVRD_*_CMD` tables of `show/config
+  muxcable`, answered as Python answers them. A firmware download runs in a
+  task of its own, so the port keeps working meanwhile. A command the CLI
+  replaces before it runs is not run, and one it replaces while it runs is
+  not answered; either way the replacement runs and is answered (HLD 6.5).
+- **Logging** (`src/logger.rs`): syslog through `/dev/log`, identity
+  `ycable` whatever the drivers do with `openlog`. A thread of its own sends
+  the messages, so a syslog that does not take them in holds up no port;
+  when its queue is full, messages are dropped and the count is logged.
+
+The known issues of Python ycabled (HLD section 3.8) that a black-box test
+reproduces are fixed; see the HLD for the list, and section 4.5 for the
+deliberate differences.
+
+Limitations (HLD section 4.8):
+
+- Active-standby ports need the platform API (`sonic_platform`). The legacy
+  `sfputil` plugin, which Python ycabled falls back to when the chassis
+  cannot be loaded, is not supported: ycabled-rs exits.
+- Like Python ycabled (`daemon_base.db_connect`), ycabled-rs reaches redis
+  over TCP, at each namespace's host and port in its DB config.
+- A Python driver call cannot be cancelled. One that holds the GIL without
+  returning stops every active-standby port, as it does in Python.
+- A namespace without mux ports at startup subscribes to the request tables
+  at its first mux port's TRANSCEIVER_INFO event. A port configured later
+  while its cable is already in gets no such event, so its requests are
+  served once ycabled restarts, as after `config reload`. Python serves no
+  request at all when no Y-cable is there at startup, and like it,
+  ycabled-rs answers no CLI command on a device without mux ports.
+
+## Build
+
+The crate is a member of the Rust workspace at the root of the repository.
+The package build (`debian/`) builds and tests it with the other Rust
+daemons, as the package `sonic-ycabled-rs`, which installs the binary as
+`/usr/bin/ycabled`; Python ycabled stays `/usr/local/bin/ycabled`. The
+pipeline lints and tests it with the other crates.
+
+ycabled-rs links the libpython of the image it runs in, so it is built in an
+image derived from it (`Dockerfile`): docker-sonic-vs (Debian bookworm,
+Python 3.11) for the black-box suite, docker-pmon (trixie, Python 3.13) for a
+DUT.
+
+```bash
+crates/ycabled/build.sh                          # cargo build --release, in ycabled-rs-build:latest
+YCABLED_RS_BASE_IMAGE=docker-sonic-vs:latest YCABLED_RS_BUILD_IMAGE=ycabled-rs-build:vs \
+    crates/ycabled/build.sh cargo build --release
+```
+
+`build.sh <command>` runs any command in the crate directory in the build
+image, as the calling user. The image is rebuilt from
+`YCABLED_RS_BASE_IMAGE` each time (from docker's cache unless the base
+changed), and the cargo registry persists in the `ycabled-rs-cargo-<uid>`
+volume (`YCABLED_RS_CARGO_VOLUME`). The binary is `target/release/ycabled`,
+in the workspace's `target/` at the root of the repository.
+
+## Run
+
+`ycabled` takes no arguments. Like Python ycabled it reads
+`/var/run/redis/sonic-db/database_config.json` (and `database_global.json`
+on multi-ASIC platforms), `PLATFORM` and CONFIG_DB `DEVICE_METADATA`, and
+loads vendor drivers through `sonic_y_cable` on the Python path. SIGTERM and
+SIGINT exit within 2 s and keep the tables; SIGHUP is ignored, from the
+start. At startup it waits for redis, trying every second. It exits on a
+failure, such as a lost subscription, a row it cannot read, or a platform
+API it cannot load for an active-standby port, at startup or later, for
+supervisord to start it again; within 11 s of the start, it exits when the
+11 s are up, so that every start lasts longer than pmon's `startsecs` (10)
+and supervisord keeps restarting it rather than giving up (`FATAL`).
+
+## Tests
+
+- **Unit tests** (162): the actors and the CLI against an in-memory
+  database and mocks of the cables and SoCs (`src/testing.rs`), the redis
+  layer against a private `redis-server` (skipped where there is none, as in
+  the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the
+  pipeline), the gRPC client against an
+  in-process SoC, over TLS too with certificates that `openssl` makes for
+  the test, the bridge in the embedded interpreter with fake drivers.
+  They cover the behaviors the Python unit tests cover;
+  [doc/python-ut-coverage.md](doc/python-ut-coverage.md) maps them.
+
+  ```bash
+  crates/ycabled/build.sh cargo test --lib
+  ```
+
+- **Black-box tests** (`sonic-ycabled/blackbox`): the suite Python ycabled
+  passes, run against ycabled-rs. Known-issue tests are normal tests for it,
+  and the two tests of Python-only mechanisms are skipped. All 364 others
+  pass, in about 13 minutes (Python: about 17).
+
+  ```bash
+  cd sonic-ycabled/blackbox
+  BB_YCABLED_CMD=/src/target/release/ycabled ./run.sh
+  ```
+
+## Benchmark
+
+`sonic-ycabled/blackbox/bench` measures either implementation on the
+suite's fakes: memory, threads, Redis connections and idle CPU, startup and
+toggle latency with SoCs or cables that do not answer, probe latency, toggle
+throughput, 1000 toggles with the CPU, memory and threads they take, the
+telemetry pass.
+
+```bash
+cd sonic-ycabled/blackbox
+BB_REPORT_DIR=/tmp/bench ./run.sh bench/test_bench.py
+BB_REPORT_DIR=/tmp/bench BB_YCABLED_CMD=/src/target/release/ycabled ./run.sh bench/test_bench.py
+bench/compare.py /tmp/bench
+```
+
+Results, one run after the other on a shared 16-core host (HLD section 5.3
+explains them). They compare the daemons on the same fakes, not hardware.
+
+| Scenario | Metric | Python | Rust |
+| --- | --- | ---: | ---: |
+| 24 active-standby ports | RSS / PSS | 51.9 / 43.5 MB | 36.7 / 32.1 MB |
+| | Threads | 5 | 5 |
+| | Redis connections | 125 | 4 |
+| | CPU over 65 s, one telemetry pass | 0.14% | 0.11% |
+| 32 active-active ports | RSS / PSS | 60.7 / 50.4 MB | 11.3 / 9.7 MB |
+| | Threads | 62 | 3 |
+| | Redis connections | 198 | 4 |
+| | CPU over 65 s, one telemetry pass | 4.60% | 0.08% |
+| Startup, SoCs never answer | 8 / 32 ports | 4.18 / 16.32 s | 0.51 / 0.52 s |
+| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2019 ms | 6.9 ms |
+| 8 ports toggled, 4 cables hang for 3 s | Healthy ports, slowest answer | 12014 ms | 48 ms |
+| Active-standby probe | Median / p99 | 1.72 / 2.10 ms | 1.62 / 2.08 ms |
+| 24 active-standby ports toggled together | Toggles per second | 869 | 1246 |
+| 1000 active-standby toggles, 100 ports at a time | CPU time / peak RSS | 0.44 s / 52.7 MB | 0.31 s / 37.7 MB |
+| 1000 toggles of one active-standby port | Median / p99 latency | 1.19 / 1.78 ms | 0.88 / 1.33 ms |
+| 1000 active-active toggles, 100 ports at a time | CPU time / peak RSS | 0.96 s / 70.1 MB | 0.18 s / 18.1 MB |
+| Telemetry pass, 32 active-active ports | SoCs hang / blackholed | 62.3 / 0.05 s | 2.0 / 2.0 s |
+
+ycabled-rs's threads are the main thread, the runtime's worker and the
+syslog writer, and, with active-standby ports, the blocking threads of the
+driver calls. Those are kept for 120 s idle, longer than the 60 s between
+telemetry passes, and a call that takes over 10 ms lets the next one start
+on another: one or two with these fakes, 11 with the KVM testbed's mux
+simulator, whose calls go over HTTP.

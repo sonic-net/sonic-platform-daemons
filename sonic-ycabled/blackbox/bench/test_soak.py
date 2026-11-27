@@ -5,7 +5,7 @@ Not part of the suite or of the benchmarks: run it explicitly, with no or a
 long per-test time limit, once per implementation:
 
     run.sh --bb-test-timeout=0 bench/test_soak.py
-    BB_YCABLED_CMD=/src/sonic-ycabled-rs/target/release/ycabled-rs \\
+    BB_YCABLED_CMD=/src/target/release/ycabled \\
         run.sh --bb-test-timeout=0 bench/test_soak.py
 
 Environment:
@@ -55,7 +55,9 @@ def impl_name():
     cmd = os.environ.get("BB_YCABLED_CMD", "")
     if implementation() == "python":
         return "python"
-    return "rust" if "ycabled-rs" in cmd else os.path.basename(cmd.split()[0])
+    name = os.path.basename(cmd.split()[0])
+    # The Rust daemon's binary: ycabled, or ycabled-rs as it was first named.
+    return "rust" if name in ("ycabled", "ycabled-rs") else name
 
 
 def round_state(r):
