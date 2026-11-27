@@ -421,7 +421,12 @@ pub async fn run(opts: Options) -> Result<()> {
             }
         }
     } else {
-        LazyPlatform::new(is_vs)
+        // An active-standby port configured later starts the bridge, and
+        // its failure ends ycabled-rs as it does here.
+        LazyPlatform::new(is_vs, || {
+            log_error!("ycabled-rs failed: no platform API for the active-standby ports");
+            crate::exit::after_failure(1)
+        })
     };
     let soc: Arc<dyn SocConnector> = Arc::new(TonicConnector);
 

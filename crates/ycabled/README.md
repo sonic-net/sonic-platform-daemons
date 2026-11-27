@@ -139,14 +139,15 @@ on multi-ASIC platforms), `PLATFORM` and CONFIG_DB `DEVICE_METADATA`, and
 loads vendor drivers through `sonic_y_cable` on the Python path. SIGTERM and
 SIGINT exit within 2 s and keep the tables; SIGHUP is ignored, from the
 start. At startup it waits for redis, trying every second. It exits on a
-failure, such as a lost subscription or a row it cannot read, for
+failure, such as a lost subscription, a row it cannot read, or a platform
+API it cannot load for an active-standby port, at startup or later, for
 supervisord to start it again; within 11 s of the start, it exits when the
 11 s are up, so that every start lasts longer than pmon's `startsecs` (10)
 and supervisord keeps restarting it rather than giving up (`FATAL`).
 
 ## Tests
 
-- **Unit tests** (156): the actors and the CLI against an in-memory
+- **Unit tests** (157): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server` (skipped where there is none, as in
   the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the
@@ -190,20 +191,24 @@ explains them). They compare the daemons on the same fakes, not hardware.
 
 | Scenario | Metric | Python | Rust |
 | --- | --- | ---: | ---: |
-| 24 active-standby ports | RSS / PSS | 50.4 / 41.8 MB | 35.7 / 31.2 MB |
-| | Threads | 5 | 4 |
+| 24 active-standby ports | RSS / PSS | 51.9 / 43.5 MB | 36.7 / 32.1 MB |
+| | Threads | 5 | 5 |
 | | Redis connections | 125 | 4 |
-| | CPU over 65 s, one telemetry pass | 0.14% | 0.09% |
-| 32 active-active ports | RSS / PSS | 59.1 / 48.7 MB | 11.1 / 9.6 MB |
-| | Threads | 64 | 3 |
-| | Redis connections | 199 | 4 |
-| | CPU over 65 s, one telemetry pass | 4.74% | 0.08% |
-| Startup, SoCs never answer | 8 / 32 ports | 4.17 / 16.33 s | 0.51 / 0.52 s |
-| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2020 ms | 6.8 ms |
-| 8 ports toggled, 4 cables hang for 3 s | Healthy ports, slowest answer | 12015 ms | 50 ms |
-| Active-standby probe | Median / p99 | 1.73 / 2.13 ms | 1.64 / 2.06 ms |
-| 24 active-standby ports toggled together | Toggles per second | 553 | 1197 |
-| 1000 active-standby toggles, 100 ports at a time | CPU time / peak RSS | 0.45 s / 50.9 MB | 0.31 s / 36.7 MB |
-| 1000 toggles of one active-standby port | Median / p99 latency | 1.37 / 4.50 ms | 0.93 / 1.49 ms |
-| 1000 active-active toggles, 100 ports at a time | CPU time / peak RSS | 0.91 s / 68.3 MB | 0.15 s / 18.7 MB |
-| Telemetry pass, 32 active-active ports | SoCs hang / blackholed | 62.3 / 0.04 s | 2.0 / 2.0 s |
+| | CPU over 65 s, one telemetry pass | 0.14% | 0.11% |
+| 32 active-active ports | RSS / PSS | 60.7 / 50.4 MB | 11.3 / 9.7 MB |
+| | Threads | 62 | 3 |
+| | Redis connections | 198 | 4 |
+| | CPU over 65 s, one telemetry pass | 4.60% | 0.08% |
+| Startup, SoCs never answer | 8 / 32 ports | 4.18 / 16.32 s | 0.51 / 0.52 s |
+| 8 ports toggled, 4 SoCs hang | Healthy ports, slowest answer | 2019 ms | 6.9 ms |
+| 8 ports toggled, 4 cables hang for 3 s | Healthy ports, slowest answer | 12014 ms | 48 ms |
+| Active-standby probe | Median / p99 | 1.72 / 2.10 ms | 1.62 / 2.08 ms |
+| 24 active-standby ports toggled together | Toggles per second | 869 | 1246 |
+| 1000 active-standby toggles, 100 ports at a time | CPU time / peak RSS | 0.44 s / 52.7 MB | 0.31 s / 37.7 MB |
+| 1000 toggles of one active-standby port | Median / p99 latency | 1.19 / 1.78 ms | 0.88 / 1.33 ms |
+| 1000 active-active toggles, 100 ports at a time | CPU time / peak RSS | 0.96 s / 70.1 MB | 0.18 s / 18.1 MB |
+| Telemetry pass, 32 active-active ports | SoCs hang / blackholed | 62.3 / 0.05 s | 2.0 / 2.0 s |
+
+ycabled-rs's threads are the main thread, the runtime's worker and the
+syslog writer, and, with active-standby ports, the blocking threads of the
+driver calls, which end after 10 s without calls.

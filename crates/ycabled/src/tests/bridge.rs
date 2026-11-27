@@ -5,10 +5,12 @@
 //! test_y_cable_helper_format_mapping_identifier*, test_hook_y_cable_simulated).
 
 use std::ffi::CString;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-use crate::bridge::{to_pyval, CallError, PyBridge, PyPlatform, YCablePlatform};
+use crate::bridge::{to_pyval, CallError, LazyPlatform, PyBridge, PyPlatform, YCablePlatform};
 use crate::logger::{self, Level};
 use crate::pyval::{PyArg, PyVal};
 
@@ -232,6 +234,26 @@ _chassis = TimedChassis()
 
     assert!(p.presence(9002).await);
     assert!(logger::capture::find("of port 9002").is_empty());
+}
+
+/// An active-standby port configured after startup starts the bridge. If
+/// the bridge cannot start, `on_failure` runs, once: the daemon exits then,
+/// as at startup, for supervisord to start it again. The failure was kept
+/// instead, and the port had no cable until a restart.
+#[tokio::test]
+async fn lazy_bridge_failure_runs_on_failure() {
+    let failures = Arc::new(AtomicUsize::new(0));
+    let f = Arc::clone(&failures);
+    let p = LazyPlatform::with_start(
+        || Err("RuntimeError('platform API broken')".to_string()),
+        move || {
+            f.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    assert!(!p.presence(1).await);
+    assert_eq!(p.load("Ethernet0", 1).await, None);
+    assert!(!p.has_driver(1).await);
+    assert_eq!(failures.load(Ordering::SeqCst), 1);
 }
 
 #[test]

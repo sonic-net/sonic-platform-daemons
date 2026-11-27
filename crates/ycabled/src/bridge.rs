@@ -459,33 +459,47 @@ impl YCablePlatform for PyPlatform {
     }
 }
 
+type BridgeStart = Arc<dyn Fn() -> Result<Arc<PyBridge>, String> + Send + Sync>;
+
 /// The bridge, started the first time an active-standby port needs it: an
 /// active-active-only device never starts the interpreter.
 pub struct LazyPlatform {
-    is_vs: bool,
+    start: BridgeStart,
+    /// Runs if the bridge cannot start. The daemon exits, as when the bridge
+    /// cannot start at startup, for supervisord to start it again: the
+    /// failure may not last, and the port would otherwise have no cable
+    /// until a restart.
+    on_failure: Box<dyn Fn() + Send + Sync>,
     inner: tokio::sync::OnceCell<Option<Arc<PyPlatform>>>,
 }
 
 impl LazyPlatform {
-    pub fn new(is_vs: bool) -> Arc<LazyPlatform> {
+    pub fn new(is_vs: bool, on_failure: impl Fn() + Send + Sync + 'static) -> Arc<LazyPlatform> {
+        Self::with_start(move || PyBridge::start(is_vs), on_failure)
+    }
+
+    pub(crate) fn with_start(
+        start: impl Fn() -> Result<Arc<PyBridge>, String> + Send + Sync + 'static,
+        on_failure: impl Fn() + Send + Sync + 'static,
+    ) -> Arc<LazyPlatform> {
         Arc::new(LazyPlatform {
-            is_vs,
+            start: Arc::new(start),
+            on_failure: Box::new(on_failure),
             inner: tokio::sync::OnceCell::new(),
         })
     }
 
     async fn get(&self) -> Option<Arc<PyPlatform>> {
-        let is_vs = self.is_vs;
         self.inner
-            .get_or_init(|| async move {
-                match tokio::task::spawn_blocking(move || PyBridge::start(is_vs)).await {
-                    Ok(Ok(b)) => Some(PyPlatform::new(b)),
-                    Ok(Err(e)) => {
-                        crate::log_warning!("Failed to load chassis due to {}", e);
-                        None
-                    }
-                    Err(_) => None,
+            .get_or_init(|| async {
+                let start = Arc::clone(&self.start);
+                match tokio::task::spawn_blocking(move || start()).await {
+                    Ok(Ok(b)) => return Some(PyPlatform::new(b)),
+                    Ok(Err(e)) => crate::log_warning!("Failed to load chassis due to {}", e),
+                    Err(e) => crate::log_warning!("Failed to load chassis due to {}", e),
                 }
+                (self.on_failure)();
+                None
             })
             .await
             .clone()
