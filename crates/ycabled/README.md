@@ -97,27 +97,33 @@ Limitations (HLD section 4.8):
 
 ## Build
 
+The crate is a member of the Rust workspace at the root of the repository.
+The package build (`debian/`) builds and tests it with the other Rust
+daemons, as the package `sonic-ycabled-rs`, which installs the binary as
+`/usr/bin/ycabled`; Python ycabled stays `/usr/local/bin/ycabled`. The
+pipeline lints and tests it with the other crates.
+
 ycabled-rs links the libpython of the image it runs in, so it is built in an
 image derived from it (`Dockerfile`): docker-sonic-vs (Debian bookworm,
 Python 3.11) for the black-box suite, docker-pmon (trixie, Python 3.13) for a
 DUT.
 
 ```bash
-sonic-ycabled-rs/build.sh                          # cargo build --release, in ycabled-rs-build:latest
+crates/ycabled/build.sh                          # cargo build --release, in ycabled-rs-build:latest
 YCABLED_RS_BASE_IMAGE=docker-sonic-vs:latest YCABLED_RS_BUILD_IMAGE=ycabled-rs-build:vs \
-    sonic-ycabled-rs/build.sh cargo build --release
+    crates/ycabled/build.sh cargo build --release
 ```
 
 `build.sh <command>` runs any command in the crate directory in the build
 image, as the calling user. The image is rebuilt from
 `YCABLED_RS_BASE_IMAGE` each time (from docker's cache unless the base
 changed), and the cargo registry persists in the `ycabled-rs-cargo-<uid>`
-volume (`YCABLED_RS_CARGO_VOLUME`). The binary is
-`target/release/ycabled-rs`.
+volume (`YCABLED_RS_CARGO_VOLUME`). The binary is `target/release/ycabled`,
+in the workspace's `target/` at the root of the repository.
 
 ## Run
 
-`ycabled-rs` takes no arguments. Like Python ycabled it reads
+`ycabled` takes no arguments. Like Python ycabled it reads
 `/var/run/redis/sonic-db/database_config.json` (and `database_global.json`
 on multi-ASIC platforms), `PLATFORM` and CONFIG_DB `DEVICE_METADATA`, and
 loads vendor drivers through `sonic_y_cable` on the Python path. SIGTERM and
@@ -127,14 +133,16 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
 - **Unit tests** (148): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
-  layer against a private `redis-server`, the gRPC client against an
+  layer against a private `redis-server` (skipped where there is none, as in
+  the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the
+  pipeline), the gRPC client against an
   in-process SoC, over TLS too with certificates that `openssl` makes for
   the test, the bridge in the embedded interpreter with fake drivers.
   They cover the behaviors the Python unit tests cover;
   [doc/python-ut-coverage.md](doc/python-ut-coverage.md) maps them.
 
   ```bash
-  sonic-ycabled-rs/build.sh cargo test --release --lib
+  crates/ycabled/build.sh cargo test --lib
   ```
 
 - **Black-box tests** (`sonic-ycabled/blackbox`): the suite Python ycabled
@@ -144,7 +152,7 @@ SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
 
   ```bash
   cd sonic-ycabled/blackbox
-  BB_YCABLED_CMD=/src/sonic-ycabled-rs/target/release/ycabled-rs ./run.sh
+  BB_YCABLED_CMD=/src/target/release/ycabled ./run.sh
   ```
 
 ## Benchmark
@@ -158,7 +166,7 @@ telemetry pass.
 ```bash
 cd sonic-ycabled/blackbox
 BB_REPORT_DIR=/tmp/bench ./run.sh bench/test_bench.py
-BB_REPORT_DIR=/tmp/bench BB_YCABLED_CMD=/src/sonic-ycabled-rs/target/release/ycabled-rs ./run.sh bench/test_bench.py
+BB_REPORT_DIR=/tmp/bench BB_YCABLED_CMD=/src/target/release/ycabled ./run.sh bench/test_bench.py
 bench/compare.py /tmp/bench
 ```
 

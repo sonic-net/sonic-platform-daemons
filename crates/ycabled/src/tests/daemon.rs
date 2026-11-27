@@ -184,7 +184,9 @@ async fn probe_response(db: &RedisDb, port: &str) -> Option<String> {
 /// without an actor, and the insertion does not initialize the port again.
 #[tokio::test]
 async fn request_replayed_ahead_of_its_port_insertion_is_answered() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     let platform = MockPlatform::new();
     platform.add(1, MockCable::default());
@@ -248,7 +250,9 @@ async fn request_replayed_ahead_of_its_port_insertion_is_answered() {
 /// mux tables; a replayed forwarding state probe shows when they are.
 #[tokio::test]
 async fn peer_toggle_from_before_the_subscription_is_not_acted_on() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     let soc = MockSoc::new();
     let shared = Shared::new(

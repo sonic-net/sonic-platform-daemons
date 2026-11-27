@@ -4,7 +4,7 @@ Not part of the test suite (pytest.ini collects tests/ only); run them
 explicitly, once per implementation, in the suite's container:
 
     run.sh bench/test_bench.py                                       # Python ycabled
-    BB_YCABLED_CMD=/src/sonic-ycabled-rs/target/release/ycabled-rs \\
+    BB_YCABLED_CMD=/src/target/release/ycabled \\
         run.sh bench/test_bench.py                                   # ycabled-rs
 
 Each run writes bench-<implementation>.json to the report directory;
@@ -42,7 +42,9 @@ def impl_name():
     cmd = os.environ.get("BB_YCABLED_CMD", "")
     if implementation() == "python":
         return "python"
-    return "rust" if "ycabled-rs" in cmd else os.path.basename(cmd.split()[0])
+    name = os.path.basename(cmd.split()[0])
+    # The Rust daemon's binary: ycabled, or ycabled-rs as it was first named.
+    return "rust" if name in ("ycabled", "ycabled-rs") else name
 
 
 @pytest.fixture(scope="module", autouse=True)

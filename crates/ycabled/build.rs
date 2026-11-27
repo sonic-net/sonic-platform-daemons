@@ -2,7 +2,7 @@
 //! both implementations speak the same service definition.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let proto_dir = "../sonic-ycabled/proto";
+    let proto_dir = "../../sonic-ycabled/proto";
     let proto = format!("{proto_dir}/proto_out/linkmgr_grpc_driver.proto");
     println!("cargo:rerun-if-changed={proto}");
     tonic_build::configure()

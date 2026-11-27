@@ -9,7 +9,7 @@ ycabled-rs has different internals, so its unit tests check the same behaviors a
 
 Each Rust test's doc comment names the Python tests it covers. The black-box suite (`sonic-ycabled/blackbox`) runs the same tests on both daemons and checks the end-to-end behavior against Python's.
 
-Run the unit tests with `./build.sh cargo test --release --lib` (see [README.md](../README.md)).
+Run the unit tests with `./build.sh cargo test --lib` (see [README.md](../README.md)).
 
 ## By area
 

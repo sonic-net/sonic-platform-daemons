@@ -8,6 +8,7 @@ members  = [
     "crates/psud",
     "crates/syseepromd",
     "crates/thermalctld",
+    "crates/ycabled",
 ]
 resolver = "2"
 

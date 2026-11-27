@@ -4,7 +4,7 @@
 # and libpython. For the black-box suite that is docker-sonic-vs (Debian
 # bookworm, Python 3.11); for pmon it is docker-pmon (Debian trixie, Python 3.13).
 #
-#   docker build --build-arg BASE_IMAGE=docker-sonic-vs:latest -t ycabled-rs-build sonic-ycabled-rs
+#   docker build --build-arg BASE_IMAGE=docker-sonic-vs:latest -t ycabled-rs-build crates/ycabled
 #
 # See README.md for the build and test commands.
 ARG BASE_IMAGE=docker-sonic-vs:latest

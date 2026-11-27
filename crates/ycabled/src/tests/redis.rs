@@ -9,6 +9,10 @@ use tokio::time::timeout;
 
 use crate::db::{Db, DbConfig, DbId, Event, RedisDb, TableEvent};
 
+/// Set, a missing redis-server fails the tests that need one rather than
+/// skipping them. The pipeline sets it.
+const REQUIRE_REDIS: &str = "YCABLED_REQUIRE_REDIS";
+
 /// A redis-server on a free port, with keyspace notifications, killed on drop.
 pub struct TestRedis {
     child: Child,
@@ -17,7 +21,10 @@ pub struct TestRedis {
 }
 
 impl TestRedis {
-    pub async fn start() -> TestRedis {
+    /// None, after a note, when redis-server is not installed and
+    /// [`REQUIRE_REDIS`] is not set: the package build runs the workspace's
+    /// tests in sonic-slave, which has no redis-server.
+    pub async fn start() -> Option<TestRedis> {
         let port = {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             l.local_addr().unwrap().port()
@@ -39,8 +46,18 @@ impl TestRedis {
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn()
-            .expect("redis-server");
+            .spawn();
+        let child = match child {
+            Ok(child) => child,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && std::env::var_os(REQUIRE_REDIS).is_none() =>
+            {
+                eprintln!("redis-server is not installed: test skipped ({REQUIRE_REDIS} unset)");
+                return None;
+            }
+            Err(e) => panic!("redis-server: {e}"),
+        };
         let config: DbConfig = serde_json::from_str(&format!(
             r#"{{"INSTANCES": {{"redis": {{"hostname": "127.0.0.1", "port": {port}}}}},
                 "DATABASES": {{"APPL_DB": {{"id": 0, "separator": ":", "instance": "redis"}},
@@ -54,11 +71,11 @@ impl TestRedis {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        TestRedis {
+        Some(TestRedis {
             child,
             port,
             config,
-        }
+        })
     }
 
     pub async fn db(&self) -> Arc<RedisDb> {
@@ -98,7 +115,9 @@ fn hset(c: &mut redis::Connection, key: &str, field: &str, value: &str) {
 
 #[tokio::test]
 async fn rows_use_sonic_keys_and_separators() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     db.set(
         DbId::State,
@@ -170,7 +189,9 @@ async fn rows_use_sonic_keys_and_separators() {
 
 #[tokio::test]
 async fn subscription_replays_rows_then_follows_changes() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     db.set(
         DbId::Appl,
@@ -267,7 +288,9 @@ async fn subscription_replays_rows_then_follows_changes() {
 /// a port's requests keep their order across tables (HLD 4.3.3).
 #[tokio::test]
 async fn events_keep_their_order_across_tables() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     let tables = [
         "TRANSCEIVER_INFO",
@@ -308,7 +331,9 @@ async fn events_keep_their_order_across_tables() {
 /// tables' events, on the same connection.
 #[tokio::test]
 async fn added_tables_replay_rows_then_follow_changes() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     db.set(
         DbId::Appl,
@@ -352,7 +377,9 @@ async fn added_tables_replay_rows_then_follow_changes() {
 /// added later, only its changes; the other tables still get theirs.
 #[tokio::test]
 async fn changes_only_tables_get_no_rows() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     for table in [
         "HW_FORWARDING_STATE_PEER",
@@ -416,7 +443,9 @@ async fn changes_only_tables_get_no_rows() {
 /// exit for supervisord to start it again.
 #[tokio::test]
 async fn losing_the_connection_runs_on_lost() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     let (lost_tx, lost_rx) = tokio::sync::oneshot::channel();
     let (_subscriptions, _rx) = db
@@ -438,7 +467,9 @@ async fn losing_the_connection_runs_on_lost() {
 
 #[tokio::test]
 async fn waits_for_config_db_initialized() {
-    let r = TestRedis::start().await;
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
     let db = r.db().await;
     let waiter = {
         let db = Arc::clone(&db);

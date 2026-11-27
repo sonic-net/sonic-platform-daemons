@@ -236,8 +236,8 @@ _chassis = TimedChassis()
 
 #[test]
 fn python_values_keep_type_and_text() {
-    pyo3::prepare_freethreaded_python();
-    Python::with_gil(|py| {
+    Python::initialize();
+    Python::attach(|py| {
         let eval = |code: &str| {
             let c = CString::new(code).unwrap();
             to_pyval(&py.eval(&c, None, None).unwrap())

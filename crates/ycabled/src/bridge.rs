@@ -91,22 +91,22 @@ pub fn to_pyval(obj: &Bound<'_, PyAny>) -> PyVal {
     let text = || obj.str().map(|s| s.to_string()).unwrap_or_default();
     if obj.is_none() {
         PyVal::None
-    } else if let Ok(b) = obj.downcast::<PyBool>() {
+    } else if let Ok(b) = obj.cast::<PyBool>() {
         PyVal::Bool(b.is_true())
     } else if obj.is_instance_of::<PyInt>() {
         match obj.extract::<i64>() {
             Ok(i) => PyVal::Int(i),
             Err(_) => PyVal::BigInt(text()),
         }
-    } else if let Ok(f) = obj.downcast::<PyFloat>() {
+    } else if let Ok(f) = obj.cast::<PyFloat>() {
         PyVal::Float(f.value(), text())
-    } else if let Ok(s) = obj.downcast::<PyString>() {
+    } else if let Ok(s) = obj.cast::<PyString>() {
         PyVal::Str(s.to_string())
-    } else if let Ok(l) = obj.downcast::<PyList>() {
+    } else if let Ok(l) = obj.cast::<PyList>() {
         PyVal::List(l.iter().map(|i| to_pyval(&i)).collect(), text())
-    } else if let Ok(t) = obj.downcast::<PyTuple>() {
+    } else if let Ok(t) = obj.cast::<PyTuple>() {
         PyVal::Tuple(t.iter().map(|i| to_pyval(&i)).collect(), text())
-    } else if let Ok(d) = obj.downcast::<PyDict>() {
+    } else if let Ok(d) = obj.cast::<PyDict>() {
         PyVal::Dict(
             d.iter()
                 .map(|(k, v)| (to_pyval(&k), to_pyval(&v)))
@@ -134,7 +134,7 @@ fn to_python<'py>(py: Python<'py>, arg: &PyArg) -> PyResult<Bound<'py, PyAny>> {
 }
 
 /// The Python thread state of a thread that has made a call through the
-/// bridge, kept until the thread exits. Without it, each `with_gil` on a
+/// bridge, kept until the thread exits. Without it, each `attach` on a
 /// thread that Python did not start creates a thread state and its frame
 /// stack and destroys them again (an mmap and a munmap per call).
 struct ThreadState {
@@ -190,8 +190,8 @@ impl PyBridge {
     /// Starts the interpreter and loads the platform API (not on VS). Err:
     /// the platform API cannot be loaded.
     pub fn start(is_vs: bool) -> Result<Arc<PyBridge>, String> {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let code = CString::new(BRIDGE_SOURCE).map_err(|e| e.to_string())?;
             let module = PyModule::from_code(py, &code, c"ycabled_bridge.py", c"ycabled_bridge")
                 .map_err(|e| exc_repr(py, &e))?;
@@ -222,7 +222,7 @@ impl PyBridge {
         let start = std::time::Instant::now();
         let mut task = tokio::task::spawn_blocking(move || {
             keep_thread_state();
-            Python::with_gil(|py| f(py, this.module.bind(py)))
+            Python::attach(|py| f(py, this.module.bind(py)))
         });
         let res = match tokio::time::timeout(SLOT_HOLD, &mut task).await {
             Ok(res) => res,
@@ -260,7 +260,7 @@ impl PyBridge {
 impl PyBridge {
     /// Runs Python code in the bridge module's namespace, to set up fakes.
     pub fn exec(&self, code: &str) -> Result<(), String> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let globals = self.module.bind(py).dict();
             let code = CString::new(code).map_err(|e| e.to_string())?;
             py.run(&code, Some(&globals), None)

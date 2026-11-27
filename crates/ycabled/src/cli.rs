@@ -1369,9 +1369,9 @@ mod tests {
         assert_eq!(tables, CLI_COMMAND_TABLES.to_vec());
         for c in &COMMANDS {
             assert!(c.rsp.ends_with("_RSP"), "{}", c.table);
-            assert!(c.res.map_or(true, |r| r.ends_with("_RES")), "{}", c.table);
+            assert!(c.res.is_none_or(|r| r.ends_with("_RES")), "{}", c.table);
             assert!(
-                c.arg.map_or(true, |a| a == format!("{}_ARG", c.table)),
+                c.arg.is_none_or(|a| a == format!("{}_ARG", c.table)),
                 "{}",
                 c.table
             );

@@ -1,17 +1,17 @@
 [package]
-name = "ycabled-rs"
-version = "0.1.0"
+name = "sonic-ycabled-rs"
+version = "1.0.0"
 edition = "2021"
+authors = ["SONiC Team <sonic-dev@lists.sonicfoundation.dev>"]
 description = "Y-cable daemon of SONiC dual ToR, in Rust"
 license = "Apache-2.0"
-rust-version = "1.80"
 
 [lib]
 name = "ycabled"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ycabled-rs"
+name = "ycabled"
 path = "src/main.rs"
 
 [dependencies]
@@ -22,7 +22,7 @@ futures = "0.3"
 hyper-util = { version = "0.1", features = ["tokio"] }
 libc = "0.2"
 prost = "0.13"
-pyo3 = "0.25"
+pyo3 = "0.30"
 rand = "0.8"
 redis = { version = "0.27", default-features = false, features = ["aio", "tokio-comp", "connection-manager"] }
 rustls-pemfile = "2"
@@ -43,15 +43,3 @@ tonic-build = "0.12"
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 
-[profile.release]
-opt-level = 2
-debug = 1
-panic = "unwind"
-# A quarter less code to keep in memory, and a little less CPU.
-lto = "fat"
-codegen-units = 1
-
-# `cargo test --release` builds with this profile: tests need no LTO.
-[profile.bench]
-lto = false
-codegen-units = 16

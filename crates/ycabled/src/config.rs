@@ -204,7 +204,7 @@ pub fn secrets_to_apply(
         let configured = existing.get(key);
         let missing: Vec<(String, String)> = section
             .iter()
-            .filter(|(f, _)| configured.map_or(true, |c| !c.contains_key(*f)))
+            .filter(|(f, _)| configured.is_none_or(|c| !c.contains_key(*f)))
             .filter_map(|(f, v)| json_to_field(v).map(|v| (f.clone(), v)))
             .collect();
         if !missing.is_empty() {
