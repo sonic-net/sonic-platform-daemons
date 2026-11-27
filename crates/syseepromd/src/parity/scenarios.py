@@ -114,7 +114,21 @@ def changed_contents():
     return (lambda: chassis(image(GOOD))), [('call', more), ('pass',), ('call', drop), ('pass',)]
 
 
-SCENARIOS = [valid, bad_checksum, unreadable, tampered, changed_contents]
+def repost_outage():
+    # The table is wiped while the EEPROM cannot be read, for three passes.
+    # Python logs its two lines in every failed pass; Rust logs them once.
+    def outage(c):
+        c._eeprom.data = None
+        for k in table().getKeys():
+            table()._del(k)
+
+    def readable(c):
+        c._eeprom.data = image(GOOD)
+    return (lambda: chassis(image(GOOD))), [('call', outage), ('pass',), ('pass',), ('pass',),
+                                            ('call', readable), ('pass',)]
+
+
+SCENARIOS = [repost_outage, valid, bad_checksum, unreadable, tampered, changed_contents]
 
 
 def names():
