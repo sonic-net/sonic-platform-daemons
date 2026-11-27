@@ -20,7 +20,7 @@ use anyhow::{bail, Context, Result};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::actor::{Msg, PortActor, Shared};
+use crate::actor::{Global, Msg, PortActor, Shared};
 use crate::bridge::{LazyPlatform, PyBridge, PyPlatform, YCablePlatform};
 use crate::config::{self, CableType};
 use crate::db::{self, Db, DbConfig, DbId, Event, FieldMap, RedisDb, Subscriptions, TableEvent};
@@ -430,7 +430,8 @@ pub async fn run(opts: Options) -> Result<()> {
     };
     let soc: Arc<dyn SocConnector> = Arc::new(TonicConnector);
 
-    let ycable_presence = Arc::new(AtomicBool::new(false));
+    // One for every namespace: Python's telemetry thread serves them all.
+    let global = Global::default();
     let mut namespaces = Vec::new();
     for (i, (name, asic, d)) in dbs.into_iter().enumerate() {
         let dyn_db: Arc<dyn Db> = d.clone();
@@ -440,7 +441,7 @@ pub async fn run(opts: Options) -> Result<()> {
             Arc::clone(&soc),
             is_vs,
             read_sides[i],
-            Arc::clone(&ycable_presence),
+            &global,
         );
         namespaces.push(Namespace::new(name, asic, d, shared));
     }
@@ -493,7 +494,7 @@ pub async fn run(opts: Options) -> Result<()> {
     }
     inits.sort_by_key(|(o, _)| *o);
     let inits = inits.into_iter().map(|(_, p)| p).collect();
-    wait_for_inits(inits, INIT_WAIT, Arc::clone(&ycable_presence)).await;
+    wait_for_inits(inits, INIT_WAIT, Arc::clone(&global.ycable_presence)).await;
 
     if any_active {
         for ns in &daemon.namespaces {

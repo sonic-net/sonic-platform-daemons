@@ -28,10 +28,11 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   port's call lock: a request holds it while it runs, a telemetry pass for
   one call at a time, so a toggle waits for at most one telemetry call.
   Active-standby telemetry calls also run one at a time across the ports
-  (shared I2C buses). A pass never waits for the bus while it holds its
-  port's lock, or for the lock while it holds the bus, so a port stuck in a
-  request holds up only its own pass, and a call that hangs on the bus only
-  the other ports' telemetry. Active-active passes run 16 at a time.
+  of every namespace (shared I2C buses). A pass never waits for the bus
+  while it holds its port's lock, or for the lock while it holds the bus,
+  so a port stuck in a request holds up only its own pass, and a call that
+  hangs on the bus only the other ports' telemetry. Active-active passes
+  run 16 at a time.
 - **Databases** (`src/db.rs`): redis directly, with swsscommon's conventions:
   a row is one `HSET` of all its fields, subscriptions are swsscommon's
   `SubscriberStateTable` (keyspace notifications, then the existing rows),
@@ -149,7 +150,7 @@ and supervisord keeps restarting it rather than giving up (`FATAL`).
 
 ## Tests
 
-- **Unit tests** (160): the actors and the CLI against an in-memory
+- **Unit tests** (162): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server` (skipped where there is none, as in
   the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the
@@ -213,4 +214,7 @@ explains them). They compare the daemons on the same fakes, not hardware.
 
 ycabled-rs's threads are the main thread, the runtime's worker and the
 syslog writer, and, with active-standby ports, the blocking threads of the
-driver calls, which end after 10 s without calls.
+driver calls. Those are kept for 120 s idle, longer than the 60 s between
+telemetry passes, and a call that takes over 10 ms lets the next one start
+on another: one or two with these fakes, 11 with the KVM testbed's mux
+simulator, whose calls go over HTTP.

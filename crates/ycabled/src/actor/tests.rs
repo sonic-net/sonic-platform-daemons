@@ -17,7 +17,7 @@ use crate::pyval::{PyArg, PyVal};
 use crate::schema::*;
 use crate::testing::*;
 
-use super::{Msg, PortActor};
+use super::{Global, Msg, PortActor};
 
 fn globals() -> std::sync::MutexGuard<'static, ()> {
     let g = GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
@@ -1560,6 +1560,46 @@ async fn hung_telemetry_call_holds_up_no_other_request() {
             .and_then(|r| r.get("state").cloned())
     };
     assert!(wait_for(|| b_state().as_deref() == Some("standby"), 3000).await);
+}
+
+/// Active-standby telemetry calls take turns across namespaces too, as
+/// Python's one telemetry thread makes them: the cables of two ASICs may
+/// share an I2C bus. While one namespace's call hangs, the other's pass
+/// calls nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telemetry_calls_take_turns_across_namespaces() {
+    let _g = globals();
+    let global = Global::default();
+    let (fa, fb) = (Fixture::sharing(&global), Fixture::sharing(&global));
+    let (mut a, mut b) = (fa.standby(), fb.standby());
+    a.handle(Msg::Init(None)).await;
+    b.handle(Msg::Init(None)).await;
+    fa.cable(|c| {
+        c.delays
+            .insert("get_eye_heights".into(), std::time::Duration::from_secs(2));
+    });
+    fa.platform.clear_calls();
+    fb.platform.clear_calls();
+    let pass_a = tokio::spawn(async move { a.handle(Msg::Telemetry).await });
+    assert!(
+        wait_for(
+            || fa
+                .platform
+                .calls(PHYSICAL)
+                .iter()
+                .any(|m| m == "get_eye_heights"),
+            3000
+        )
+        .await
+    );
+    let pass_b = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        b.handle(Msg::Telemetry),
+    )
+    .await;
+    assert!(pass_b.is_err());
+    assert_eq!(fb.platform.calls(PHYSICAL), Vec::<String>::new());
+    pass_a.abort();
 }
 
 /// A pass that waited for its turn while the port's cable changed is not

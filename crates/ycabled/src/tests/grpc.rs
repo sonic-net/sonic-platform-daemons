@@ -16,7 +16,7 @@ use tokio_stream::wrappers::{TcpListenerStream, UnboundedReceiverStream};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 
-use crate::actor::Shared;
+use crate::actor::{Global, Shared};
 use crate::bridge::YCablePlatform;
 use crate::daemon;
 use crate::db::{Db, DbId, MemDb};
@@ -737,7 +737,7 @@ async fn graceful_restart_uses_the_current_read_side() {
         MockConnector::new(None) as Arc<dyn SocConnector>,
         false,
         -1,
-        Arc::new(AtomicBool::new(false)),
+        &Global::default(),
     );
     db.put(
         DbId::Config,

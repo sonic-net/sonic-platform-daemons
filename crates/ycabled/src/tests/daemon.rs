@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::redis::{db_config_json, TestRedis};
-use crate::actor::{Msg, Shared};
+use crate::actor::{Global, Msg, Shared};
 use crate::bridge::YCablePlatform;
 use crate::config::CableType;
 use crate::daemon::{
@@ -197,7 +197,7 @@ async fn request_replayed_ahead_of_its_port_insertion_is_answered() {
         MockConnector::new(None) as Arc<dyn SocConnector>,
         false,
         1,
-        Arc::new(AtomicBool::new(false)),
+        &Global::default(),
     );
     let ns = Namespace::new(String::new(), 0, Arc::clone(&db), shared);
     let mut ports = PortMap::default();
@@ -262,7 +262,7 @@ async fn peer_toggle_from_before_the_subscription_is_not_acted_on() {
         MockConnector::new(Some(Arc::clone(&soc))) as Arc<dyn SocConnector>,
         false,
         0,
-        Arc::new(AtomicBool::new(false)),
+        &Global::default(),
     );
     let ns = Namespace::new(String::new(), 0, Arc::clone(&db), shared);
     let mut ports = PortMap::default();

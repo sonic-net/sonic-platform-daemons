@@ -58,6 +58,25 @@ pub enum Msg {
     Telemetry,
 }
 
+/// What the namespaces share, as Python's one process and its one telemetry
+/// thread do.
+#[derive(Clone)]
+pub struct Global {
+    pub ycable_presence: Arc<AtomicBool>,
+    pub bus: Arc<Semaphore>,
+    pub aa_telemetry: Arc<Semaphore>,
+}
+
+impl Default for Global {
+    fn default() -> Global {
+        Global {
+            ycable_presence: Arc::new(AtomicBool::new(false)),
+            bus: Arc::new(Semaphore::new(1)),
+            aa_telemetry: Arc::new(Semaphore::new(16)),
+        }
+    }
+}
+
 /// What all actors of a namespace share.
 pub struct Shared {
     pub db: Arc<dyn Db>,
@@ -68,11 +87,12 @@ pub struct Shared {
     /// unknown, and looked up again when an active-active port initializes.
     pub read_side: AtomicI32,
     pub telemetry_period: Duration,
-    /// Active-standby telemetry calls, one at a time across the ports, as
-    /// Python's single telemetry thread makes them: cables may share an I2C
-    /// bus.
+    /// Active-standby telemetry calls, one at a time across the ports of
+    /// every namespace, as Python's single telemetry thread makes them:
+    /// cables may share an I2C bus.
     pub bus: Arc<Semaphore>,
-    /// Active-active telemetry, at most 16 ports at a time.
+    /// Active-active telemetry, at most 16 ports at a time, all namespaces
+    /// together.
     pub aa_telemetry: Arc<Semaphore>,
     /// Python's process-wide `y_cable_presence`: set by the first port
     /// initialized, an active-active port with a SoC address or an
@@ -88,7 +108,7 @@ impl Shared {
         soc: Arc<dyn SocConnector>,
         is_vs: bool,
         read_side: i32,
-        ycable_presence: Arc<AtomicBool>,
+        global: &Global,
     ) -> Arc<Shared> {
         Arc::new(Shared {
             db,
@@ -97,9 +117,9 @@ impl Shared {
             is_vs,
             read_side: AtomicI32::new(read_side),
             telemetry_period: TELEMETRY_PERIOD,
-            bus: Arc::new(Semaphore::new(1)),
-            aa_telemetry: Arc::new(Semaphore::new(16)),
-            ycable_presence,
+            bus: Arc::clone(&global.bus),
+            aa_telemetry: Arc::clone(&global.aa_telemetry),
+            ycable_presence: Arc::clone(&global.ycable_presence),
         })
     }
 
@@ -174,9 +194,9 @@ pub struct PortActor {
     /// -1 until it returns, across cable changes too (HLD 4.3.3): a call
     /// that never returns would hold one more blocking thread each time.
     pub downloading: Arc<AtomicBool>,
-    /// The CLI command being handled, its row as the router read it: it is
-    /// answered only while its row still holds it (HLD 6.5).
-    pub(crate) cli_request: Option<FieldMap>,
+    /// The CLI command being handled: it is answered only while its rows
+    /// still hold it (HLD 6.5).
+    pub(crate) cli_request: Option<crate::cli::CliRequest>,
     /// A request is running and holds the call lock.
     in_request: bool,
     /// A telemetry pass is running: each of its calls also takes the bus.

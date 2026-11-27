@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::actor::{PortActor, Shared};
+use crate::actor::{Global, PortActor, Shared};
 use crate::bridge::{CallError, YCablePlatform};
 use crate::config::CableType;
 use crate::db::{Db, DbId, MemDb};
@@ -540,6 +540,15 @@ impl Fixture {
     }
 
     pub fn with(is_vs: bool, read_side: i32) -> Fixture {
+        Fixture::build(is_vs, read_side, &Global::default())
+    }
+
+    /// A namespace of a process whose other namespaces share `global`.
+    pub fn sharing(global: &Global) -> Fixture {
+        Fixture::build(false, 0, global)
+    }
+
+    fn build(is_vs: bool, read_side: i32, global: &Global) -> Fixture {
         let db = MemDb::new();
         let platform = MockPlatform::new();
         platform.add(PHYSICAL, MockCable::default());
@@ -551,7 +560,7 @@ impl Fixture {
             connector.clone() as Arc<dyn SocConnector>,
             is_vs,
             read_side,
-            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            global,
         );
         Fixture {
             db,

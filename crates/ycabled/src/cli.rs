@@ -44,6 +44,15 @@ impl Drop for Downloading {
     }
 }
 
+/// A CLI command being handled: its row as the router read it, and its
+/// argument row as it was when the command started, which the command runs
+/// with. The command is answered only while both are unchanged (HLD 6.5).
+#[derive(Clone, Debug)]
+pub(crate) struct CliRequest {
+    fields: FieldMap,
+    args: Option<FieldMap>,
+}
+
 /// Where the firmware images of `config muxcable firmware` are.
 pub const FIRMWARE_DIR: &str = "/usr/share/sonic/firmware";
 
@@ -205,7 +214,19 @@ impl PortActor {
             self.port
         );
         let input = fields.get(cmd.input).map(String::as_str);
-        self.cli_request = Some(fields.clone());
+        let args = match cmd.arg {
+            Some(t) => Some(
+                self.db()
+                    .get(DbId::Appl, t, &self.port)
+                    .await
+                    .unwrap_or_default(),
+            ),
+            None => None,
+        };
+        self.cli_request = Some(CliRequest {
+            fields: fields.clone(),
+            args,
+        });
         match cmd.kind {
             Kind::ShowMuxDirection => self.cli_show_mux_direction(cmd, input).await,
             Kind::ConfigMuxState => self.cli_config_mux_state(cmd, input).await,
@@ -1216,6 +1237,9 @@ impl PortActor {
 
     /// The command's argument row; empty without one.
     async fn cli_args(&self, cmd: &Cmd) -> FieldMap {
+        if let Some(args) = self.cli_request.as_ref().and_then(|r| r.args.as_ref()) {
+            return args.clone();
+        }
         match cmd.arg {
             Some(table) => self
                 .db()
@@ -1306,12 +1330,16 @@ impl PortActor {
     }
 }
 
-/// Whether the command row still holds `request`, the command being
-/// answered. None: no request to check.
-async fn request_current(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&FieldMap>) -> bool {
-    match request {
-        Some(r) => db.get(DbId::Appl, cmd.table, port).await.as_ref() == Some(r),
-        None => true,
+/// Whether the command row and the argument row still hold `request`, the
+/// command being answered. None: no request to check.
+async fn request_current(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&CliRequest>) -> bool {
+    let Some(r) = request else { return true };
+    if db.get(DbId::Appl, cmd.table, port).await.as_ref() != Some(&r.fields) {
+        return false;
+    }
+    match (cmd.arg, &r.args) {
+        (Some(t), Some(args)) => db.get(DbId::Appl, t, port).await.unwrap_or_default() == *args,
+        _ => true,
     }
 }
 
@@ -1325,12 +1353,12 @@ async fn request_current(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&Fi
 /// and be answered (HLD 6.5); and it is deleted only if it still holds
 /// `request`, in one step with the check, so a replacement written as the
 /// command is answered is kept too.
-async fn respond(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&FieldMap>, value: &str) {
+async fn respond(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&CliRequest>, value: &str) {
     if !request_current(db, cmd, port, request).await {
         log_notice!(
             "Not answering cli command {} {:?} of port {} with {}={}: it was replaced or withdrawn while it ran",
             cmd.table,
-            request,
+            request.map(|r| &r.fields),
             port,
             cmd.output,
             value
@@ -1353,7 +1381,7 @@ async fn respond(db: &dyn Db, cmd: &Cmd, port: &str, request: Option<&FieldMap>,
     .await;
     match request {
         Some(r) => {
-            if !db.del_if(DbId::Appl, cmd.table, port, r).await {
+            if !db.del_if(DbId::Appl, cmd.table, port, &r.fields).await {
                 log_notice!(
                     "cli command {} of port {} was replaced as it was answered: the replacement is kept",
                     cmd.table,
