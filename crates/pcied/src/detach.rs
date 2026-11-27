@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use pmon_common::db::TableLike;
 
 const BUS_INFO_FIELD: &str = "bus_info";
+const DEVICE_STATE_FIELD: &str = "device_state";
 const DPU_STATE_FIELD: &str = "dpu_state";
 const DETACHING: &str = "detaching";
 
@@ -40,7 +41,7 @@ impl Detaching {
                 continue;
             };
             let field = |name: &str| row.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
-            if field("device_state")
+            if field(DEVICE_STATE_FIELD)
                 .filter(|v| !v.is_empty())
                 .or_else(|| field(DPU_STATE_FIELD))
                 == Some(DETACHING)

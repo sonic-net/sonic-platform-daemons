@@ -7,7 +7,7 @@ description = "SONiC PCIe device monitoring daemon in Rust"
 license = "Apache-2.0"
 
 [[bin]]
-name = "pcied-rs"
+name = "pcied"
 path = "src/main.rs"
 
 [dependencies]
@@ -18,9 +18,8 @@ platform-api  = { workspace = true }
 platform-provider = { workspace = true }
 pmon-common   = { path = "../pmon-common" }
 tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
-# Retain thermalctld's compatibility cap for release builders using
-# cargo-auditable 0.6.4. Current master uses 0.7.6 and supports edition 2024.
-clap  = { version = ">=4.0, <4.6", features = ["derive"] }
+# Cargo.lock retains the validated graph; current master uses cargo-auditable 0.7.6.
+clap  = { version = "4", features = ["derive"] }
 log   = "0.4"
 
 [dev-dependencies]
