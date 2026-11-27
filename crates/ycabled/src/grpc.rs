@@ -8,7 +8,8 @@
 //! connections that are up, failed attempts and closed connections, and
 //! [`watch_connectivity`] derives the states from them. As in grpc-core, a
 //! connection is up only once TLS, when configured, is done and the SoC's
-//! first HTTP/2 frame has arrived, within [`CONNECT_TIMEOUT`].
+//! first HTTP/2 frame, its SETTINGS, has arrived whole, within
+//! [`CONNECT_TIMEOUT`].
 
 use std::future::Future;
 use std::io;
@@ -141,7 +142,7 @@ pub enum ConnEvent {
     /// A connection attempt started.
     Connecting,
     /// The connection is up: TLS, when configured, is done and the SoC's
-    /// first HTTP/2 frame has arrived.
+    /// first HTTP/2 frame, its SETTINGS, has arrived whole.
     Connected,
     /// The attempt failed before the connection came up, or did not come up
     /// within [`CONNECT_TIMEOUT`].
@@ -255,15 +256,51 @@ impl AsyncWrite for SocIo {
     }
 }
 
+/// The SoC's first HTTP/2 frame, counted as its bytes are read: a TCP read
+/// may hold any part of it. The server's connection preface is a SETTINGS
+/// frame (RFC 9113, 3.4).
+#[derive(Default)]
+struct FirstFrame {
+    header: [u8; FirstFrame::HEADER],
+    /// The bytes of the header read so far.
+    have: usize,
+    /// The bytes of the payload still to come, once the header is in.
+    left: usize,
+}
+
+impl FirstFrame {
+    const HEADER: usize = 9;
+    const SETTINGS: u8 = 0x4;
+
+    /// Counts `data`, the next bytes read. Whether the frame is whole and is
+    /// a SETTINGS frame; a frame of another type never is.
+    fn settings_done(&mut self, mut data: &[u8]) -> bool {
+        if self.have < Self::HEADER {
+            let n = (Self::HEADER - self.have).min(data.len());
+            self.header[self.have..self.have + n].copy_from_slice(&data[..n]);
+            self.have += n;
+            data = &data[n..];
+            if self.have < Self::HEADER {
+                return false;
+            }
+            let [a, b, c, ..] = self.header;
+            self.left = u32::from_be_bytes([0, a, b, c]) as usize;
+        }
+        self.left -= self.left.min(data.len());
+        self.left == 0 && self.header[3] == Self::SETTINGS
+    }
+}
+
 /// A connection, as tonic's HTTP/2 client uses it, that reports to the
-/// port's connectivity watcher: up when the SoC's first HTTP/2 frame
-/// arrives, failed if the connection ends or [`CONNECT_TIMEOUT`] passes
-/// before that, closed if it ends after.
+/// port's connectivity watcher: up when the SoC's first HTTP/2 frame, its
+/// SETTINGS, has arrived whole, failed if the connection ends or
+/// [`CONNECT_TIMEOUT`] passes before that, closed if it ends after.
 struct MonitoredIo {
     inner: SocIo,
     events: Option<mpsc::UnboundedSender<ConnEvent>>,
     /// Until the connection is up: when the attempt fails.
     deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    first_frame: FirstFrame,
 }
 
 impl MonitoredIo {
@@ -295,7 +332,10 @@ impl AsyncRead for MonitoredIo {
         let res = Pin::new(&mut self.inner).poll_read(cx, buf);
         match &res {
             Poll::Ready(Ok(())) if buf.filled().len() > before => {
-                if self.deadline.take().is_some() {
+                if self.deadline.is_some()
+                    && self.first_frame.settings_done(&buf.filled()[before..])
+                {
+                    self.deadline = None;
                     if let Some(tx) = &self.events {
                         let _ = tx.send(ConnEvent::Connected);
                     }
@@ -312,7 +352,7 @@ impl AsyncRead for MonitoredIo {
                     self.ended();
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "the SoC sent no HTTP/2 frame",
+                        "the SoC's HTTP/2 SETTINGS frame did not arrive",
                     )));
                 }
             }
@@ -453,6 +493,7 @@ impl tower::Service<Uri> for MonitoredConnector {
                     inner: io,
                     events: events.clone(),
                     deadline: Some(Box::pin(tokio::time::sleep_until(deadline))),
+                    first_frame: FirstFrame::default(),
                 })),
                 Ok(Err(e)) => {
                     log_debug!("Could not connect to the SoC at {}: {}", uri, e);

@@ -15,10 +15,12 @@ linkmgrd, xcvrd and `show/config muxcable` work with either.
   initialize in parallel (N3), and the cross-thread races of Python ycabled
   (issues 26 to 29 of the HLD) cannot happen. No request is dropped: a port
   that cannot keep up queues them, and a backlog of 256 is logged. Startup
-  waits at most 30 s for the ports to initialize before it subscribes, so a
-  driver call that never returns holds up only its own port. A port that
-  becomes a mux port after startup gets its actor at its first cable event
-  or request, whichever comes first, and the request waits behind the
+  subscribes to TRANSCEIVER_INFO, and to the request tables where there are
+  mux ports, before the ports initialize, and a port's events wait behind
+  its initialization, so a cable inserted or removed meanwhile is handled
+  and a driver call that never returns holds up only its own port. A port
+  that becomes a mux port after startup gets its actor at its first cable
+  event or request, whichever comes first, and the request waits behind the
   port's initialization.
 - **Telemetry** (every 60 s per port) runs in a task beside the actor, so a
   toggle never waits for a whole pass. Calls to an active-standby cable,
@@ -94,6 +96,12 @@ Limitations (HLD section 4.8):
   over TCP, at each namespace's host and port in its DB config.
 - A Python driver call cannot be cancelled. One that holds the GIL without
   returning stops every active-standby port, as it does in Python.
+- A namespace without mux ports at startup subscribes to the request tables
+  at its first mux port's TRANSCEIVER_INFO event. A port configured later
+  while its cable is already in gets no such event, so its requests are
+  served once ycabled restarts, as after `config reload`. Python serves no
+  request at all when no Y-cable is there at startup, and like it,
+  ycabled-rs answers no CLI command on a device without mux ports.
 
 ## Build
 
@@ -127,11 +135,16 @@ in the workspace's `target/` at the root of the repository.
 `/var/run/redis/sonic-db/database_config.json` (and `database_global.json`
 on multi-ASIC platforms), `PLATFORM` and CONFIG_DB `DEVICE_METADATA`, and
 loads vendor drivers through `sonic_y_cable` on the Python path. SIGTERM and
-SIGINT exit within 2 s and keep the tables; SIGHUP is ignored.
+SIGINT exit within 2 s and keep the tables; SIGHUP is ignored, from the
+start. At startup it waits for redis, trying every second. It exits on a
+failure, such as a lost subscription or a row it cannot read, for
+supervisord to start it again; within 11 s of the start, it exits when the
+11 s are up, so that every start lasts longer than pmon's `startsecs` (10)
+and supervisord keeps restarting it rather than giving up (`FATAL`).
 
 ## Tests
 
-- **Unit tests** (148): the actors and the CLI against an in-memory
+- **Unit tests** (152): the actors and the CLI against an in-memory
   database and mocks of the cables and SoCs (`src/testing.rs`), the redis
   layer against a private `redis-server` (skipped where there is none, as in
   the package build, unless `YCABLED_REQUIRE_REDIS` is set, as in the

@@ -3,11 +3,11 @@
 //! Startup follows Python ycabled's order, with the ports initialized in
 //! parallel (N3): the DB configuration and namespaces, CONFIG_DB_INITIALIZED,
 //! the XCVRD_LOG level reset, the platform, the port map, Loopback3,
-//! grpc_secrets.json, the mux ports. Once every port has published its
-//! state, or after INIT_WAIT, the subscriptions start: their first events are
-//! the rows that exist, so requests left while ycabled was down are applied
-//! after the ports' state is known. A port's requests wait behind its own
-//! initialization in its mailbox.
+//! grpc_secrets.json, the mux ports. The subscriptions start before the
+//! ports initialize, and their first events are the rows that exist. A
+//! port's events wait behind its own initialization in its mailbox, so a
+//! cable inserted or removed meanwhile, and the requests left while ycabled
+//! was down, are applied once the port's state is known.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,9 +29,11 @@ use crate::ports::{self, PortMap};
 use crate::schema::*;
 use crate::{log_debug, log_error, log_info, log_notice, log_warning};
 
-/// How long startup waits for the mux ports to initialize before it
-/// subscribes anyway. A driver call that never returns then holds up only
-/// its own port, whose requests wait behind its initialization.
+/// How long startup waits for the mux ports to initialize before it starts
+/// the GracefulRestart subscriptions, with the read side found by then.
+/// The other subscriptions do not wait: a port's requests wait behind its
+/// own initialization, so a driver call that never returns holds up only
+/// its own port.
 pub const INIT_WAIT: Duration = Duration::from_secs(30);
 
 /// One front-end namespace: its databases and its ports' actors.
@@ -93,7 +95,7 @@ fn exit_on_lost_subscription(ns: String) -> impl FnOnce() + Send + 'static {
             "Lost the redis subscription connection of namespace '{}', exiting",
             ns
         );
-        std::process::exit(1);
+        crate::exit::after_failure(1);
     }
 }
 
@@ -115,10 +117,6 @@ impl Namespace {
         self.actors.lock().unwrap().get(port).cloned()
     }
 
-    fn has_actors(&self) -> bool {
-        !self.actors.lock().unwrap().is_empty()
-    }
-
     fn add_actor(
         &self,
         port: &str,
@@ -137,12 +135,16 @@ impl Namespace {
 
 impl Daemon {
     /// Subscribes namespace `ns` to TRANSCEIVER_INFO, and to the mux tables
-    /// if it has mux ports, on one connection, the rows of
-    /// [`CHANGES_ONLY_TABLES`] excepted. One task routes the events, in the
-    /// order redis delivered them.
-    pub(crate) async fn subscribe(self: &Arc<Self>, ns: &Arc<Namespace>) -> Result<()> {
+    /// if `mux`, its having mux ports, on one connection, the rows of
+    /// [`CHANGES_ONLY_TABLES`] excepted. The events wait until
+    /// [`Daemon::start_routing`].
+    pub(crate) async fn subscribe(
+        &self,
+        ns: &Namespace,
+        mux: bool,
+    ) -> Result<mpsc::UnboundedReceiver<TableEvent>> {
         let mut tables = vec![(DbId::State, TRANSCEIVER_INFO.to_string())];
-        if ns.has_actors() {
+        if mux {
             ns.mux_subscribed.store(true, Ordering::SeqCst);
             tables.extend(mux_tables());
         }
@@ -155,8 +157,17 @@ impl Daemon {
             )
             .await?;
         let _ = ns.subscriptions.set(subscriptions);
+        Ok(rx)
+    }
+
+    /// Delivers the events `rx` of namespace `ns` to its ports' actors, in
+    /// the order redis delivered them, in a task of its own.
+    pub(crate) fn start_routing(
+        self: &Arc<Self>,
+        ns: &Arc<Namespace>,
+        rx: mpsc::UnboundedReceiver<TableEvent>,
+    ) {
         tokio::spawn(Arc::clone(self).route(Arc::clone(ns), rx));
-        Ok(())
     }
 
     /// Subscribes namespace `ns` to the mux tables, once: its first mux port
@@ -316,9 +327,12 @@ impl Default for Options {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    // From the start: while startup waits for redis or CONFIG_DB_INITIALIZED,
+    // SIGHUP's default action would end the process.
+    ignore_sighup()?;
     log_info!("Starting up...");
     let default_cfg = DbConfig::load(Path::new(&opts.db_config))?;
-    let default_db = Arc::new(RedisDb::connect("", &default_cfg).await?);
+    let default_db = Arc::new(RedisDb::connect_waiting("", &default_cfg).await?);
     default_db.wait_for_config_init().await?;
     let device = config::device_info(default_db.as_ref()).await;
     let is_vs = device.is_vs();
@@ -334,7 +348,7 @@ pub async fn run(opts: Options) -> Result<()> {
                 log_warning!("Namespace {} is not in {}", name, opts.db_global);
                 continue;
             };
-            let ns_db = Arc::new(RedisDb::connect(&name, cfg).await?);
+            let ns_db = Arc::new(RedisDb::connect_waiting(&name, cfg).await?);
             ns_db.wait_for_config_init().await?;
             if ports::is_front_end(ns_db.as_ref()).await {
                 dbs.push((name, asic, ns_db));
@@ -430,6 +444,16 @@ pub async fn run(opts: Options) -> Result<()> {
         ports: port_map,
     });
 
+    // TRANSCEIVER_INFO, and the request tables where there are mux ports, are
+    // subscribed to before the ports initialize (HLD 4.4): a cable inserted
+    // or removed meanwhile is handled right after its port's initialization,
+    // and the requests wait behind it. The events are routed once every
+    // startup port has its actor.
+    let mut events = Vec::new();
+    for (i, ns) in daemon.namespaces.iter().enumerate() {
+        events.push(daemon.subscribe(ns, !mux[i].is_empty()).await?);
+    }
+
     // Initialize every mux port at the same time. Python initializes them one
     // by one in port order, and only the port that sets y_cable_presence
     // first writes MUX_CABLE_INFO, if it is active-standby. The actors report
@@ -459,13 +483,12 @@ pub async fn run(opts: Options) -> Result<()> {
             ));
         }
     }
+    for (ns, rx) in daemon.namespaces.iter().zip(events) {
+        daemon.start_routing(ns, rx);
+    }
     inits.sort_by_key(|(o, _)| *o);
     let inits = inits.into_iter().map(|(_, p)| p).collect();
     wait_for_inits(inits, INIT_WAIT, Arc::clone(&ycable_presence)).await;
-
-    for ns in &daemon.namespaces {
-        daemon.subscribe(ns).await?;
-    }
 
     if any_active {
         for ns in &daemon.namespaces {
@@ -528,7 +551,7 @@ pub async fn wait_for_inits(
         return true;
     }
     log_warning!(
-        "Mux ports are still initializing after {} s; starting the subscriptions",
+        "Mux ports are still initializing after {} s",
         limit.as_secs()
     );
     false
@@ -562,29 +585,30 @@ pub async fn start_graceful_restart(shared: &Shared, asic: usize, ports: &PortMa
     }
 }
 
+/// Logs SIGHUP and otherwise ignores it, as Python does, from now on.
+pub(crate) fn ignore_sighup() -> Result<()> {
+    let mut hup = signal(SignalKind::hangup()).context("Failed to set up the SIGHUP handler")?;
+    tokio::spawn(async move {
+        while hup.recv().await.is_some() {
+            log_info!("Caught SIGHUP - ignoring...");
+        }
+    });
+    Ok(())
+}
+
 async fn wait_for_signals() {
-    let (mut term, mut int, mut hup) = match (
+    let (mut term, mut int) = match (
         signal(SignalKind::terminate()),
         signal(SignalKind::interrupt()),
-        signal(SignalKind::hangup()),
     ) {
-        (Ok(t), Ok(i), Ok(h)) => (t, i, h),
+        (Ok(t), Ok(i)) => (t, i),
         _ => {
             log_error!("Failed to set up the signal handlers");
-            std::process::exit(1);
+            crate::exit::after_failure(1);
         }
     };
-    loop {
-        tokio::select! {
-            _ = term.recv() => {
-                log_notice!("Caught SIGTERM - exiting...");
-                break;
-            }
-            _ = int.recv() => {
-                log_notice!("Caught SIGINT - exiting...");
-                break;
-            }
-            _ = hup.recv() => log_info!("Caught SIGHUP - ignoring..."),
-        }
+    tokio::select! {
+        _ = term.recv() => log_notice!("Caught SIGTERM - exiting..."),
+        _ = int.recv() => log_notice!("Caught SIGINT - exiting..."),
     }
 }

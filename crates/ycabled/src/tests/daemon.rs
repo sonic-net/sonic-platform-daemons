@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use super::redis::TestRedis;
+use super::redis::{db_config_json, TestRedis};
 use crate::actor::{Msg, Shared};
 use crate::bridge::YCablePlatform;
 use crate::config::CableType;
 use crate::daemon::{
-    first_info_port, message_for, mux_tables, wait_for_inits, Daemon, Namespace, PendingInit,
-    INIT_WAIT,
+    first_info_port, message_for, mux_tables, run, wait_for_inits, Daemon, Namespace, Options,
+    PendingInit, INIT_WAIT,
 };
 use crate::db::{Db, DbId, RedisDb};
 use crate::grpc::SocConnector;
@@ -208,7 +208,8 @@ async fn request_replayed_ahead_of_its_port_insertion_is_answered() {
         ports,
     });
     // No mux ports at startup: only TRANSCEIVER_INFO is subscribed to.
-    daemon.subscribe(&ns).await.unwrap();
+    let events = daemon.subscribe(&ns, false).await.unwrap();
+    daemon.start_routing(&ns, events);
     for port in ["Ethernet0", "Ethernet4"] {
         db.set(DbId::Config, MUX_CABLE, port, &[("state", "auto".into())])
             .await;
@@ -270,7 +271,8 @@ async fn peer_toggle_from_before_the_subscription_is_not_acted_on() {
         namespaces: vec![Arc::clone(&ns)],
         ports,
     });
-    daemon.subscribe(&ns).await.unwrap();
+    let events = daemon.subscribe(&ns, false).await.unwrap();
+    daemon.start_routing(&ns, events);
     let mux_cable = [
         ("state", "auto".to_string()),
         ("cable_type", "active-active".to_string()),
@@ -318,4 +320,41 @@ async fn peer_toggle_from_before_the_subscription_is_not_acted_on() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(sets(), vec![(vec![1], vec![true])]);
+}
+
+/// SIGHUP is ignored from the start, as in Python: here while startup waits
+/// for CONFIG_DB_INITIALIZED, which is never set. Its default action would
+/// end the process, the test's too.
+#[tokio::test]
+async fn sighup_during_startup_is_ignored() {
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("database_config.json");
+    std::fs::write(&path, db_config_json(r.port)).unwrap();
+    let startup = tokio::spawn(run(Options {
+        db_config: path.to_string_lossy().into_owned(),
+        db_global: String::new(),
+        secrets: String::new(),
+    }));
+    // The wait for CONFIG_DB_INITIALIZED holds a pattern subscription.
+    let mut c4 = r.client(4);
+    let mut waiting = false;
+    for _ in 0..250 {
+        let patterns: i64 = redis::cmd("PUBSUB").arg("NUMPAT").query(&mut c4).unwrap();
+        if patterns > 0 {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(waiting, "startup did not reach the CONFIG_DB wait");
+    // SAFETY: sends SIGHUP to this process.
+    unsafe {
+        libc::kill(libc::getpid(), libc::SIGHUP);
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!startup.is_finished());
+    startup.abort();
 }

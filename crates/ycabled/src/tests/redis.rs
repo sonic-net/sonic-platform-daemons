@@ -20,15 +20,32 @@ pub struct TestRedis {
     pub config: DbConfig,
 }
 
+/// A TCP port that is free now.
+pub fn free_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    l.local_addr().unwrap().port()
+}
+
+/// database_config.json of the databases ycabled uses, on a redis at `port`.
+pub fn db_config_json(port: u16) -> String {
+    format!(
+        r#"{{"INSTANCES": {{"redis": {{"hostname": "127.0.0.1", "port": {port}}}}},
+            "DATABASES": {{"APPL_DB": {{"id": 0, "separator": ":", "instance": "redis"}},
+                           "CONFIG_DB": {{"id": 4, "separator": "|", "instance": "redis"}},
+                           "STATE_DB": {{"id": 6, "separator": "|", "instance": "redis"}}}}}}"#
+    )
+}
+
 impl TestRedis {
     /// None, after a note, when redis-server is not installed and
     /// [`REQUIRE_REDIS`] is not set: the package build runs the workspace's
     /// tests in sonic-slave, which has no redis-server.
     pub async fn start() -> Option<TestRedis> {
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        };
+        TestRedis::start_on(free_port()).await
+    }
+
+    /// [`TestRedis::start`], on `port`.
+    pub async fn start_on(port: u16) -> Option<TestRedis> {
         let child = Command::new("redis-server")
             .args([
                 "--port",
@@ -58,13 +75,7 @@ impl TestRedis {
             }
             Err(e) => panic!("redis-server: {e}"),
         };
-        let config: DbConfig = serde_json::from_str(&format!(
-            r#"{{"INSTANCES": {{"redis": {{"hostname": "127.0.0.1", "port": {port}}}}},
-                "DATABASES": {{"APPL_DB": {{"id": 0, "separator": ":", "instance": "redis"}},
-                               "CONFIG_DB": {{"id": 4, "separator": "|", "instance": "redis"}},
-                               "STATE_DB": {{"id": 6, "separator": "|", "instance": "redis"}}}}}}"#
-        ))
-        .unwrap();
+        let config: DbConfig = serde_json::from_str(&db_config_json(port)).unwrap();
         for _ in 0..100 {
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 break;
@@ -463,6 +474,73 @@ async fn losing_the_connection_runs_on_lost() {
         .await
         .expect("on_lost")
         .unwrap();
+}
+
+/// A changed row that cannot be read ends the subscriptions, as a lost
+/// connection does: its change would be lost, and a restart replays the
+/// rows. Here the key is not a hash.
+#[tokio::test]
+async fn unreadable_row_ends_the_subscription() {
+    let Some(r) = TestRedis::start().await else {
+        return;
+    };
+    let db = r.db().await;
+    let (lost_tx, lost_rx) = tokio::sync::oneshot::channel();
+    let (_subscriptions, mut rx) = db
+        .subscribe(
+            &[(DbId::Appl, "HW_MUX_CABLE_TABLE".into())],
+            &[],
+            move || {
+                let _ = lost_tx.send(());
+            },
+        )
+        .await
+        .unwrap();
+    let mut c0 = r.client(0);
+    let _: () = redis::cmd("SET")
+        .arg("HW_MUX_CABLE_TABLE:Ethernet0")
+        .arg("active")
+        .query(&mut c0)
+        .unwrap();
+    timeout(Duration::from_secs(5), lost_rx)
+        .await
+        .expect("on_lost")
+        .unwrap();
+    assert!(rx.recv().await.is_none());
+}
+
+/// redis may still be coming up at startup: the connection is tried again
+/// every second until it answers (HLD 4.3.1).
+#[tokio::test]
+async fn connect_waits_for_redis() {
+    let port = free_port();
+    let config: DbConfig = serde_json::from_str(&db_config_json(port)).unwrap();
+    let connect = tokio::spawn(async move { RedisDb::connect_waiting("", &config).await });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(!connect.is_finished());
+    let Some(r) = TestRedis::start_on(port).await else {
+        connect.abort();
+        return;
+    };
+    let db = timeout(Duration::from_secs(10), connect)
+        .await
+        .expect("connected")
+        .unwrap()
+        .unwrap();
+    db.set(
+        DbId::Appl,
+        "HW_MUX_CABLE_TABLE",
+        "Ethernet0",
+        &[("state", "active".into())],
+    )
+    .await;
+    let mut c0 = r.client(0);
+    let state: String = redis::cmd("HGET")
+        .arg("HW_MUX_CABLE_TABLE:Ethernet0")
+        .arg("state")
+        .query(&mut c0)
+        .unwrap();
+    assert_eq!(state, "active");
 }
 
 #[tokio::test]

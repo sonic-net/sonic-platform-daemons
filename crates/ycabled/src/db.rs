@@ -12,7 +12,8 @@
 //!   table's keyspace notifications, then `KEYS` and `HGETALL` of the rows that
 //!   exist; on a notification, `del` deletes the row, anything else reads it
 //!   again and is skipped if it is gone. A table can also be subscribed to for
-//!   its changes only: its rows that exist are logged, not delivered.
+//!   its changes only: its rows that exist are logged, not delivered. A row
+//!   that cannot be read ends the subscription, as a lost connection does.
 //!
 //! Per namespace that is one connection per database and one for all its
 //! subscriptions, whatever the number of ports. The events of all the
@@ -224,26 +225,73 @@ fn table_key(loc: &DbLocation, table: &str, key: &str) -> String {
 }
 
 impl RedisDb {
+    /// Connects to the namespace's databases. Err: one is not in `config`,
+    /// or redis does not answer.
     pub async fn connect(namespace: &str, config: &DbConfig) -> Result<RedisDb> {
+        RedisDb::open(namespace, config, false).await
+    }
+
+    /// [`RedisDb::connect`], but while redis does not answer it tries again
+    /// every second (HLD 4.3.1): redis may still be coming up after a restart
+    /// of the database container, or of ycabled-rs for a lost subscription.
+    /// A warning is logged at the first failure and every minute after it.
+    pub async fn connect_waiting(namespace: &str, config: &DbConfig) -> Result<RedisDb> {
+        RedisDb::open(namespace, config, true).await
+    }
+
+    async fn open(namespace: &str, config: &DbConfig, wait: bool) -> Result<RedisDb> {
         let mut conns = HashMap::new();
         for db in DbId::ALL {
             let loc = config.location(db)?;
             let client = redis::Client::open(redis_url(&loc))?;
-            let cfg = redis::aio::ConnectionManagerConfig::new()
-                .set_connection_timeout(Duration::from_secs(5))
-                .set_response_timeout(Duration::from_secs(5))
-                .set_number_of_retries(3);
-            let mgr = client
-                .get_connection_manager_with_config(cfg)
-                .await
-                .with_context(|| {
-                    format!(
-                        "connecting to {} at {}:{}",
-                        db.name(),
-                        loc.hostname,
-                        loc.port
-                    )
-                })?;
+            let mut failures = 0u32;
+            let mut next_warning = 0u32;
+            let mgr = loop {
+                // One attempt, without the manager's retries: redis 0.27 takes
+                // their `factor` as the multiplier of a 1 s delay, so the second
+                // retry would wait 60 s. The retries are this loop's; at run
+                // time, a command that finds the connection dropped makes the
+                // next one reconnect.
+                let cfg = redis::aio::ConnectionManagerConfig::new()
+                    .set_connection_timeout(Duration::from_secs(5))
+                    .set_response_timeout(Duration::from_secs(5))
+                    .set_number_of_retries(0);
+                match client.get_connection_manager_with_config(cfg).await {
+                    Ok(mgr) => break mgr,
+                    Err(e) if wait => {
+                        if failures == next_warning {
+                            next_warning += 60;
+                            log_warning!(
+                                "Failed to connect to {} at {}:{}: {}; trying again every second",
+                                db.name(),
+                                loc.hostname,
+                                loc.port,
+                                e
+                            );
+                        }
+                        failures += 1;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!(
+                                "connecting to {} at {}:{}",
+                                db.name(),
+                                loc.hostname,
+                                loc.port
+                            )
+                        })
+                    }
+                }
+            };
+            if failures > 0 {
+                log_notice!(
+                    "Connected to {} at {}:{}",
+                    db.name(),
+                    loc.hostname,
+                    loc.port
+                );
+            }
             conns.insert(db, Conn { loc, mgr });
         }
         Ok(RedisDb {
@@ -328,7 +376,9 @@ impl RedisDb {
     /// requests keep their order across tables. The tables named in
     /// `changes_only`, here or added later, get only their changes: their
     /// rows that exist are logged, not delivered. `on_lost` runs if the
-    /// connection is lost, or if redis refuses a table added later.
+    /// connection is lost, if redis refuses a table added later, or if a
+    /// changed row cannot be read, whose change would be lost otherwise: a
+    /// restart replays the rows.
     pub async fn subscribe(
         self: &Arc<Self>,
         tables: &[(DbId, String)],
@@ -365,13 +415,19 @@ impl RedisDb {
                         None => adding = false,
                     },
                     msgs = stream.next() => match msgs {
-                        Some(msgs) => {
-                            for event in this.events_of(&msgs, &patterns).await {
-                                if tx.send(event).is_err() {
-                                    log_debug!("No one listens to the subscriptions of namespace '{}' any more", this.namespace);
+                        Some(msgs) => match this.events_of(&msgs, &patterns).await {
+                            Ok(events) => {
+                                for event in events {
+                                    if tx.send(event).is_err() {
+                                        log_debug!("No one listens to the subscriptions of namespace '{}' any more", this.namespace);
+                                    }
                                 }
                             }
-                        }
+                            Err(e) => {
+                                log_error!("{}: the subscriptions of namespace '{}' cannot go on", e, this.namespace);
+                                break;
+                            }
+                        },
                         None => break,
                     },
                 }
@@ -423,12 +479,13 @@ impl RedisDb {
     /// The events of keyspace notifications, in their order: `del` deletes
     /// the row, anything else reads it again, with one pipelined `HGETALL`
     /// per database. No event for a row that is gone again, or for a
-    /// notification that is not for a subscribed table.
+    /// notification that is not for a subscribed table. Err: a row could not
+    /// be read.
     async fn events_of(
         &self,
         msgs: &[redis::Msg],
         patterns: &HashMap<String, (DbId, String)>,
-    ) -> Vec<TableEvent> {
+    ) -> std::result::Result<Vec<TableEvent>, String> {
         struct Notice<'m> {
             db: DbId,
             table: &'m str,
@@ -484,8 +541,7 @@ impl RedisDb {
                         fields,
                     },
                     Some(Err(e)) => {
-                        log_warning!("Failed to read {} {}: {}", n.db.name(), n.entry, e);
-                        continue;
+                        return Err(format!("Failed to read {} {}: {}", n.db.name(), n.entry, e));
                     }
                     _ => {
                         log_debug!("Miss table key {}, possibly outdated", n.entry);
@@ -495,7 +551,7 @@ impl RedisDb {
             };
             events.push((n.table.to_string(), event));
         }
-        events
+        Ok(events)
     }
 
     /// `HGETALL` of `entries`, in one round trip, in order.

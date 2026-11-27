@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::{TcpListenerStream, UnboundedReceiverStream};
@@ -582,6 +583,40 @@ async fn connection_without_http2_settings_fails() {
     );
     assert_eq!(states("Ethernet84"), ["CONNECTING", "TRANSIENT_FAILURE"]);
     assert_eq!(failures(&db, "Ethernet84"), 1);
+}
+
+/// The SoC's first HTTP/2 frame arrives in part, then nothing more: a
+/// SETTINGS header that announces 6 bytes of payload, and 2 of them. The
+/// connection is not up until the whole frame is in, so the attempt fails at
+/// its deadline, as if nothing had come, rather than staying READY.
+#[tokio::test]
+async fn partial_http2_settings_frame_fails() {
+    let listener = TcpListener::bind(format!("127.0.0.32:{GRPC_PORT}"))
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((mut s, _)) = listener.accept().await {
+            let _ = s.write_all(&[0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 3]).await;
+            held.push(s);
+        }
+    });
+    let db = MemDb::new();
+    let client = TonicConnector
+        .connect("Ethernet88", ip("127.0.0.32"), db.clone() as Arc<dyn Db>)
+        .await
+        .unwrap();
+    assert_eq!(
+        client.query_admin_forwarding().await,
+        Err(RpcError::Timeout)
+    );
+    assert!(
+        eventually(|| client.connectivity() == "TRANSIENT_FAILURE", 3).await,
+        "{}",
+        client.connectivity()
+    );
+    assert_eq!(states("Ethernet88"), ["CONNECTING", "TRANSIENT_FAILURE"]);
+    assert_eq!(failures(&db, "Ethernet88"), 1);
 }
 
 /// test_wait_for_state_change (IDLE): losing the connection writes

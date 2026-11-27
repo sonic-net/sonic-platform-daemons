@@ -1,9 +1,11 @@
 //! ycabled-rs: started by supervisord in pmon as program `ycabled`.
 
 use ycabled::daemon::{self, Options};
+use ycabled::exit;
 use ycabled::log_error;
 
 fn main() {
+    exit::mark_start();
     // Before any thread starts: one malloc arena. Otherwise each thread that
     // allocates, such as the threads of Python calls, can get an arena of its
     // own, up to eight per core, and keeps its memory. Python calls take turns
@@ -14,7 +16,8 @@ fn main() {
         libc::mallopt(libc::M_ARENA_MAX, 1);
     }
     // A panic is a bug: log it and exit, so that supervisord starts the
-    // daemon again (N8). Nothing goes to stdout or stderr.
+    // daemon again (N8), but not sooner than exit::MIN_RUN after the start.
+    // Nothing goes to stdout or stderr.
     std::panic::set_hook(Box::new(|info| {
         let msg = info
             .payload()
@@ -27,7 +30,7 @@ fn main() {
             .map(|l| format!("{}:{}", l.file(), l.line()))
             .unwrap_or_default();
         log_error!("ycabled-rs internal error at {}: {}", at, msg);
-        std::process::exit(1);
+        exit::after_failure(1);
     }));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         // One worker: the async work (redis, gRPC, the port actors) is
@@ -49,14 +52,14 @@ fn main() {
         Ok(r) => r,
         Err(e) => {
             log_error!("Failed to start the runtime: {}", e);
-            std::process::exit(1);
+            exit::after_failure(1);
         }
     };
     match runtime.block_on(daemon::run(Options::default())) {
         Ok(()) => std::process::exit(0),
         Err(e) => {
             log_error!("ycabled-rs failed: {:#}", e);
-            std::process::exit(1);
+            exit::after_failure(1);
         }
     }
 }
