@@ -386,7 +386,10 @@ class SffManagerTask(threading.Thread):
                     continue
 
                 # double-check the HW presence before moving forward
-                sfp = self.platform_chassis.get_sfp(pport)
+                sfp = common.get_port_device(pport)
+                if sfp is None:
+                    self.log_error("{}: no port device found for physical port {}!".format(lport, pport))
+                    continue
                 if not sfp.get_presence():
                     self.log_error("{}: module not present!".format(lport))
                     del self.port_dict[lport][self.XCVR_TYPE]

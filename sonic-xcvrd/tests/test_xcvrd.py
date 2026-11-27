@@ -32,6 +32,7 @@ else:
 from sonic_py_common import daemon_base
 from swsscommon import swsscommon
 from sonic_platform_base.sfp_base import SfpBase
+from sonic_platform_base.sonic_xcvr.cpo.cmis import CpoCmisApi
 from .mock_swsscommon import Table
 
 
@@ -3094,7 +3095,8 @@ class TestXcvrdScript(object):
     @patch('xcvrd.xcvrd.helper_logger')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.sff_mgr.PortChangeObserver')
-    def test_SffManagerTask_xcvr_api_none_in_task_worker(self, mock_observer, mock_chassis, mock_logger):
+    @patch('xcvrd.xcvrd_utilities.common.get_port_device')
+    def test_SffManagerTask_xcvr_api_none_in_task_worker(self, mock_get_port_device, mock_observer, mock_chassis, mock_logger):
         """Test the full task_worker flow when xcvr API is None"""
         mock_observer_instance = MagicMock()
         mock_observer_instance.handle_port_update_event = MagicMock(side_effect=[True, False])
@@ -3104,7 +3106,7 @@ class TestXcvrdScript(object):
         mock_sfp = MagicMock()
         mock_sfp.get_presence = MagicMock(return_value=True)
         mock_sfp.get_xcvr_api = MagicMock(return_value=None)
-        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        mock_get_port_device.return_value = mock_sfp
 
         sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
                                           threading.Event(),
@@ -3175,9 +3177,69 @@ class TestXcvrdScript(object):
         assert mock_xcvr_api.set_high_power_class.call_count == 1
 
     @patch('xcvrd.xcvrd.helper_logger')
+    @patch('xcvrd.sff_mgr.PortChangeObserver')
+    @patch('xcvrd.xcvrd_utilities.common.get_port_device')
+    def test_SffManagerTask_skips_cpo_port_in_task_worker(self, mock_get_port_device, mock_observer, mock_logger):
+        mock_observer.return_value.handle_port_update_event = MagicMock(side_effect=[True, False])
+
+        mock_cpo = MagicMock()
+        mock_cpo.get_presence = MagicMock(return_value=True)
+        mock_cpo.get_xcvr_api = MagicMock(return_value=MagicMock(spec=CpoCmisApi))
+        mock_get_port_device.return_value = mock_cpo
+        mock_chassis = MagicMock()
+
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                          threading.Event(),
+                                          mock_chassis,
+                                          mock_logger)
+        sff_manager_task.port_dict['Ethernet0'] = {
+            'index': 1,
+            'type': 'CPO',
+            'subport': '0',
+            'lanes': ['1', '2', '3', '4'],
+            'host_tx_ready': 'true',
+            'admin_status': 'up',
+            'asic_id': 0
+        }
+        sff_manager_task.get_host_tx_status = MagicMock()
+        sff_manager_task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+
+        sff_manager_task.task_worker()
+
+        mock_get_port_device.assert_called_once_with(1)
+        mock_chassis.get_sfp.assert_not_called()
+        sff_manager_task.get_host_tx_status.assert_not_called()
+        mock_cpo.get_xcvr_api.return_value.tx_disable_channel.assert_not_called()
+
+    @patch('xcvrd.xcvrd.helper_logger')
+    @patch('xcvrd.sff_mgr.PortChangeObserver')
+    @patch('xcvrd.xcvrd_utilities.common.get_port_device', MagicMock(return_value=None))
+    def test_SffManagerTask_no_port_device_in_task_worker(self, mock_observer, mock_logger):
+        mock_observer.return_value.handle_port_update_event = MagicMock(side_effect=[True, False])
+
+        sff_manager_task = SffManagerTask(DEFAULT_NAMESPACE,
+                                          threading.Event(),
+                                          MagicMock(),
+                                          mock_logger)
+        sff_manager_task.port_dict['Ethernet0'] = {
+            'index': 1,
+            'type': 'QSFP28',
+            'subport': '0',
+            'lanes': ['1', '2', '3', '4'],
+            'asic_id': 0
+        }
+        sff_manager_task.task_stopping_event.is_set = MagicMock(side_effect=[False, False, True])
+
+        sff_manager_task.task_worker()
+
+        assert any("no port device found" in str(call)
+                   for call in mock_logger.log_error.call_args_list)
+
+    @patch('xcvrd.xcvrd.helper_logger')
     @patch('xcvrd.xcvrd.platform_chassis')
     @patch('xcvrd.sff_mgr.PortChangeObserver', MagicMock(handle_port_update_event=MagicMock()))
-    def test_SffManagerTask_task_worker(self, mock_chassis, mock_logger):
+    @patch('xcvrd.xcvrd_utilities.common.get_port_device')
+    def test_SffManagerTask_task_worker(self, mock_get_port_device, mock_chassis, mock_logger):
         mock_xcvr_api = MagicMock()
         mock_xcvr_api.tx_disable_channel = MagicMock(return_value=True)
         mock_xcvr_api.is_flat_memory = MagicMock(return_value=False)
@@ -3190,7 +3252,7 @@ class TestXcvrdScript(object):
         mock_sfp.get_xcvr_api = MagicMock(return_value=mock_xcvr_api)
 
         mock_chassis.get_all_sfps = MagicMock(return_value=[mock_sfp])
-        mock_chassis.get_sfp = MagicMock(return_value=mock_sfp)
+        mock_get_port_device.return_value = mock_sfp
 
         task = SffManagerTask(DEFAULT_NAMESPACE,
                               threading.Event(),
